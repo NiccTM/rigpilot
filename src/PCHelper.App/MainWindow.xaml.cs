@@ -87,9 +87,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        object report = await viewModel.GetReportPreviewAsync();
-        await System.IO.File.WriteAllTextAsync(dialog.FileName, JsonSerializer.Serialize(report, JsonDefaults.Options));
-        System.Windows.MessageBox.Show(this, "The redacted preview was saved locally. Nothing was uploaded.", "PC Helper", MessageBoxButton.OK, MessageBoxImage.Information);
+        try
+        {
+            object report = await viewModel.GetReportPreviewAsync();
+            await System.IO.File.WriteAllTextAsync(dialog.FileName, JsonSerializer.Serialize(report, JsonDefaults.Options));
+            System.Windows.MessageBox.Show(this, "The redacted preview was saved locally. Nothing was uploaded.", "PC Helper", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception exception)
+        {
+            System.Windows.MessageBox.Show(this, exception.Message, "PC Helper", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void OnClosing(object? sender, CancelEventArgs e)

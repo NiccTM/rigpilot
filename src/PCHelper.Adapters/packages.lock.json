@@ -239,7 +239,7 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Data.Sqlite": "[10.0.9, )",
-          "PCHelper.Contracts": "[0.2.0, )",
+          "PCHelper.Contracts": "[0.2.2, )",
           "SQLitePCLRaw.bundle_e_sqlite3": "[3.0.3, )"
         }
       }

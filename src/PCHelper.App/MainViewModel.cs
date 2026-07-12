@@ -4,7 +4,9 @@ using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using System.Windows;
 using System.IO;
+using PCHelper.Adapters;
 using PCHelper.Contracts;
+using PCHelper.Core;
 using PCHelper.Ipc;
 
 namespace PCHelper.App;
@@ -13,6 +15,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly NamedPipeRequestClient _client = new(ProtocolConstants.ServicePipeName, TimeSpan.FromSeconds(3));
     private readonly System.Threading.Timer _refreshTimer;
+    private AdapterCoordinator? _localCoordinator;
+    private bool _serviceOnline;
     private HardwareSnapshot? _snapshot;
     private ServiceStatus? _status;
     private string _serviceStatusText = "Connecting…";
@@ -134,15 +138,35 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public async Task<CompatibilityReportV1> GetReportPreviewAsync()
     {
-        IpcResponse response = await _client.SendAsync(
-            NamedPipeRequestClient.CreateRequest(IpcCommand.ExportReport),
-            CancellationToken.None);
-        EnsureSuccess(response);
-        return IpcJson.FromElement<CompatibilityReportV1>(response.Payload)
-            ?? throw new InvalidDataException("Service returned an empty report.");
+        if (_serviceOnline)
+        {
+            IpcResponse response = await _client.SendAsync(
+                NamedPipeRequestClient.CreateRequest(IpcCommand.ExportReport),
+                CancellationToken.None);
+            EnsureSuccess(response);
+            return IpcJson.FromElement<CompatibilityReportV1>(response.Payload)
+                ?? throw new InvalidDataException("Service returned an empty report.");
+        }
+
+        HardwareSnapshot snapshot = _snapshot
+            ?? throw new InvalidOperationException("No hardware data is available yet.");
+        return CompatibilityReportBuilder.Build(
+            snapshot,
+            typeof(MainViewModel).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
+            new Dictionary<string, string>
+            {
+                ["framework"] = Environment.Version.ToString(),
+                ["osVersion"] = Environment.OSVersion.VersionString
+            },
+            [],
+            userApproved: false);
     }
 
-    public void Dispose() => _refreshTimer.Dispose();
+    public void Dispose()
+    {
+        _refreshTimer.Dispose();
+        DisposeLocalCoordinator();
+    }
 
     private async Task RefreshAsync(bool full)
     {
@@ -186,12 +210,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 _snapshot = _snapshot with { Sensors = sensors, CapturedAt = DateTimeOffset.UtcNow };
             }
 
+            _serviceOnline = true;
+            DisposeLocalCoordinator();
             UpdateDisplays();
         }
         catch (Exception exception)
         {
-            ServiceStatusText = $"Offline: {exception.Message}";
-            SafetySummary = "The service is unavailable. PC Helper is not issuing hardware writes.";
+            _serviceOnline = false;
+            ServiceStatusText = DescribeServiceFailure(exception);
+            await RefreshFromLocalAdaptersAsync();
         }
         finally
         {
@@ -199,8 +226,57 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    private async Task RefreshFromLocalAdaptersAsync()
+    {
+        try
+        {
+            _localCoordinator ??= new AdapterCoordinator(
+            [
+                new SystemInventoryAdapter(),
+                new WindowsPowerAdapter(),
+                new LibreHardwareMonitorAdapter()
+            ]);
+            _snapshot = await _localCoordinator.CaptureAsync(CancellationToken.None);
+            _status = null;
+            if (Profiles.Count == 0)
+            {
+                Replace(Profiles, BuiltInProfiles.Create());
+            }
+
+            UpdateDisplays();
+            SafetySummary = "The service is unavailable, so this data comes from a local read-only probe. No hardware writes are possible.";
+        }
+        catch (Exception exception)
+        {
+            SafetySummary = $"The service is unavailable and the local probe failed: {exception.Message}";
+        }
+    }
+
+    private static string DescribeServiceFailure(Exception exception) => exception switch
+    {
+        TimeoutException or FileNotFoundException => "Offline: the PC Helper service is not running. Showing local read-only data.",
+        UnauthorizedAccessException => "Offline: access to the service was denied. Sign out and back in so your PC Helper Operators membership takes effect, then restart the app.",
+        IOException => "Offline: the PC Helper service connection was interrupted. Showing local read-only data.",
+        _ => $"Offline: {exception.Message}"
+    };
+
+    private void DisposeLocalCoordinator()
+    {
+        if (_localCoordinator is AdapterCoordinator coordinator)
+        {
+            _localCoordinator = null;
+            _ = coordinator.DisposeAsync().AsTask();
+        }
+    }
+
     private async Task ApplyProfileAsync(ProfileV1 profile)
     {
+        if (!_serviceOnline)
+        {
+            throw new InvalidOperationException(
+                "The PC Helper service is not reachable, so profiles cannot be applied. The dashboard is showing local read-only data.");
+        }
+
         IpcRequest request = NamedPipeRequestClient.CreateRequest(
             IpcCommand.ApplyProfile,
             new ApplyProfileRequest(profile, ConfirmExperimental: false),
@@ -334,6 +410,14 @@ internal sealed class AsyncCommand(Func<object?, Task> execute, Func<object?, bo
         try
         {
             await execute(parameter);
+        }
+        catch (Exception exception)
+        {
+            System.Windows.MessageBox.Show(
+                exception.Message,
+                "PC Helper",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
         }
         finally
         {

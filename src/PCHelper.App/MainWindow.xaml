@@ -36,6 +36,12 @@
           <TextBlock Text="PC Helper" FontSize="22" FontWeight="SemiBold" />
           <TextBlock Text="Cross-vendor control" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
         </StackPanel>
+        <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Margin="0,12,0,0" Padding="12">
+          <StackPanel>
+            <TextBlock Text="Service" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding ServiceStatusText}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+          </StackPanel>
+        </Border>
         <ListBox x:Name="Navigation" SelectionChanged="Navigation_SelectionChanged" SelectedIndex="0">
           <ListBoxItem Content="Overview" Padding="12,10" />
           <ListBoxItem Content="Profiles" Padding="12,10" />
@@ -46,12 +52,6 @@
           <ListBoxItem Content="Devices" Padding="12,10" />
           <ListBoxItem Content="Diagnostics" Padding="12,10" />
         </ListBox>
-        <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Margin="0,12,0,0" Padding="12">
-          <StackPanel>
-            <TextBlock Text="Service" FontWeight="SemiBold" />
-            <TextBlock Text="{Binding ServiceStatusText}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
-          </StackPanel>
-        </Border>
       </DockPanel>
     </Border>
 

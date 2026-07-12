@@ -85,9 +85,20 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         return _store!.EnforceRetentionAsync(cancellationToken);
     }
 
-    public async Task<IpcResponse> HandleRequestAsync(IpcRequest request, CancellationToken cancellationToken)
+    public Task<IpcResponse> HandleRequestAsync(IpcRequest request, CancellationToken cancellationToken) =>
+        HandleRequestAsync(request, new IpcClientContext(IsOperator: true, UserName: null), cancellationToken);
+
+    public async Task<IpcResponse> HandleRequestAsync(IpcRequest request, IpcClientContext client, CancellationToken cancellationToken)
     {
         EnsureInitialised();
+        if (IsMutatingCommand(request.Command) && !client.IsOperator)
+        {
+            return Failure(
+                request,
+                "NOT_AUTHORIZED",
+                "Hardware and profile changes require membership of the PC Helper Operators group or an elevated session. Group membership added by the installer takes effect after you sign out and back in.");
+        }
+
         if (request.IdempotencyKey is string key && _idempotentResponses.TryGetValue(key, out IpcResponse? cached))
         {
             return cached with { RequestId = request.RequestId };
@@ -312,6 +323,13 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         null,
         null,
         IpcJson.ToElement(payload));
+
+    private static bool IsMutatingCommand(IpcCommand command) => command is
+        IpcCommand.ApplyProfile or
+        IpcCommand.ResetHardware or
+        IpcCommand.StartCalibration or
+        IpcCommand.StartTune or
+        IpcCommand.AbortOperation;
 
     private IpcResponse Failure(IpcRequest request, string code, string error) => new(
         ProtocolConstants.Version,

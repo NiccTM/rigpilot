@@ -9,6 +9,7 @@
     <Description>Non-elevated WPF dashboard and tray agent for PC Helper.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\PCHelper.Adapters\PCHelper.Adapters.csproj" />
     <ProjectReference Include="..\PCHelper.Contracts\PCHelper.Contracts.csproj" />
     <ProjectReference Include="..\PCHelper.Core\PCHelper.Core.csproj" />
     <ProjectReference Include="..\PCHelper.Ipc\PCHelper.Ipc.csproj" />

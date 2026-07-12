@@ -17,7 +17,7 @@ public sealed class Worker(
 
             NamedPipeRequestServer server = new(
                 ProtocolConstants.ServicePipeName,
-                runtime.HandleRequestAsync);
+                (request, client, token) => runtime.HandleRequestAsync(request, client, token));
             Task serverTask = server.RunAsync(stoppingToken);
             Task pollingTask = PollAsync(stoppingToken);
             await Task.WhenAll(serverTask, pollingTask).ConfigureAwait(false);

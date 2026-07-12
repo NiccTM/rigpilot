@@ -538,8 +538,8 @@
         "type": "Project",
         "dependencies": {
           "LibreHardwareMonitorLib": "[0.9.6, )",
-          "PCHelper.Contracts": "[0.2.0, )",
-          "PCHelper.Core": "[0.2.0, )",
+          "PCHelper.Contracts": "[0.2.2, )",
+          "PCHelper.Core": "[0.2.2, )",
           "System.Management": "[10.0.9, )"
         }
       },
@@ -550,14 +550,14 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Data.Sqlite": "[10.0.9, )",
-          "PCHelper.Contracts": "[0.2.0, )",
+          "PCHelper.Contracts": "[0.2.2, )",
           "SQLitePCLRaw.bundle_e_sqlite3": "[3.0.3, )"
         }
       },
       "pchelper.ipc": {
         "type": "Project",
         "dependencies": {
-          "PCHelper.Contracts": "[0.2.0, )"
+          "PCHelper.Contracts": "[0.2.2, )"
         }
       }
     },
