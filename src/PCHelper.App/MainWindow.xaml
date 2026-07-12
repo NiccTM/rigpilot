@@ -70,7 +70,7 @@
 
       <Grid Grid.Row="1">
         <ScrollViewer x:Name="OverviewPage" VerticalScrollBarVisibility="Auto">
-          <StackPanel>
+          <StackPanel Margin="0,0,10,0">
             <UniformGrid Columns="4">
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
@@ -106,11 +106,11 @@
                       <Grid Margin="0,5">
                         <Grid.ColumnDefinitions>
                           <ColumnDefinition Width="*" />
-                          <ColumnDefinition Width="130" />
-                          <ColumnDefinition Width="110" />
+                          <ColumnDefinition Width="1.2*" />
+                          <ColumnDefinition Width="90" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="{Binding Name}" />
-                        <TextBlock Grid.Column="1" Text="{Binding Device}" Foreground="{StaticResource MutedTextBrush}" />
+                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
+                        <TextBlock Grid.Column="1" Text="{Binding Device}" Foreground="{StaticResource MutedTextBrush}" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
                         <TextBlock Grid.Column="2" Text="{Binding DisplayValue}" HorizontalAlignment="Right" FontWeight="SemiBold" />
                       </Grid>
                     </DataTemplate>

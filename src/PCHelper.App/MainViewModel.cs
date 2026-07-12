@@ -295,16 +295,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
 
         ActiveProfileName = Profiles.FirstOrDefault(profile => profile.Id == _status?.ActiveProfileId)?.Name ?? "None";
-        IEnumerable<SensorSample> important = _snapshot.Sensors
-            .Where(sensor => sensor.Quality == SensorQuality.Good && sensor.Value.HasValue)
-            .Where(sensor => sensor.Unit is "°C" or "RPM" or "W" or "%")
-            .OrderBy(sensor => SensorOrder(sensor.Unit))
-            .ThenBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
-            .Take(18);
-        Replace(ImportantSensors, important.Select(sensor => new SensorDisplay(
+        Replace(ImportantSensors, SelectImportantSensors(_snapshot).Select(sensor => new SensorDisplay(
             sensor.Name,
             FindDevice(sensor.DeviceId),
-            $"{sensor.Value:0.##} {sensor.Unit}")));
+            $"{sensor.Value:0.#} {sensor.Unit}")));
 
         Replace(Devices, _snapshot.Devices.Select(device => new DeviceDisplay(
             device.Name,
@@ -338,13 +332,71 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private string FindDevice(string id) => _snapshot?.Devices.FirstOrDefault(device => device.Id == id)?.Name ?? "Hardware";
 
-    private static int SensorOrder(string unit) => unit switch
+    /// <summary>
+    /// Picks a curated, deduplicated set of live readings: primary temperatures ordered by
+    /// device importance, then fan speeds, then power draw. Static limits (for example NVMe
+    /// "Critical Temperature") and unattributed or implausible readings are excluded.
+    /// </summary>
+    private static IEnumerable<SensorSample> SelectImportantSensors(HardwareSnapshot snapshot)
     {
-        "°C" => 0,
-        "RPM" => 1,
-        "W" => 2,
-        _ => 3
-    };
+        Dictionary<string, HardwareDevice> devices = snapshot.Devices
+            .Where(device => !string.IsNullOrWhiteSpace(device.Name))
+            .ToDictionary(device => device.Id);
+
+        List<SensorSample> candidates = snapshot.Sensors
+            .Where(sensor => sensor.Quality == SensorQuality.Good && sensor.Value is double value && double.IsFinite(value))
+            .Where(sensor => devices.ContainsKey(sensor.DeviceId))
+            .Where(sensor => !sensor.Name.Contains("critical", StringComparison.OrdinalIgnoreCase)
+                && !sensor.Name.Contains("max", StringComparison.OrdinalIgnoreCase)
+                && !sensor.Name.Contains("limit", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(sensor => (sensor.DeviceId, sensor.Name))
+            .Select(group => group.First())
+            .ToList();
+
+        int DeviceRank(SensorSample sensor) => devices[sensor.DeviceId].Kind switch
+        {
+            DeviceKind.Cpu => 0,
+            DeviceKind.Gpu => 1,
+            DeviceKind.Motherboard => 2,
+            DeviceKind.Memory => 3,
+            DeviceKind.Storage => 4,
+            DeviceKind.Cooling => 5,
+            _ => 6
+        };
+
+        IEnumerable<SensorSample> temperatures = candidates
+            .Where(sensor => sensor.Unit == "°C" && sensor.Value > 1 && sensor.Value < 130)
+            .OrderBy(DeviceRank)
+            .ThenBy(sensor => SensorNameRank(sensor.Name))
+            .ThenBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(10);
+        IEnumerable<SensorSample> fans = candidates
+            .Where(sensor => sensor.Unit == "RPM" && sensor.Value > 0)
+            .OrderBy(DeviceRank)
+            .ThenBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(5);
+        IEnumerable<SensorSample> power = candidates
+            .Where(sensor => sensor.Unit == "W" && sensor.Value > 0)
+            .OrderBy(DeviceRank)
+            .ThenBy(sensor => SensorNameRank(sensor.Name))
+            .ThenBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(3);
+        return temperatures.Concat(fans).Concat(power);
+    }
+
+    /// <summary>Prefers the reading that summarises a device over its per-part siblings.</summary>
+    private static int SensorNameRank(string name)
+    {
+        if (name.Contains("Tctl", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("package", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("GPU Core", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("composite", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        return name.Contains("hot spot", StringComparison.OrdinalIgnoreCase) ? 1 : 2;
+    }
 
     private static void EnsureSuccess(IpcResponse response)
     {

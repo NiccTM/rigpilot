@@ -69,22 +69,10 @@
                      KeyPath="yes" />
     </Component>
 
-    <CustomAction Id="CreateOperatorsGroup"
-                  FileRef="ServiceExecutable"
-                  ExeCommand="[CustomActionData]"
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="check" />
-
-    <SetProperty Id="CreateOperatorsGroup"
-                 Value="--install-operators-group &quot;[UserSID]&quot;"
-                 Before="CreateOperatorsGroup"
-                 Sequence="execute" />
-
-    <InstallExecuteSequence>
-      <Custom Action="CreateOperatorsGroup" After="InstallFiles" Condition="NOT Installed" />
-    </InstallExecuteSequence>
-
+    <!-- The "PC Helper Operators" group is created by the service itself at first start
+         (it runs as LocalSystem). Launching the service exe as an installer custom action
+         proved fragile: unresolved arguments booted the full service host inside the
+         installer and wedged the install. -->
     <Feature Id="MainFeature" Title="PC Helper" Level="1">
       <ComponentGroupRef Id="HarvestedPayload" />
       <ComponentRef Id="AppExecutableComponent" />

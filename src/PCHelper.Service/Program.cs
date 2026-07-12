@@ -2,10 +2,19 @@ using Microsoft.Extensions.Hosting.WindowsServices;
 using PCHelper.Core;
 using PCHelper.Service;
 
-if (args is ["--install-operators-group", string operatorSid])
+if (args.Length > 0 && args[0] == "--install-operators-group")
 {
-    Environment.ExitCode = OperatorGroupInstaller.EnsureGroupAndMember(operatorSid);
+    // Never fall through to the service host when invoked as a one-shot tool,
+    // even with a malformed argument list.
+    Environment.ExitCode = args is [_, string operatorSid]
+        ? OperatorGroupInstaller.EnsureGroupAndMember(operatorSid)
+        : 2;
     return;
+}
+
+if (WindowsServiceHelpers.IsWindowsService())
+{
+    OperatorGroupInstaller.EnsureGroup();
 }
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);

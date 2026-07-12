@@ -12,6 +12,23 @@ internal static class OperatorGroupInstaller
     private const int MemberAlreadyPresent = 1378;
     private const int UserAlreadyInGroup = 2236;
 
+    /// <summary>Creates the operators group if missing. Safe to call on every service start.</summary>
+    public static int EnsureGroup()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return 1;
+        }
+
+        LocalGroupInfo group = new()
+        {
+            Name = GroupName,
+            Comment = "Users authorised to operate the local PC Helper service"
+        };
+        int result = NetLocalGroupAdd(null, 1, ref group, out _);
+        return result is Success or GroupExists ? Success : result;
+    }
+
     public static int EnsureGroupAndMember(string operatorSid)
     {
         if (!OperatingSystem.IsWindows())
@@ -34,13 +51,8 @@ internal static class OperatorGroupInstaller
             return 3;
         }
 
-        LocalGroupInfo group = new()
-        {
-            Name = GroupName,
-            Comment = "Users authorised to operate the local PC Helper service"
-        };
-        int result = NetLocalGroupAdd(null, 1, ref group, out _);
-        if (result is not Success and not GroupExists)
+        int result = EnsureGroup();
+        if (result is not Success)
         {
             Console.Error.WriteLine(new Win32Exception(result).Message);
             return result;
