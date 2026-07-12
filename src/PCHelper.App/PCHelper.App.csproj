@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Description>Non-elevated WPF dashboard and tray agent for PC Helper.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PCHelper.Contracts\PCHelper.Contracts.csproj" />
+    <ProjectReference Include="..\PCHelper.Core\PCHelper.Core.csproj" />
+    <ProjectReference Include="..\PCHelper.Ipc\PCHelper.Ipc.csproj" />
+  </ItemGroup>
+</Project>

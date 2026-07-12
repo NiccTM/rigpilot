@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: .NET build and tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+      - name: Restore locked dependencies
+        run: dotnet restore PCHelper.sln --locked-mode
+      - name: Build
+        run: dotnet build PCHelper.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test PCHelper.sln --configuration Release --no-build --logger "trx;LogFilePrefix=pchelper"
+      - name: Audit NuGet dependencies
+        run: dotnet package list --project PCHelper.sln --vulnerable --include-transitive
+      - name: Publish framework-dependent x64 payload
+        shell: pwsh
+        run: ./scripts/publish.ps1 -Version 0.2.0
+      - name: Compile MSI authoring
+        shell: pwsh
+        run: ./scripts/build-installer.ps1 -Version 0.2.0 -SkipPublish
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: dotnet-test-results
+          path: "**/TestResults/*.trx"
+          if-no-files-found: warn
+
+  report-api:
+    name: Report API checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: report-api
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: report-api/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm audit --audit-level=high

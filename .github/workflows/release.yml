@@ -1,0 +1,176 @@
+name: Release candidate
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer without a leading v
+        required: true
+        default: 0.2.0
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options: [Nightly, Beta, Stable]
+        default: Beta
+      allow_unsigned:
+        description: Permit unsigned development artifacts; never use for public releases
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    env:
+      SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+      SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+      ALLOW_UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_unsigned || 'false' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: report-api/package-lock.json
+
+      - name: Resolve release metadata
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.TrimStart('v') }
+          if ($version -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw "Invalid release version: $version" }
+          $channel = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.channel }}' } elseif ($version -match 'nightly') { 'Nightly' } elseif ($version -match '(alpha|beta|rc)') { 'Beta' } else { 'Stable' }
+          "PRODUCT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_CHANNEL=$channel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Restore, build, and test
+        shell: pwsh
+        run: |
+          dotnet restore PCHelper.sln --locked-mode
+          dotnet build PCHelper.sln -c Release --no-restore -p:Version=$env:PRODUCT_VERSION
+          dotnet test PCHelper.sln -c Release --no-build
+          Push-Location report-api
+          npm ci
+          npm run check
+          npm test
+          Pop-Location
+
+      - name: Publish application payload
+        shell: pwsh
+        run: ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION
+
+      - name: Require signing authority for releasable artifacts
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64) -and $env:ALLOW_UNSIGNED -ne 'true') {
+            throw 'Signing credentials are required. Use allow_unsigned only for private development artifacts.'
+          }
+
+      - name: Sign application executables
+        if: env.SIGNING_CERTIFICATE_BASE64 != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'pchelper-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          $targets = @(
+            'artifacts\publish\app\PCHelper.App.exe',
+            'artifacts\publish\service\PCHelper.Service.exe',
+            'artifacts\publish\adapter-host\PCHelper.AdapterHost.exe',
+            'artifacts\publish\cli\pchelper-cli.exe'
+          )
+          foreach ($target in $targets) {
+            & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:SIGNING_CERTIFICATE_PASSWORD $target
+            if ($LASTEXITCODE -ne 0) { throw "Signing failed: $target" }
+          }
+          Get-ChildItem artifacts\publish -Recurse -File | Where-Object Name -ne 'SHA256SUMS.txt' | Get-FileHash -Algorithm SHA256 | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath((Resolve-Path artifacts\publish), $_.Path)
+            "{0} *{1}" -f $_.Hash.ToLowerInvariant(), $relative
+          } | Set-Content artifacts\publish\SHA256SUMS.txt -Encoding UTF8
+
+      - name: Download and verify .NET Desktop Runtime
+        shell: pwsh
+        run: ./scripts/get-dotnet-runtime.ps1
+
+      - name: Build MSI
+        shell: pwsh
+        run: ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish
+
+      - name: Sign MSI before bundle embedding
+        if: env.SIGNING_CERTIFICATE_BASE64 != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'pchelper-signing.pfx'
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          $target = 'artifacts\installer\PCHelper.Installer.msi'
+          & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:SIGNING_CERTIFICATE_PASSWORD $target
+          if ($LASTEXITCODE -ne 0) { throw "Signing failed: $target" }
+
+      - name: Build Burn bundle around signed MSI
+        shell: pwsh
+        run: |
+          $runtime = Get-ChildItem artifacts\dependencies\windowsdesktop-runtime-10.*-win-x64.exe | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 -ExpandProperty FullName
+          ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish -SkipMsiBuild -RuntimeInstaller $runtime
+
+      - name: Sign bundle
+        if: env.SIGNING_CERTIFICATE_BASE64 != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'pchelper-signing.pfx'
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          $target = 'artifacts\installer\PCHelper.Bundle.exe'
+          & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:SIGNING_CERTIFICATE_PASSWORD $target
+          if ($LASTEXITCODE -ne 0) { throw "Signing failed: $target" }
+          Remove-Item -LiteralPath $pfx -Force
+
+      - name: Create release archive
+        shell: pwsh
+        run: |
+          $release = 'artifacts\release'
+          New-Item -ItemType Directory -Path $release -Force | Out-Null
+          Compress-Archive -Path artifacts\publish\* -DestinationPath "$release\PCHelper-$env:PRODUCT_VERSION-win-x64.zip" -CompressionLevel Optimal
+          Copy-Item artifacts\installer\PCHelper.Installer.msi "$release\PCHelper-$env:PRODUCT_VERSION-win-x64.msi"
+          Copy-Item artifacts\installer\PCHelper.Bundle.exe "$release\PCHelper-$env:PRODUCT_VERSION-setup.exe"
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: artifacts/publish
+          format: spdx-json
+          output-file: artifacts/release/PCHelper-${{ env.PRODUCT_VERSION }}.spdx.json
+          upload-artifact: false
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts\release -File | Get-FileHash -Algorithm SHA256 | ForEach-Object { "{0} *{1}" -f $_.Hash.ToLowerInvariant(), $_.Path.Split('\')[-1] } | Set-Content artifacts\release\SHA256SUMS.txt -Encoding UTF8
+
+      - name: Attest release provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: artifacts/release/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: PCHelper-${{ env.PRODUCT_VERSION }}-${{ env.RELEASE_CHANNEL }}
+          path: artifacts/release/*
+          if-no-files-found: error
+
+      - name: Create draft GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" artifacts/release/* --draft --verify-tag --title "PC Helper $env:PRODUCT_VERSION ($env:RELEASE_CHANNEL)" --notes "Automated draft. Hardware write claims remain limited to COMPATIBILITY.md evidence."

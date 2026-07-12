@@ -1,0 +1,33 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:netfx="http://wixtoolset.org/schemas/v4/wxs/netfx">
+  <Bundle Name="PC Helper"
+          Manufacturer="PC Helper contributors"
+          Version="$(var.ProductVersion)"
+          UpgradeCode="D75DF430-B830-4C7F-B9DC-8E4480BA2221">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense"
+                                               LicenseUrl="https://www.gnu.org/licenses/gpl-3.0.html" />
+    </BootstrapperApplication>
+
+    <netfx:DotNetCoreSearch RuntimeType="desktop"
+                            Platform="x64"
+                            MajorVersion="10"
+                            Variable="DesktopRuntimeVersion" />
+
+    <Chain>
+      <ExePackage Id="DotNetDesktopRuntime10"
+                  SourceFile="$(var.RuntimeInstaller)"
+                  PerMachine="yes"
+                  Permanent="yes"
+                  Vital="yes"
+                  DetectCondition="DesktopRuntimeVersion &gt;= v10.0.0"
+                  InstallArguments="/install /quiet /norestart"
+                  RepairArguments="/repair /quiet /norestart"
+                  UninstallArguments="" />
+      <MsiPackage Id="PCHelperMsi"
+                  SourceFile="$(var.MsiPath)"
+                  Vital="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <AssemblyName>PCHelper.Service</AssemblyName>
+    <Description>Boot-starting safety and profile coordinator for PC Helper.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.9" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PCHelper.Adapters\PCHelper.Adapters.csproj" />
+    <ProjectReference Include="..\PCHelper.Contracts\PCHelper.Contracts.csproj" />
+    <ProjectReference Include="..\PCHelper.Core\PCHelper.Core.csproj" />
+    <ProjectReference Include="..\PCHelper.Ipc\PCHelper.Ipc.csproj" />
+  </ItemGroup>
+</Project>

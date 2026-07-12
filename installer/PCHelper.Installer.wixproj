@@ -1,0 +1,21 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Platform>x64</Platform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.2.0</ProductVersion>
+    <PublishDir Condition="'$(PublishDir)' == ''">$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)..\artifacts\publish'))</PublishDir>
+    <DefineConstants>ProductVersion=$(ProductVersion);PublishDir=$(PublishDir)</DefineConstants>
+    <SuppressValidation>false</SuppressValidation>
+    <!-- SQLite's four harvested win-x64 e_sqlite3.dll copies are native, unversioned,
+         language-neutral binaries. ICE60 cannot represent that case. All other ICEs run. -->
+    <SuppressIces>ICE60</SuppressIces>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Product.wxs" />
+  </ItemGroup>
+  <Target Name="VerifyPublishPayload" BeforeTargets="Build">
+    <Error Condition="!Exists('$(PublishDir)\app\PCHelper.App.exe')" Text="Publish payload missing. Run scripts\publish.ps1 first." />
+    <Error Condition="!Exists('$(PublishDir)\service\PCHelper.Service.exe')" Text="Service publish payload missing." />
+  </Target>
+</Project>

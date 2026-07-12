@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <Description>Crash-isolated native adapter process for PC Helper.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PCHelper.Adapters\PCHelper.Adapters.csproj" />
+    <ProjectReference Include="..\PCHelper.Contracts\PCHelper.Contracts.csproj" />
+    <ProjectReference Include="..\PCHelper.Core\PCHelper.Core.csproj" />
+    <ProjectReference Include="..\PCHelper.Ipc\PCHelper.Ipc.csproj" />
+  </ItemGroup>
+</Project>

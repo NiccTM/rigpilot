@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>Versioned contracts shared by PC Helper processes and adapters.</Description>
+  </PropertyGroup>
+</Project>

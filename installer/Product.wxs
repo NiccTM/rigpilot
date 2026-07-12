@@ -1,0 +1,95 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="PC Helper"
+           Manufacturer="PC Helper contributors"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="2D442727-2FD1-4E47-ACF2-206E0A910E76"
+           Scope="perMachine"
+           InstallerVersion="500">
+    <SummaryInformation Description="Capability-gated desktop monitoring and control suite" />
+    <MediaTemplate EmbedCab="yes" />
+    <MajorUpgrade DowngradeErrorMessage="A newer PC Helper version is already installed." />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="PC Helper">
+        <Directory Id="APPDIR" Name="app" />
+        <Directory Id="SERVICEDIR" Name="service" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="PCHelperProgramMenu" Name="PC Helper" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="HarvestedPayload" Directory="INSTALLFOLDER">
+      <Files Include="$(var.PublishDir)\**">
+        <Exclude Files="$(var.PublishDir)\**\*.pdb" />
+        <Exclude Files="$(var.PublishDir)\**\*MonoPosixHelper.dll" />
+        <Exclude Files="$(var.PublishDir)\app\PCHelper.App.exe" />
+        <Exclude Files="$(var.PublishDir)\service\PCHelper.Service.exe" />
+      </Files>
+    </ComponentGroup>
+
+    <Component Id="AppExecutableComponent" Directory="APPDIR" Bitness="always64">
+      <File Id="AppExecutable" Source="$(var.PublishDir)\app\PCHelper.App.exe" KeyPath="yes">
+        <Shortcut Id="PCHelperShortcut"
+                  Directory="PCHelperProgramMenu"
+                  Name="PC Helper"
+                  Description="Open the PC Helper dashboard"
+                  Advertise="yes"
+                  WorkingDirectory="APPDIR" />
+      </File>
+      <RemoveFolder Id="RemovePCHelperProgramMenu" Directory="PCHelperProgramMenu" On="uninstall" />
+    </Component>
+
+    <Component Id="ServiceExecutableComponent" Directory="SERVICEDIR" Bitness="always64">
+      <File Id="ServiceExecutable" Source="$(var.PublishDir)\service\PCHelper.Service.exe" KeyPath="yes" />
+      <ServiceInstall Id="PCHelperServiceInstall"
+                      Name="PCHelper"
+                      DisplayName="PC Helper Service"
+                      Description="Coordinates PC Helper safety policy, profiles, sensors, and verified hardware operations."
+                      Type="ownProcess"
+                      Start="auto"
+                      ErrorControl="normal"
+                      Account="LocalSystem"
+                      Vital="yes" />
+      <ServiceControl Id="PCHelperServiceControl"
+                      Name="PCHelper"
+                      Start="install"
+                      Stop="both"
+                      Remove="uninstall"
+                      Wait="yes" />
+    </Component>
+
+    <Component Id="OperatorsGroupMarkerComponent" Directory="INSTALLFOLDER" Bitness="always64">
+      <RegistryValue Root="HKLM"
+                     Key="Software\PCHelper"
+                     Name="OperatorsGroup"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+    <CustomAction Id="CreateOperatorsGroup"
+                  FileRef="ServiceExecutable"
+                  ExeCommand="[CustomActionData]"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <SetProperty Id="CreateOperatorsGroup"
+                 Value="--install-operators-group &quot;[UserSID]&quot;"
+                 Before="CreateOperatorsGroup"
+                 Sequence="execute" />
+
+    <InstallExecuteSequence>
+      <Custom Action="CreateOperatorsGroup" After="InstallFiles" Condition="NOT Installed" />
+    </InstallExecuteSequence>
+
+    <Feature Id="MainFeature" Title="PC Helper" Level="1">
+      <ComponentGroupRef Id="HarvestedPayload" />
+      <ComponentRef Id="AppExecutableComponent" />
+      <ComponentRef Id="ServiceExecutableComponent" />
+      <ComponentRef Id="OperatorsGroupMarkerComponent" />
+    </Feature>
+  </Package>
+</Wix>
