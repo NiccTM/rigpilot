@@ -64,6 +64,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         private set => Set(ref _serviceStatusText, value);
     }
 
+    private bool _isServiceOnline;
+
+    public bool IsServiceOnline
+    {
+        get => _isServiceOnline;
+        private set
+        {
+            if (Set(ref _isServiceOnline, value))
+            {
+                OnPropertyChanged(nameof(ServiceStateLabel));
+            }
+        }
+    }
+
+    public string ServiceStateLabel => IsServiceOnline ? "Connected" : "Offline";
+
     public string ActiveProfileName
     {
         get => _activeProfileName;
@@ -211,12 +227,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             }
 
             _serviceOnline = true;
+            IsServiceOnline = true;
             DisposeLocalCoordinator();
             UpdateDisplays();
         }
         catch (Exception exception)
         {
             _serviceOnline = false;
+            IsServiceOnline = false;
             ServiceStatusText = DescribeServiceFailure(exception);
             await RefreshFromLocalAdaptersAsync();
         }
@@ -254,10 +272,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private static string DescribeServiceFailure(Exception exception) => exception switch
     {
-        TimeoutException or FileNotFoundException => "Offline: the PC Helper service is not running. Showing local read-only data.",
-        UnauthorizedAccessException => "Offline: access to the service was denied. Sign out and back in so your PC Helper Operators membership takes effect, then restart the app.",
-        IOException => "Offline: the PC Helper service connection was interrupted. Showing local read-only data.",
-        _ => $"Offline: {exception.Message}"
+        TimeoutException or FileNotFoundException => "The service is not running; showing local read-only data.",
+        UnauthorizedAccessException => "Service access was denied. Sign out and back in so your PC Helper Operators membership takes effect, then restart the app.",
+        IOException => "The service connection was interrupted; showing local read-only data.",
+        _ => exception.Message
     };
 
     private void DisposeLocalCoordinator()
@@ -298,7 +316,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         Replace(ImportantSensors, SelectImportantSensors(_snapshot).Select(sensor => new SensorDisplay(
             sensor.Name,
             FindDevice(sensor.DeviceId),
-            $"{sensor.Value:0.#} {sensor.Unit}")));
+            $"{sensor.Value:0.#} {sensor.Unit}",
+            TemperatureSeverity(sensor))));
 
         Replace(Devices, _snapshot.Devices.Select(device => new DeviceDisplay(
             device.Name,
@@ -384,6 +403,25 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         return temperatures.Concat(fans).Concat(power);
     }
 
+    /// <summary>
+    /// Coarse readability hint for temperature values; the number itself stays the
+    /// primary encoding, colour is redundant emphasis only.
+    /// </summary>
+    private static string TemperatureSeverity(SensorSample sensor)
+    {
+        if (sensor.Unit != "°C" || sensor.Value is not double celsius)
+        {
+            return "Normal";
+        }
+
+        return celsius switch
+        {
+            >= 85 => "Hot",
+            >= 72 => "Warm",
+            _ => "Normal"
+        };
+    }
+
     /// <summary>Prefers the reading that summarises a device over its per-part siblings.</summary>
     private static int SensorNameRank(string name)
     {
@@ -415,22 +453,23 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private void Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    private bool Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value))
         {
-            return;
+            return false;
         }
 
         field = value;
         OnPropertyChanged(propertyName);
+        return true;
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
-public sealed record SensorDisplay(string Name, string Device, string DisplayValue);
+public sealed record SensorDisplay(string Name, string Device, string DisplayValue, string Severity);
 
 public sealed record DeviceDisplay(string Name, string Details);
 

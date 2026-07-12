@@ -115,6 +115,8 @@ public partial class MainWindow : Window
         if (_source is not null)
         {
             RegisterHotKey(_source.Handle, HotkeyId, 0x0002 | 0x0004, 0x7B); // Ctrl+Shift+F12
+            int darkMode = 1;
+            _ = DwmSetWindowAttribute(_source.Handle, DwmUseImmersiveDarkMode, ref darkMode, sizeof(int));
         }
     }
 
@@ -128,6 +130,11 @@ public partial class MainWindow : Window
 
         return IntPtr.Zero;
     }
+
+    private const int DwmUseImmersiveDarkMode = 20;
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
 
     [DllImport("user32.dll")]
     private static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint virtualKey);

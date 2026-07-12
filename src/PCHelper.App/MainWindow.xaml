@@ -30,27 +30,87 @@
       <ColumnDefinition Width="*" />
     </Grid.ColumnDefinitions>
 
-    <Border Grid.Column="0" Background="#15181E" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
+    <Border Grid.Column="0" Background="#12151B" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
       <DockPanel Margin="14">
-        <StackPanel DockPanel.Dock="Top" Margin="8,8,8,24">
-          <TextBlock Text="PC Helper" FontSize="22" FontWeight="SemiBold" />
-          <TextBlock Text="Cross-vendor control" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
+        <StackPanel DockPanel.Dock="Top" Margin="8,10,8,22" Orientation="Horizontal">
+          <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="8" Width="36" Height="36">
+            <TextBlock Text="&#xE950;" FontFamily="{StaticResource IconFont}" FontSize="18" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+            <TextBlock Text="PC Helper" FontSize="18" FontWeight="SemiBold" />
+            <TextBlock Text="Cross-vendor control" Style="{StaticResource MutedStyle}" FontSize="12" />
+          </StackPanel>
         </StackPanel>
-        <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Margin="0,12,0,0" Padding="12">
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Margin="0,12,0,0" Padding="12">
           <StackPanel>
-            <TextBlock Text="Service" FontWeight="SemiBold" />
-            <TextBlock Text="{Binding ServiceStatusText}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+            <StackPanel Orientation="Horizontal">
+              <Ellipse x:Name="ServiceDot" Width="9" Height="9" VerticalAlignment="Center" Margin="0,1,7,0">
+                <Ellipse.Style>
+                  <Style TargetType="Ellipse">
+                    <Setter Property="Fill" Value="{StaticResource SeriousBrush}" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding IsServiceOnline}" Value="True">
+                        <Setter Property="Fill" Value="{StaticResource SafeBrush}" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Ellipse.Style>
+              </Ellipse>
+              <TextBlock Text="Service" FontWeight="SemiBold" />
+              <TextBlock Text="{Binding ServiceStateLabel}" Style="{StaticResource MutedStyle}" Margin="6,0,0,0" />
+            </StackPanel>
+            <TextBlock Text="{Binding ServiceStatusText}" Style="{StaticResource MutedStyle}" FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0" />
           </StackPanel>
         </Border>
         <ListBox x:Name="Navigation" SelectionChanged="Navigation_SelectionChanged" SelectedIndex="0">
-          <ListBoxItem Content="Overview" Padding="12,10" />
-          <ListBoxItem Content="Profiles" Padding="12,10" />
-          <ListBoxItem Content="Cooling" Padding="12,10" />
-          <ListBoxItem Content="Performance" Padding="12,10" />
-          <ListBoxItem Content="Lighting" Padding="12,10" />
-          <ListBoxItem Content="Automation" Padding="12,10" />
-          <ListBoxItem Content="Devices" Padding="12,10" />
-          <ListBoxItem Content="Diagnostics" Padding="12,10" />
+          <ListBoxItem Padding="10,9">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE80F;" FontFamily="{StaticResource IconFont}" FontSize="15" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBlock Text="Overview" VerticalAlignment="Center" />
+            </StackPanel>
+          </ListBoxItem>
+          <ListBoxItem Padding="10,9">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE771;" FontFamily="{StaticResource IconFont}" FontSize="15" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBlock Text="Profiles" VerticalAlignment="Center" />
+            </StackPanel>
+          </ListBoxItem>
+          <ListBoxItem Padding="10,9">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE9CA;" FontFamily="{StaticResource IconFont}" FontSize="15" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBlock Text="Cooling" VerticalAlignment="Center" />
+            </StackPanel>
+          </ListBoxItem>
+          <ListBoxItem Padding="10,9">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE945;" FontFamily="{StaticResource IconFont}" FontSize="15" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBlock Text="Performance" VerticalAlignment="Center" />
+            </StackPanel>
+          </ListBoxItem>
+          <ListBoxItem Padding="10,9">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE706;" FontFamily="{StaticResource IconFont}" FontSize="15" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBlock Text="Lighting" VerticalAlignment="Center" />
+            </StackPanel>
+          </ListBoxItem>
+          <ListBoxItem Padding="10,9">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE823;" FontFamily="{StaticResource IconFont}" FontSize="15" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBlock Text="Automation" VerticalAlignment="Center" />
+            </StackPanel>
+          </ListBoxItem>
+          <ListBoxItem Padding="10,9">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE772;" FontFamily="{StaticResource IconFont}" FontSize="15" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBlock Text="Devices" VerticalAlignment="Center" />
+            </StackPanel>
+          </ListBoxItem>
+          <ListBoxItem Padding="10,9">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE9D9;" FontFamily="{StaticResource IconFont}" FontSize="15" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBlock Text="Diagnostics" VerticalAlignment="Center" />
+            </StackPanel>
+          </ListBoxItem>
         </ListBox>
       </DockPanel>
     </Border>
@@ -61,7 +121,7 @@
         <RowDefinition Height="*" />
       </Grid.RowDefinitions>
       <DockPanel Grid.Row="0" Margin="0,0,0,18">
-        <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshCommand}" />
+        <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center" />
         <StackPanel>
           <TextBlock Text="{Binding CurrentPageTitle}" Style="{StaticResource PageHeaderStyle}" />
           <TextBlock Text="{Binding CurrentPageSubtitle}" Style="{StaticResource MutedStyle}" />
@@ -74,26 +134,26 @@
             <UniformGrid Columns="4">
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
-                  <TextBlock Text="Devices" Style="{StaticResource MutedStyle}" />
-                  <TextBlock Text="{Binding DeviceCount}" FontSize="28" FontWeight="SemiBold" Margin="0,8,0,0" />
+                  <TextBlock Text="DEVICES" Style="{StaticResource SectionLabelStyle}" />
+                  <TextBlock Text="{Binding DeviceCount}" FontSize="30" FontWeight="SemiBold" Margin="0,6,0,0" />
                 </StackPanel>
               </Border>
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
-                  <TextBlock Text="Live sensors" Style="{StaticResource MutedStyle}" />
-                  <TextBlock Text="{Binding SensorCount}" FontSize="28" FontWeight="SemiBold" Margin="0,8,0,0" />
+                  <TextBlock Text="LIVE SENSORS" Style="{StaticResource SectionLabelStyle}" />
+                  <TextBlock Text="{Binding SensorCount}" FontSize="30" FontWeight="SemiBold" Margin="0,6,0,0" />
                 </StackPanel>
               </Border>
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
-                  <TextBlock Text="Write controls" Style="{StaticResource MutedStyle}" />
-                  <TextBlock Text="{Binding VerifiedControlCount}" FontSize="28" FontWeight="SemiBold" Margin="0,8,0,0" />
+                  <TextBlock Text="WRITE CONTROLS" Style="{StaticResource SectionLabelStyle}" />
+                  <TextBlock Text="{Binding VerifiedControlCount}" FontSize="30" FontWeight="SemiBold" Margin="0,6,0,0" />
                 </StackPanel>
               </Border>
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
-                  <TextBlock Text="Active profile" Style="{StaticResource MutedStyle}" />
-                  <TextBlock Text="{Binding ActiveProfileName}" FontSize="20" FontWeight="SemiBold" Margin="0,12,0,0" />
+                  <TextBlock Text="ACTIVE PROFILE" Style="{StaticResource SectionLabelStyle}" />
+                  <TextBlock Text="{Binding ActiveProfileName}" FontSize="22" FontWeight="SemiBold" Margin="0,11,0,0" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
               </Border>
             </UniformGrid>
@@ -111,7 +171,21 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
                         <TextBlock Grid.Column="1" Text="{Binding Device}" Foreground="{StaticResource MutedTextBrush}" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
-                        <TextBlock Grid.Column="2" Text="{Binding DisplayValue}" HorizontalAlignment="Right" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="2" Text="{Binding DisplayValue}" HorizontalAlignment="Right" FontWeight="SemiBold">
+                          <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                              <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding Severity}" Value="Warm">
+                                  <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Severity}" Value="Hot">
+                                  <Setter Property="Foreground" Value="{StaticResource SeriousBrush}" />
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </TextBlock.Style>
+                        </TextBlock>
                       </Grid>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
@@ -138,7 +212,7 @@
                     <DataTemplate>
                       <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="0,12">
                         <DockPanel>
-                          <Button DockPanel.Dock="Right" Content="Apply" Command="{Binding DataContext.ApplyProfileCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
+                          <Button DockPanel.Dock="Right" Content="Apply" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center" Command="{Binding DataContext.ApplyProfileCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
                           <StackPanel>
                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
                             <TextBlock Text="{Binding Description}" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
