@@ -36,6 +36,7 @@ public sealed class NvmlGpuFanCoolerTransport : IGpuFanCoolerTransport, IDisposa
     private readonly NvmlShutdown _shutdown;
     private readonly NvmlGetHandleByIndex _getHandle;
     private readonly NvmlGetUnsignedIndexed _getTargetFanSpeed;
+    private readonly NvmlGetUnsignedIndexed? _getFanControlPolicy;
     private readonly NvmlGetMinMax _getMinMaxFanSpeed;
     private readonly NvmlGetUnsigned _getNumFans;
     private readonly NvmlSetFanSpeed? _setFanSpeed;
@@ -51,6 +52,7 @@ public sealed class NvmlGpuFanCoolerTransport : IGpuFanCoolerTransport, IDisposa
         NvmlShutdown shutdown,
         NvmlGetHandleByIndex getHandle,
         NvmlGetUnsignedIndexed getTargetFanSpeed,
+        NvmlGetUnsignedIndexed? getFanControlPolicy,
         NvmlGetMinMax getMinMaxFanSpeed,
         NvmlGetUnsigned getNumFans,
         NvmlSetFanSpeed? setFanSpeed,
@@ -62,6 +64,7 @@ public sealed class NvmlGpuFanCoolerTransport : IGpuFanCoolerTransport, IDisposa
         _shutdown = shutdown;
         _getHandle = getHandle;
         _getTargetFanSpeed = getTargetFanSpeed;
+        _getFanControlPolicy = getFanControlPolicy;
         _getMinMaxFanSpeed = getMinMaxFanSpeed;
         _getNumFans = getNumFans;
         _setFanSpeed = setFanSpeed;
@@ -90,6 +93,10 @@ public sealed class NvmlGpuFanCoolerTransport : IGpuFanCoolerTransport, IDisposa
                 NvmlShutdown shutdown = MarshalRequired<NvmlShutdown>(library, "nvmlShutdown");
                 NvmlGetHandleByIndex getHandle = MarshalRequired<NvmlGetHandleByIndex>(library, "nvmlDeviceGetHandleByIndex_v2");
                 NvmlGetUnsignedIndexed getTarget = MarshalRequired<NvmlGetUnsignedIndexed>(library, "nvmlDeviceGetTargetFanSpeed");
+                // Read-only policy getter. Optional: older drivers may not export it, in
+                // which case ReadState degrades to reporting Automatic. It is never gated
+                // by enableWrites because reading the current policy is not a write.
+                NvmlGetUnsignedIndexed? getPolicy = MarshalOptional<NvmlGetUnsignedIndexed>(library, "nvmlDeviceGetFanControlPolicy_v2");
                 NvmlGetMinMax getMinMax = MarshalRequired<NvmlGetMinMax>(library, "nvmlDeviceGetMinMaxFanSpeed");
                 NvmlGetUnsigned getNumFans = MarshalRequired<NvmlGetUnsigned>(library, "nvmlDeviceGetNumFans");
 
@@ -99,7 +106,7 @@ public sealed class NvmlGpuFanCoolerTransport : IGpuFanCoolerTransport, IDisposa
                 NvmlSetFanControlPolicy? setPolicy = enableWrites ? MarshalOptional<NvmlSetFanControlPolicy>(library, "nvmlDeviceSetFanControlPolicy") : null;
 
                 transport = new NvmlGpuFanCoolerTransport(
-                    enableWrites, library, init, shutdown, getHandle, getTarget, getMinMax, getNumFans, setFanSpeed, setPolicy);
+                    enableWrites, library, init, shutdown, getHandle, getTarget, getPolicy, getMinMax, getNumFans, setFanSpeed, setPolicy);
                 transport.Initialise();
                 message = enableWrites && (setFanSpeed is null || setPolicy is null)
                     ? "NVML loaded but the installed driver does not export the fan setters; writes remain unavailable."
@@ -137,10 +144,19 @@ public sealed class NvmlGpuFanCoolerTransport : IGpuFanCoolerTransport, IDisposa
         (nint handle, uint fan) = ResolveChannel(channelId);
         NvmlResult result = _getTargetFanSpeed(handle, fan, out uint target);
         int? measured = result == NvmlResult.Success ? (int)target : null;
-        // NVML does not expose the current policy directly here; we treat a readable
-        // target as manual evidence only when a write is armed. For read-only preflight
-        // the measured duty is what matters.
-        return Task.FromResult(new GpuFanChannelState(GpuFanControlPolicy.Automatic, null, measured));
+        // Read the current fan-control policy back from the driver so verification can
+        // confirm a manual write actually took. When the driver does not export the
+        // policy getter we conservatively report Automatic (the safe default).
+        GpuFanControlPolicy policy = GpuFanControlPolicy.Automatic;
+        if (_getFanControlPolicy is not null
+            && _getFanControlPolicy(handle, fan, out uint rawPolicy) == NvmlResult.Success)
+        {
+            policy = rawPolicy == FanPolicyManual
+                ? GpuFanControlPolicy.Manual
+                : GpuFanControlPolicy.Automatic;
+        }
+
+        return Task.FromResult(new GpuFanChannelState(policy, null, measured));
     }
 
     public Task SetManualDutyAsync(string channelId, int dutyPercent, CancellationToken cancellationToken)

@@ -102,9 +102,16 @@ if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped
     Stop-Service -Name $serviceName -ErrorAction Stop
     Wait-ServiceState "Stopped"
 }
-& reg.exe import $registryBackupPath | Out-Null
+# reg.exe writes "The operation completed successfully." to stderr even on success.
+# Under $ErrorActionPreference='Stop' PowerShell turns that native stderr line into a
+# terminating NativeCommandError, which would abort a restore that actually worked.
+# Scope the preference to Continue and merge stderr so only the real exit code decides.
+$registryRestoreOutput = & {
+    $ErrorActionPreference = "Continue"
+    reg.exe import $registryBackupPath 2>&1
+}
 if ($LASTEXITCODE -ne 0) {
-    throw "Service registry restore failed with exit code $LASTEXITCODE."
+    throw "Service registry restore failed with exit code ${LASTEXITCODE}: $registryRestoreOutput"
 }
 if ((Get-PCHelperImagePath) -cne $expectedImagePath) {
     throw "Restored service ImagePath did not match the manifest."

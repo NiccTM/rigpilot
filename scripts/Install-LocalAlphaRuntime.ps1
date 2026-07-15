@@ -190,9 +190,14 @@ function Write-Manifest([System.Collections.IDictionary]$Manifest, [string]$Path
 
 function Restore-OriginalService([string]$RegistryBackupPath, [string]$ExpectedImagePath, [string]$OriginalState) {
     Stop-PCHelperService
-    & reg.exe import $RegistryBackupPath | Out-Null
+    # reg.exe reports success on stderr; scope ErrorActionPreference so that native
+    # stderr line does not become a terminating error that aborts a working restore.
+    $registryImportOutput = & {
+        $ErrorActionPreference = "Continue"
+        reg.exe import $RegistryBackupPath 2>&1
+    }
     if ($LASTEXITCODE -ne 0) {
-        throw "Service registry restore failed with exit code $LASTEXITCODE."
+        throw "Service registry restore failed with exit code ${LASTEXITCODE}: $registryImportOutput"
     }
     if ((Get-PCHelperImagePath) -cne $ExpectedImagePath) {
         throw "Original service ImagePath was not restored exactly."
@@ -280,9 +285,12 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Could not grant LocalSystem full control of the alpha staging directory."
     }
-    & reg.exe export "HKLM\$serviceRegistryPath" $registryBackupPath /y | Out-Null
+    $registryExportOutput = & {
+        $ErrorActionPreference = "Continue"
+        reg.exe export "HKLM\$serviceRegistryPath" $registryBackupPath /y 2>&1
+    }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $registryBackupPath -PathType Leaf)) {
-        throw "The installed service registry backup could not be created."
+        throw "The installed service registry backup could not be created: $registryExportOutput"
     }
     Write-Manifest $manifest $manifestPath
 
