@@ -5,9 +5,10 @@ using PCHelper.Core;
 namespace PCHelper.Service;
 
 /// <summary>
-/// Production controller-discovery child: the Adapter Host executable launched
-/// with <c>--discover-controllers</c>, contained inside a kill-on-close job
-/// object so a native HidSharp crash cannot outlive or destabilise the service.
+/// Production discovery child: the Adapter Host executable launched with a read-only
+/// discovery argument (<c>--discover-controllers</c> or <c>--discover-hid</c>), contained
+/// inside a kill-on-close job object so a native HidSharp crash cannot outlive or
+/// destabilise the service. The exit contract is argument-agnostic (exit code + output).
 /// </summary>
 internal sealed class AdapterHostControllerDiscoveryProcess : IControllerDiscoveryProcess
 {
@@ -16,7 +17,7 @@ internal sealed class AdapterHostControllerDiscoveryProcess : IControllerDiscove
     private readonly Process _process;
     private bool _disposed;
 
-    public AdapterHostControllerDiscoveryProcess()
+    public AdapterHostControllerDiscoveryProcess(string discoveryArgument = "--discover-controllers")
     {
         string executable = AdapterHostProxy.ResolveAdapterHostPath();
         ProcessStartInfo startInfo = new(executable)
@@ -28,10 +29,10 @@ internal sealed class AdapterHostControllerDiscoveryProcess : IControllerDiscove
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        startInfo.ArgumentList.Add("--discover-controllers");
+        startInfo.ArgumentList.Add(discoveryArgument);
 
         _process = Process.Start(startInfo)
-            ?? throw new ControllerDiscoveryProcessException("The controller-discovery process could not be started.");
+            ?? throw new ControllerDiscoveryProcessException("The discovery process could not be started.");
         _job.Add(_process);
         _process.OutputDataReceived += Capture;
         _process.ErrorDataReceived += Capture;

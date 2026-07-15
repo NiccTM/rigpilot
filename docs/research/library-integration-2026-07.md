@@ -47,6 +47,15 @@ or hardware-test blocker; Intel CPU undervolt is largely **infeasible** under VB
   transport, or shell out to `liquidctl.exe` (see
   https://github.com/jmarucha/FanControl.Liquidctl). Keep pump zero-RPM BLOCKED; run behind
   the Adapter Host. Effort L; risk: per-device protocol variance, native crash containment.
+- **Concrete starting point (2026-07-15):** the new read-only HID inventory
+  (`pchelper-cli discover-hid`) already **detects the reference NZXT AIO** on the reference
+  machine (USB `VID_1E71&PID_2007`, classified `VendorDefined`). liquidctl documents this
+  family's HID protocol (fan/pump duty + fluid-temp/RPM read + a safe default speed). The
+  disciplined build order for an AIO transport is therefore: (1) inventory detection — DONE;
+  (2) an `IAioCoolerTransport` seam + fake, clean-roomed from the liquidctl protocol, with
+  **fan-duty writes only and pump writes hard-BLOCKED** (zero-RPM prohibited); (3) contained
+  read-back of fan/pump RPM + fluid temperature; (4) acknowledged-arm + physical
+  qualification, mirroring the GPU-fan path. No live pump write is ever in scope.
 
 ## D. RGB / lighting (beyond OpenRGB)
 

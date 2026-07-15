@@ -119,6 +119,7 @@ public enum IpcCommand
     ApplyUpdate,
     GetUpdateStatus,
     DiscoverControllers,
+    DiscoverHidInventory,
     SetGpuFanControlArmed
 }
 
@@ -182,6 +183,7 @@ public static class IpcCommandPolicy
         IpcCommand.GetUpdateStatus or
         IpcCommand.DiscoverUpdates or
         IpcCommand.DiscoverControllers or
+        IpcCommand.DiscoverHidInventory or
         IpcCommand.ValidateUpdate or
         IpcCommand.AdapterProbe or
         IpcCommand.AdapterReadSensors or

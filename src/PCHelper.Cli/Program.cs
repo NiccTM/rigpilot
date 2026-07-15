@@ -32,6 +32,7 @@ internal static class Cli
                 "operation" => await OperationAsync(args, json),
                 "cooling-reports" => await ServiceCommandAsync<IReadOnlyList<CoolingQualificationReportV1>>(IpcCommand.GetCoolingQualificationReports, json),
                 "discover-controllers" => await ServiceCommandAsync<ControllerDiscoveryResultV1>(IpcCommand.DiscoverControllers, json),
+                "discover-hid" => await DiscoverHidAsync(json),
                 "gpu-fan-arm" => await SetGpuFanArmedAsync(args, json, arm: true),
                 "gpu-fan-disarm" => await SetGpuFanArmedAsync(args, json, arm: false),
                 "trace" => await TraceAsync(json),
@@ -144,6 +145,31 @@ internal static class Cli
         T payload = await SendAsync<T>(command);
         Write(payload, json, value => Console.WriteLine(value));
         return 0;
+    }
+
+    private static async Task<int> DiscoverHidAsync(bool json)
+    {
+        HidInventoryResultV1 result = await SendAsync<HidInventoryResultV1>(IpcCommand.DiscoverHidInventory);
+        Write(result, json, value =>
+        {
+            Console.WriteLine($"HID inventory: {value.Outcome} — {value.Devices.Count} device(s). {value.Detail}");
+            foreach (IGrouping<string, HidDeviceInventoryItemV1> group in value.Devices
+                .GroupBy(device => device.DeviceClass)
+                .OrderByDescending(group => group.Count()))
+            {
+                Console.WriteLine($"  {group.Key,-18} {group.Count()}");
+            }
+
+            foreach (HidDeviceInventoryItemV1 device in value.Devices
+                .Where(device => device.ProductName is not null)
+                .Take(25))
+            {
+                Console.WriteLine(
+                    $"    {device.DeviceClass,-16} VID={device.VendorId:X4} PID={device.ProductId:X4} " +
+                    $"usage={device.UsagePage:X2}:{device.Usage:X2}  {device.ProductName}");
+            }
+        });
+        return result.Outcome == HidInventoryOutcome.Succeeded ? 0 : 3;
     }
 
     private static async Task<int> OperationAsync(string[] args, bool json)
@@ -1116,6 +1142,7 @@ internal static class Cli
             pchelper-cli cooling-reports [--json]   Read cooling qualification evidence.
             pchelper-cli discover-controllers [--json]
                                                  Run a contained USB/AIO controller-discovery probe (read-only inventory).
+            pchelper-cli discover-hid [--json]   Run a contained, read-only HID peripheral inventory (keyboard/mouse/RGB/AIO classes).
             pchelper-cli gpu-fan-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU fan control after exact-device acknowledgement.
             pchelper-cli gpu-fan-disarm [--json] Disarm GPU fan control and restore the automatic curve.
