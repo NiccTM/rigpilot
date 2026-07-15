@@ -78,6 +78,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly AsyncCommand _hideDesktopOsdCommand;
     private readonly AsyncCommand _captureDesktopSnapshotCommand;
     private readonly AsyncCommand _refreshMonitorBrightnessCommand;
+    private readonly AsyncCommand _scanHidInventoryCommand;
     private readonly AsyncCommand _setMonitorBrightnessCommand;
     private readonly AsyncCommand _saveOsdPresentationCommand;
     private readonly AsyncCommand _saveMonitoringPreferencesCommand;
@@ -199,6 +200,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _desktopOsdStatus = "Desktop OSD is hidden. It uses a local non-activating window, not RTSS or injection.";
     private string _desktopSnapshotStatus = "Select a display or window, then explicitly save a PNG to Pictures\\RigPilot\\Snapshots.";
     private string _monitorBrightnessStatus = "Waiting for the signed-in user agent before enumerating displays.";
+    private string _hidInventoryStatus = "Peripheral scan has not run.";
     private string _monitorBrightnessPercentText = "50";
     private bool _monitorBrightnessDeviceConfirmed;
     private MonitorBrightnessDeviceV1? _selectedMonitorBrightnessDevice;
@@ -438,6 +440,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _refreshMonitorBrightnessCommand = new AsyncCommand(
             _ => RefreshMonitorBrightnessCoreAsync(showNotice: true),
             _ => IsUserAgentOnline,
+            ReportError);
+        _scanHidInventoryCommand = new AsyncCommand(
+            _ => ScanHidInventoryCoreAsync(),
+            _ => IsServiceOnline,
             ReportError);
         _setMonitorBrightnessCommand = new AsyncCommand(
             _ => SetMonitorBrightnessCoreAsync(),
@@ -720,6 +726,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand CaptureDesktopSnapshotCommand => _captureDesktopSnapshotCommand;
 
     public ICommand RefreshMonitorBrightnessCommand => _refreshMonitorBrightnessCommand;
+    public ICommand ScanHidInventoryCommand => _scanHidInventoryCommand;
 
     public ICommand SetMonitorBrightnessCommand => _setMonitorBrightnessCommand;
 
@@ -808,6 +815,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 _saveGameBundleCommand.RaiseCanExecuteChanged();
                 _captureDesktopSnapshotCommand.RaiseCanExecuteChanged();
                 _refreshMonitorBrightnessCommand.RaiseCanExecuteChanged();
+                _scanHidInventoryCommand.RaiseCanExecuteChanged();
                 _setMonitorBrightnessCommand.RaiseCanExecuteChanged();
                 _saveOsdPresentationCommand.RaiseCanExecuteChanged();
                 _saveMonitoringPreferencesCommand.RaiseCanExecuteChanged();
@@ -1713,6 +1721,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         get => _monitorBrightnessStatus;
         private set => Set(ref _monitorBrightnessStatus, value);
+    }
+
+    public ObservableCollection<HidDeviceDisplay> HidDevices { get; } = [];
+
+    public string HidInventoryStatus
+    {
+        get => _hidInventoryStatus;
+        private set => Set(ref _hidInventoryStatus, value);
     }
 
     public string DesktopOsdStatus
@@ -3288,6 +3304,55 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         EnsureSuccess(response);
         return IpcJson.FromElement<HardwareEvidenceReportV1>(response.Payload)
             ?? throw new InvalidDataException("Service returned an empty hardware-evidence report.");
+    }
+
+    private async Task ScanHidInventoryCoreAsync()
+    {
+        if (!IsServiceOnline)
+        {
+            HidInventoryStatus = "Connected-peripheral scanning requires the RigPilot service. Local-probe mode is read-only.";
+            return;
+        }
+
+        HidInventoryStatus = "Scanning connected peripherals…";
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.DiscoverHidInventory),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        HidInventoryResultV1 result = IpcJson.FromElement<HidInventoryResultV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty HID inventory result.");
+
+        HidDevices.Clear();
+        if (result.Outcome != HidInventoryOutcome.Succeeded)
+        {
+            HidInventoryStatus = $"Peripheral scan did not complete: {result.Detail}";
+            return;
+        }
+
+        // Collapse the raw per-interface HID records (a device often exposes several) into one
+        // row per physical device, aggregating its interface classes for a clean read-only view.
+        HidDeviceDisplay[] devices = result.Devices
+            .GroupBy(device => (device.VendorId, device.ProductId, device.ProductName))
+            .Select(group => new HidDeviceDisplay(
+                string.IsNullOrWhiteSpace(group.Key.ProductName) ? "Unnamed HID device" : group.Key.ProductName!,
+                $"VID {group.Key.VendorId:X4}  ·  PID {group.Key.ProductId:X4}",
+                string.Join(", ", group
+                    .Select(device => device.DeviceClass)
+                    .Distinct()
+                    .OrderBy(value => value, StringComparer.Ordinal))))
+            .OrderBy(device => device.ProductName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (HidDeviceDisplay device in devices)
+        {
+            HidDevices.Add(device);
+        }
+
+        int classCount = result.Devices.Select(device => device.DeviceClass).Distinct().Count();
+        HidInventoryStatus = devices.Length == 0
+            ? "No HID peripherals were enumerated."
+            : $"{devices.Length} connected peripheral{(devices.Length == 1 ? string.Empty : "s")} across " +
+              $"{classCount} device class{(classCount == 1 ? string.Empty : "es")}. Read-only inventory; no write capability.";
     }
 
     public string BuildMonitoringCsv()
@@ -7625,6 +7690,8 @@ public sealed record AutomationRuleDisplay(
 }
 
 public sealed record SensorDisplay(string Name, string Device, string DisplayValue, string Severity, string Glyph);
+
+public sealed record HidDeviceDisplay(string ProductName, string Identity, string Classes);
 
 public sealed record ProfileCardDisplay(
     ProfileV1 Profile,

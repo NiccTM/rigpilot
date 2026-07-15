@@ -1856,6 +1856,43 @@
             </Border>
 
             <Border Style="{StaticResource CardStyle}" Padding="17" Margin="0,12,0,0">
+              <StackPanel>
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock Text="Connected peripherals" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="A read-only HID inventory scanned inside the crash-isolated Adapter Host. Keyboards, mice, headset controls, RGB and AIO controllers are classified by HID usage; no device is opened for output and no write capability is created." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  </StackPanel>
+                  <Button Grid.Column="1" Content="Scan peripherals" Command="{Binding ScanHidInventoryCommand}" Margin="12,0,0,0" VerticalAlignment="Top" automation:AutomationProperties.Name="Scan connected peripherals" automation:AutomationProperties.AutomationId="Devices.ScanHid" />
+                </Grid>
+                <TextBlock Text="{Binding HidInventoryStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,12,0,2" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Devices.HidInventoryStatus" />
+                <ItemsControl ItemsSource="{Binding HidDevices}" Margin="0,6,0,0" automation:AutomationProperties.Name="Connected peripherals list" automation:AutomationProperties.AutomationId="Devices.HidInventory">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,9">
+                        <Grid>
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="30" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <Border Width="25" Height="25" CornerRadius="6" Background="{StaticResource SurfaceRaisedBrush}" VerticalAlignment="Top">
+                            <TextBlock Text="&#xE772;" FontFamily="{StaticResource IconFont}" FontSize="12" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                          </Border>
+                          <StackPanel Grid.Column="1" Margin="7,0,12,0" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding ProductName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Classes}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                          </StackPanel>
+                          <TextBlock Grid.Column="2" Text="{Binding Identity}" Style="{StaticResource MutedStyle}" VerticalAlignment="Center" FontFamily="Consolas" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Padding="17" Margin="0,12,0,0">
                 <StackPanel>
                   <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
