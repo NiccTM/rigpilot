@@ -1,5 +1,6 @@
 using PCHelper.Contracts;
 using PCHelper.Ipc;
+using System.IO.Pipes;
 
 namespace PCHelper.Integration.Tests;
 
@@ -33,6 +34,71 @@ public sealed class NamedPipeRequestTests
     }
 
     [Fact]
+    public async Task NormalPipeEvaluatesTheCurrentClientIdentity()
+    {
+        string pipeName = $"pchelper.tests.{Guid.NewGuid():N}";
+        using CancellationTokenSource shutdown = new(TimeSpan.FromSeconds(10));
+        NamedPipeRequestServer server = new(
+            pipeName,
+            (request, context, _) => Task.FromResult(new IpcResponse(
+                ProtocolConstants.Version,
+                request.RequestId,
+                true,
+                0,
+                null,
+                null,
+                IpcJson.ToElement(context))));
+        Task serverTask = server.RunAsync(shutdown.Token);
+        NamedPipeRequestClient client = new(pipeName, TimeSpan.FromSeconds(5));
+
+        IpcResponse response = await client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetServiceStatus),
+            CancellationToken.None);
+        IpcClientContext observed = IpcJson.FromElement<IpcClientContext>(response.Payload)
+            ?? throw new InvalidDataException("Server returned an empty client context.");
+
+        Assert.True(response.Success);
+        Assert.False(string.IsNullOrWhiteSpace(observed.UserName));
+        Assert.False(string.IsNullOrWhiteSpace(observed.UserSid));
+        shutdown.Cancel();
+        await serverTask;
+    }
+
+    [Fact]
+    public async Task TokenAuthenticatedPrivatePipeFailsClosedWithoutClientImpersonation()
+    {
+        string pipeName = $"pchelper.tests.{Guid.NewGuid():N}";
+        using CancellationTokenSource shutdown = new(TimeSpan.FromSeconds(10));
+        NamedPipeRequestServer server = new(
+            pipeName,
+            (request, context, _) => Task.FromResult(new IpcResponse(
+                ProtocolConstants.Version,
+                request.RequestId,
+                true,
+                0,
+                null,
+                null,
+                IpcJson.ToElement(context))),
+            clientIdentityMode: NamedPipeClientIdentityMode.TokenAuthenticatedPrivateChannel);
+        Task serverTask = server.RunAsync(shutdown.Token);
+        NamedPipeRequestClient client = new(pipeName, TimeSpan.FromSeconds(5));
+
+        IpcResponse response = await client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetServiceStatus),
+            CancellationToken.None);
+        IpcClientContext observed = IpcJson.FromElement<IpcClientContext>(response.Payload)
+            ?? throw new InvalidDataException("Server returned an empty client context.");
+
+        Assert.True(response.Success);
+        Assert.False(observed.IsOperator);
+        Assert.Null(observed.UserName);
+        Assert.Null(observed.UserSid);
+        Assert.False(observed.IsAppContainer);
+        shutdown.Cancel();
+        await serverTask;
+    }
+
+    [Fact]
     public async Task ProtocolMismatchReturnsTypedError()
     {
         string pipeName = $"pchelper.tests.{Guid.NewGuid():N}";
@@ -52,6 +118,88 @@ public sealed class NamedPipeRequestTests
 
         Assert.False(response.Success);
         Assert.Equal("PROTOCOL_MISMATCH", response.ErrorCode);
+        shutdown.Cancel();
+        await serverTask;
+    }
+
+    [Fact]
+    public async Task ProtocolOneCompatibilityWindowIsStrictlyReadOnly()
+    {
+        string pipeName = $"pchelper.tests.{Guid.NewGuid():N}";
+        using CancellationTokenSource shutdown = new(TimeSpan.FromSeconds(10));
+        int calls = 0;
+        NamedPipeRequestServer server = new(pipeName, (request, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(new IpcResponse(
+                ProtocolConstants.Version,
+                request.RequestId,
+                true,
+                0,
+                null,
+                null,
+                IpcJson.ToElement("ok")));
+        });
+        Task serverTask = server.RunAsync(shutdown.Token);
+        NamedPipeRequestClient client = new(pipeName, TimeSpan.FromSeconds(5));
+
+        IpcResponse read = await client.SendAsync(
+            NamedPipeRequestClient.CreateLegacyReadOnlyRequest(IpcCommand.GetServiceStatus),
+            CancellationToken.None);
+        IpcRequest mutation = new(
+            ProtocolConstants.LegacyReadOnlyVersion,
+            Guid.NewGuid().ToString("N"),
+            IpcCommand.ResetHardware,
+            0,
+            Guid.NewGuid().ToString("N"),
+            IpcJson.ToElement("fan.cpu"));
+        IpcResponse rejected = await client.SendAsync(mutation, CancellationToken.None);
+
+        Assert.True(read.Success);
+        Assert.Equal(ProtocolConstants.LegacyReadOnlyVersion, read.ProtocolVersion);
+        Assert.False(rejected.Success);
+        Assert.Equal("PROTOCOL_MISMATCH", rejected.ErrorCode);
+        Assert.Equal(1, calls);
+        shutdown.Cancel();
+        await serverTask;
+    }
+
+    [Fact]
+    public async Task DisconnectedClientDoesNotFaultServer()
+    {
+        string pipeName = $"pchelper.tests.{Guid.NewGuid():N}";
+        using CancellationTokenSource shutdown = new(TimeSpan.FromSeconds(10));
+        NamedPipeRequestServer server = new(pipeName, async (request, cancellationToken) =>
+        {
+            await Task.Delay(100, cancellationToken);
+            return new IpcResponse(
+                ProtocolConstants.Version,
+                request.RequestId,
+                true,
+                9,
+                null,
+                null,
+                IpcJson.ToElement(new string('x', 1024 * 1024)));
+        });
+        Task serverTask = server.RunAsync(shutdown.Token);
+
+        await using (NamedPipeClientStream abandoned = new(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
+        {
+            await abandoned.ConnectAsync(shutdown.Token);
+            await PipeFraming.WriteAsync(
+                abandoned,
+                NamedPipeRequestClient.CreateRequest(IpcCommand.GetServiceStatus),
+                shutdown.Token);
+        }
+
+        await Task.Delay(250, shutdown.Token);
+        NamedPipeRequestClient client = new(pipeName, TimeSpan.FromSeconds(5));
+        IpcResponse response = await client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetServiceStatus),
+            shutdown.Token);
+
+        Assert.True(response.Success);
+        Assert.Equal(9, response.StateRevision);
         shutdown.Cancel();
         await serverTask;
     }

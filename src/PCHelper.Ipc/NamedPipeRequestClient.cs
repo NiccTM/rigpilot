@@ -21,7 +21,13 @@ public sealed class NamedPipeRequestClient
             _pipeName,
             PipeDirection.InOut,
             PipeOptions.Asynchronous,
-            System.Security.Principal.TokenImpersonationLevel.Identification);
+            // The service evaluates each normal client token with RunAsClient.
+            // Identification is insufficient for that Windows API and can
+            // surface ERROR_BAD_IMPERSONATION_LEVEL (1346), which silently
+            // downgrades a legitimate operator to read-only. Private Adapter
+            // Host pipes do not impersonate; they remain token-authenticated
+            // and fail closed in the server identity-mode policy.
+            System.Security.Principal.TokenImpersonationLevel.Impersonation);
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_connectTimeout);
         await client.ConnectAsync(timeout.Token).ConfigureAwait(false);
@@ -51,4 +57,12 @@ public sealed class NamedPipeRequestClient
             expectedRevision,
             idempotencyKey,
             null);
+
+    public static IpcRequest CreateLegacyReadOnlyRequest(IpcCommand command) => new(
+        ProtocolConstants.LegacyReadOnlyVersion,
+        Guid.NewGuid().ToString("N"),
+        command,
+        null,
+        null,
+        null);
 }

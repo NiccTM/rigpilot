@@ -1,0 +1,31 @@
+<Page
+    x:Class="PCHelper.GameBarWidget.WidgetPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Background="{StaticResource RigPilotPanel}" Padding="16">
+        <StackPanel Spacing="10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="RigPilot" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="Read-only Game Bar bridge" Foreground="{StaticResource RigPilotMuted}" FontSize="12" />
+                </StackPanel>
+                <Button Grid.Column="1" Content="Refresh" Click="Refresh_Click" />
+            </Grid>
+            <Border BorderBrush="{StaticResource RigPilotBorder}" BorderThickness="1" CornerRadius="6" Padding="10">
+                <StackPanel Spacing="6">
+                    <TextBlock x:Name="StatusText" Text="Checking the signed-in user agent…" />
+                    <TextBlock x:Name="RtssText" Foreground="{StaticResource RigPilotMuted}" FontSize="12" />
+                    <TextBlock x:Name="CaptureText" Foreground="{StaticResource RigPilotMuted}" FontSize="12" />
+                </StackPanel>
+            </Border>
+            <TextBlock
+                Foreground="{StaticResource RigPilotMuted}"
+                FontSize="11"
+                Text="This widget cannot access the RigPilot service, hardware controls, macros, scripts, or capture actions." />
+        </StackPanel>
+    </Grid>
+</Page>

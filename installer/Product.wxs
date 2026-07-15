@@ -1,23 +1,24 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="PC Helper"
-           Manufacturer="PC Helper contributors"
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="RigPilot"
+           Manufacturer="RigPilot contributors"
            Version="$(var.ProductVersion)"
            UpgradeCode="2D442727-2FD1-4E47-ACF2-206E0A910E76"
            Scope="perMachine"
            InstallerVersion="500">
     <SummaryInformation Description="Capability-gated desktop monitoring and control suite" />
     <MediaTemplate EmbedCab="yes" />
-    <MajorUpgrade DowngradeErrorMessage="A newer PC Helper version is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer RigPilot version is already installed." />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="PC Helper">
+      <Directory Id="INSTALLFOLDER" Name="RigPilot">
         <Directory Id="APPDIR" Name="app" />
         <Directory Id="SERVICEDIR" Name="service" />
       </Directory>
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="PCHelperProgramMenu" Name="PC Helper" />
+      <Directory Id="PCHelperProgramMenu" Name="RigPilot" />
     </StandardDirectory>
 
     <ComponentGroup Id="HarvestedPayload" Directory="INSTALLFOLDER">
@@ -33,8 +34,8 @@
       <File Id="AppExecutable" Source="$(var.PublishDir)\app\PCHelper.App.exe" KeyPath="yes">
         <Shortcut Id="PCHelperShortcut"
                   Directory="PCHelperProgramMenu"
-                  Name="PC Helper"
-                  Description="Open the PC Helper dashboard"
+                  Name="RigPilot"
+                  Description="Open the RigPilot dashboard"
                   Advertise="yes"
                   WorkingDirectory="APPDIR" />
       </File>
@@ -45,8 +46,8 @@
       <File Id="ServiceExecutable" Source="$(var.PublishDir)\service\PCHelper.Service.exe" KeyPath="yes" />
       <ServiceInstall Id="PCHelperServiceInstall"
                       Name="PCHelper"
-                      DisplayName="PC Helper Service"
-                      Description="Coordinates PC Helper safety policy, profiles, sensors, and verified hardware operations."
+                      DisplayName="RigPilot Service"
+                      Description="Coordinates RigPilot safety policy, profiles, sensors, and verified hardware operations."
                       Type="ownProcess"
                       Start="auto"
                       ErrorControl="normal"
@@ -58,6 +59,12 @@
                       Stop="both"
                       Remove="uninstall"
                       Wait="yes" />
+      <util:ServiceConfig ServiceName="PCHelper"
+                          FirstFailureActionType="restart"
+                          SecondFailureActionType="restart"
+                          ThirdFailureActionType="restart"
+                          RestartServiceDelayInSeconds="5"
+                          ResetPeriodInDays="1" />
     </Component>
 
     <Component Id="OperatorsGroupMarkerComponent" Directory="INSTALLFOLDER" Bitness="always64">
@@ -69,11 +76,11 @@
                      KeyPath="yes" />
     </Component>
 
-    <!-- The "PC Helper Operators" group is created by the service itself at first start
+    <!-- The legacy "PC Helper Operators" group is created by the service itself at first start
          (it runs as LocalSystem). Launching the service exe as an installer custom action
          proved fragile: unresolved arguments booted the full service host inside the
          installer and wedged the install. -->
-    <Feature Id="MainFeature" Title="PC Helper" Level="1">
+    <Feature Id="MainFeature" Title="RigPilot" Level="1">
       <ComponentGroupRef Id="HarvestedPayload" />
       <ComponentRef Id="AppExecutableComponent" />
       <ComponentRef Id="ServiceExecutableComponent" />

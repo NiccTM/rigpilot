@@ -17,6 +17,12 @@
           "System.Management": "10.0.2"
         }
       },
+      "NvAPIWrapper.Net": {
+        "type": "Direct",
+        "requested": "[0.8.1.101, )",
+        "resolved": "0.8.1.101",
+        "contentHash": "qX+5EQ32tCTqBkX/9BNfx7w4HPi18s3XhMubjbxSjPhYQ6pXWL+HGnaZEmGvFlOxvsQN+/6eV3x5bRo1CDY/mQ=="
+      },
       "System.Management": {
         "type": "Direct",
         "requested": "[10.0.9, )",
@@ -44,6 +50,11 @@
         "resolved": "2.6.4",
         "contentHash": "UcGvtnXFcatwHBXr+ei8GEXvg//wjGmDGQ6Xvb+7M4vHjURAhSLIJ+dSZv0BnAhQEpNlH8G4P7JxYnMH8Aph4g=="
       },
+      "libsodium": {
+        "type": "Transitive",
+        "resolved": "1.0.22",
+        "contentHash": "KPD9SloJFclrsjnhABu7dzWrcyYkwPbvx5l1gRSPAX/0n+OBtSiVCKtGFv4n+ecWUHU0tCG9LSSwoZZx673zBQ=="
+      },
       "Microsoft.Data.Sqlite": {
         "type": "Transitive",
         "resolved": "10.0.9",
@@ -66,6 +77,14 @@
         "type": "Transitive",
         "resolved": "1.0.0",
         "contentHash": "vSN/L1uaVwKsiLa95bYu2SGkF0iY3xMblTfxc8alSziPuVfJpj3geVqHGAA75J7cZkMuKpFVikz82Lo6y6LLdA=="
+      },
+      "NSec.Cryptography": {
+        "type": "Transitive",
+        "resolved": "26.4.0",
+        "contentHash": "0vsCtY5f+YgQROiWNqzgWp+l2pddfk9FkWoGV/bEo0MuEYPKlJWuoA8aOfO6qp3f+EnObKE3zSJhn1PspJeJVg==",
+        "dependencies": {
+          "libsodium": "[1.0.22, 1.0.23)"
+        }
       },
       "RAMSPDToolkit-NDD": {
         "type": "Transitive",
@@ -239,7 +258,8 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Data.Sqlite": "[10.0.9, )",
-          "PCHelper.Contracts": "[0.2.2, )",
+          "NSec.Cryptography": "[26.4.0, )",
+          "PCHelper.Contracts": "[0.4.0-alpha, )",
           "SQLitePCLRaw.bundle_e_sqlite3": "[3.0.3, )"
         }
       }
@@ -268,6 +288,11 @@
         "dependencies": {
           "System.CodeDom": "10.0.9"
         }
+      },
+      "libsodium": {
+        "type": "Transitive",
+        "resolved": "1.0.22",
+        "contentHash": "KPD9SloJFclrsjnhABu7dzWrcyYkwPbvx5l1gRSPAX/0n+OBtSiVCKtGFv4n+ecWUHU0tCG9LSSwoZZx673zBQ=="
       },
       "Mono.Posix.NETStandard": {
         "type": "Transitive",

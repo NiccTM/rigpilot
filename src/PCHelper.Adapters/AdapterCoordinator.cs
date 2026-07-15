@@ -44,10 +44,14 @@ public sealed class AdapterCoordinator : IAsyncDisposable
         }
 
         IReadOnlyList<ConflictDescriptor> conflicts = ConflictDetector.Detect();
+        CapabilityDescriptor[] resolvedCapabilities = capabilities
+            .Select(capability => ApplyConflictOwnership(capability, conflicts))
+            .OrderBy(capability => capability.Id, StringComparer.Ordinal)
+            .ToArray();
         return new HardwareSnapshot(
             DateTimeOffset.UtcNow,
             DeduplicateDevices(devices),
-            capabilities.OrderBy(capability => capability.Id, StringComparer.Ordinal).ToArray(),
+            resolvedCapabilities,
             sensors.OrderBy(sensor => sensor.SensorId, StringComparer.Ordinal).ToArray(),
             conflicts,
             warnings,
@@ -68,4 +72,49 @@ public sealed class AdapterCoordinator : IAsyncDisposable
         .OrderBy(device => device.Kind)
         .ThenBy(device => device.Name, StringComparer.OrdinalIgnoreCase)
         .ToArray();
+
+    internal static CapabilityDescriptor ApplyConflictOwnership(
+        CapabilityDescriptor capability,
+        IReadOnlyList<ConflictDescriptor> conflicts)
+    {
+        if (capability.State is not (CapabilityAccessState.Verified or CapabilityAccessState.Experimental))
+        {
+            return capability;
+        }
+
+        string[] families = ResourceFamiliesFor(capability);
+        ConflictDescriptor[] owners = conflicts
+            .Where(conflict => conflict.IsRunning
+                && conflict.ResourceFamilies.Any(family => families.Contains(family, StringComparer.OrdinalIgnoreCase)))
+            .OrderBy(conflict => conflict.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (owners.Length == 0)
+        {
+            return capability;
+        }
+
+        string ownerNames = string.Join(", ", owners.Select(owner => owner.DisplayName));
+        string guidance = string.Join(" ", owners.Select(owner => owner.Guidance).Distinct(StringComparer.Ordinal));
+        return capability with
+        {
+            State = CapabilityAccessState.Blocked,
+            ConflictOwner = ownerNames,
+            Reason = $"Overlapping control is owned by {ownerNames}. {guidance}".Trim()
+        };
+    }
+
+    private static string[] ResourceFamiliesFor(CapabilityDescriptor capability) => capability.Domain switch
+    {
+        ControlDomain.Cooling or ControlDomain.CoolingSafety
+            when capability.DeviceId.Contains("gpu", StringComparison.OrdinalIgnoreCase)
+                || capability.Name.Contains("GPU", StringComparison.OrdinalIgnoreCase) => ["GpuFan"],
+        ControlDomain.Cooling or ControlDomain.CoolingSafety
+            when capability.Name.Contains("pump", StringComparison.OrdinalIgnoreCase)
+                || capability.Name.Contains("AIO", StringComparison.OrdinalIgnoreCase) => ["Aio", "UsbFan"],
+        ControlDomain.Cooling or ControlDomain.CoolingSafety => ["MotherboardFan"],
+        ControlDomain.Cpu => ["CpuTuning"],
+        ControlDomain.Gpu => ["GpuTuning"],
+        ControlDomain.Lighting => ["Lighting", "OpenRGB"],
+        _ => []
+    };
 }

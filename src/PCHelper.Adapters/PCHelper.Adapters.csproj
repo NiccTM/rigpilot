@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
-    <Description>Reviewed built-in hardware and Windows adapters for PC Helper.</Description>
+    <Description>Reviewed built-in hardware and Windows adapters for RigPilot.</Description>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
@@ -11,6 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <PackageReference Include="NvAPIWrapper.Net" Version="0.8.1.101" />
     <PackageReference Include="System.Management" Version="10.0.9" />
   </ItemGroup>
 </Project>

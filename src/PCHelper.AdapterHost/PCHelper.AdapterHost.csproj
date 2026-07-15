@@ -3,7 +3,7 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
-    <Description>Crash-isolated native adapter process for PC Helper.</Description>
+    <Description>Crash-isolated native adapter process for RigPilot.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\PCHelper.Adapters\PCHelper.Adapters.csproj" />

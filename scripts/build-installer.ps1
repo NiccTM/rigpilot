@@ -1,9 +1,12 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "0.4.0",
     [string]$RuntimeInstaller,
     [switch]$SkipPublish,
-    [switch]$SkipMsiBuild
+    [switch]$SkipMsiBuild,
+    [string]$SigningCertificateThumbprint,
+    [string]$TimestampServer = "https://timestamp.digicert.com",
+    [switch]$RequireSigning
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,17 +16,60 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $localDotnet = Join-Path $HOME ".dotnet\dotnet.exe"
 $dotnet = if (Test-Path -LiteralPath $localDotnet) { $localDotnet } else { (Get-Command dotnet -ErrorAction Stop).Source }
 
+$signing = $null
+if ($RequireSigning -or -not [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)) {
+    if ([string]::IsNullOrWhiteSpace($TimestampServer) -or -not $TimestampServer.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Production signing requires an HTTPS RFC-3161 timestamp server."
+    }
+    $signing = & (Join-Path $PSScriptRoot "Test-CodeSigningPrerequisites.ps1") -CertificateThumbprint $SigningCertificateThumbprint
+    if ($null -eq $signing -or -not $signing.Ready) {
+        throw "No unambiguous valid code-signing identity is available for installer signing."
+    }
+}
+
+function Sign-InstallerArtifact([string]$Path) {
+    if ($null -eq $signing) {
+        return
+    }
+    & $signing.SignToolPath sign /fd SHA256 /sha $signing.CertificateThumbprint /tr $TimestampServer /td SHA256 /v $Path
+    if ($LASTEXITCODE -ne 0) {
+        throw "Authenticode signing failed for $Path"
+    }
+    & $signing.SignToolPath verify /pa /tw /v $Path
+    if ($LASTEXITCODE -ne 0) {
+        throw "Authenticode verification failed for $Path"
+    }
+}
+
 if (-not $SkipPublish) {
-    & (Join-Path $PSScriptRoot "publish.ps1") -Version $Version
+    $publishArguments = @{ Version = $Version }
+    if ($null -ne $signing) {
+        $publishArguments.SigningCertificateThumbprint = $signing.CertificateThumbprint
+        $publishArguments.TimestampServer = $TimestampServer
+        $publishArguments.RequireSigning = $true
+    }
+    & (Join-Path $PSScriptRoot "publish.ps1") @publishArguments
 }
 
 $publishDirectory = Join-Path $repoRoot "artifacts\publish"
+$runtimePayloadCheck = Join-Path $PSScriptRoot "Test-RuntimePayload.ps1"
+& $runtimePayloadCheck -PayloadRoot $publishDirectory -ExpectedProductVersion $Version
+if ($LASTEXITCODE -ne 0) {
+    throw "Runtime payload contract verification failed."
+}
 $installerOutput = Join-Path $repoRoot "artifacts\installer"
 New-Item -ItemType Directory -Path $installerOutput -Force | Out-Null
 
 if (-not $SkipMsiBuild) {
-    & $dotnet build (Join-Path $repoRoot "installer\PCHelper.Installer.wixproj") `
+    $installerProject = Join-Path $repoRoot "installer\PCHelper.Installer.wixproj"
+    & $dotnet restore $installerProject --locked-mode
+    if ($LASTEXITCODE -ne 0) {
+        throw "Locked restore failed for the MSI project."
+    }
+
+    & $dotnet build $installerProject `
         --configuration Release `
+        --no-restore `
         -p:ProductVersion=$Version `
         -p:PublishDir=$publishDirectory `
         -p:OutputPath=$installerOutput
@@ -32,21 +78,29 @@ if (-not $SkipMsiBuild) {
     }
 }
 
+$msiPath = Get-ChildItem -LiteralPath $installerOutput -Filter "*.msi" -Recurse |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1 -ExpandProperty FullName
+if ([string]::IsNullOrWhiteSpace($msiPath)) {
+    throw "The MSI output could not be located."
+}
+Sign-InstallerArtifact $msiPath
+
 if (-not [string]::IsNullOrWhiteSpace($RuntimeInstaller)) {
     $runtimePath = [System.IO.Path]::GetFullPath($RuntimeInstaller)
     if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
         throw "The .NET Desktop Runtime installer does not exist: $runtimePath"
     }
 
-    $msiPath = Get-ChildItem -LiteralPath $installerOutput -Filter "*.msi" -Recurse |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Select-Object -First 1 -ExpandProperty FullName
-    if ([string]::IsNullOrWhiteSpace($msiPath)) {
-        throw "The MSI output could not be located."
+    $bundleProject = Join-Path $repoRoot "installer\PCHelper.Bundle.wixproj"
+    & $dotnet restore $bundleProject --locked-mode
+    if ($LASTEXITCODE -ne 0) {
+        throw "Locked restore failed for the bundle project."
     }
 
-    & $dotnet build (Join-Path $repoRoot "installer\PCHelper.Bundle.wixproj") `
+    & $dotnet build $bundleProject `
         --configuration Release `
+        --no-restore `
         -p:ProductVersion=$Version `
         -p:RuntimeInstaller=$runtimePath `
         -p:MsiPath=$msiPath `
@@ -54,6 +108,14 @@ if (-not [string]::IsNullOrWhiteSpace($RuntimeInstaller)) {
     if ($LASTEXITCODE -ne 0) {
         throw "WiX bundle build failed."
     }
+
+    $bundlePath = Get-ChildItem -LiteralPath $installerOutput -Filter "*.exe" -Recurse |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1 -ExpandProperty FullName
+    if ([string]::IsNullOrWhiteSpace($bundlePath)) {
+        throw "The bundle output could not be located."
+    }
+    Sign-InstallerArtifact $bundlePath
 }
 
 if ($SkipMsiBuild -and [string]::IsNullOrWhiteSpace($RuntimeInstaller)) {

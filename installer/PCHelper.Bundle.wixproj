@@ -1,9 +1,11 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
   <PropertyGroup>
     <OutputType>Bundle</OutputType>
+    <OutputName>RigPilot.Bundle</OutputName>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <Platform>x64</Platform>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">0.2.0</ProductVersion>
+    <NuGetLockFilePath>packages.bundle.lock.json</NuGetLockFilePath>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.4.0</ProductVersion>
     <DefineConstants>ProductVersion=$(ProductVersion);RuntimeInstaller=$(RuntimeInstaller);MsiPath=$(MsiPath);LicensePath=$(MSBuildThisFileDirectory)..\LICENSE</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
@@ -13,6 +15,6 @@
   </ItemGroup>
   <Target Name="VerifyBundleInputs" BeforeTargets="Build">
     <Error Condition="!Exists('$(RuntimeInstaller)')" Text="Pass -p:RuntimeInstaller=path to the official .NET 10 Desktop Runtime x64 installer." />
-    <Error Condition="!Exists('$(MsiPath)')" Text="Pass -p:MsiPath=path to the built PC Helper MSI." />
+    <Error Condition="!Exists('$(MsiPath)')" Text="Pass -p:MsiPath=path to the built RigPilot MSI." />
   </Target>
 </Project>

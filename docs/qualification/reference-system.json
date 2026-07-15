@@ -1,0 +1,38 @@
+[
+  {
+    "schemaVersion": 1,
+    "reportId": "reference-x570e-5800x-rtx3090-2026-07-12",
+    "systemId": "reference-x570e-5800x-rtx3090",
+    "capturedAt": "2026-07-12T00:00:00+00:00",
+    "processorFamily": "RyzenZen3",
+    "graphicsFamily": "Rtx30",
+    "platformFamily": "Amd",
+    "motherboardVendor": "ASUS",
+    "signedProductionBuild": false,
+    "noBsodOrUnexpectedReboot": true,
+    "noStuckFan": true,
+    "noUnauthorisedWrite": true,
+    "rollbackPassed": true,
+    "controllerEvidence": [
+      {
+        "controllerFamily": "nvidia-rtx3090-fans",
+        "exactDeviceId": "PCI\\VEN_10DE&DEV_2204&SUBSYS_161319DA&REV_A1",
+        "firmwareVersion": "unpublished-reference-vbios",
+        "driverVersion": "32.0.16.1062",
+        "applyReadBackResetPassed": true,
+        "claimedWriteCapability": false,
+        "notes": "Experimental single-system fan evidence only. Restart qualification remains incomplete."
+      },
+      {
+        "controllerFamily": "nuvoton-nct6798d-fans",
+        "exactDeviceId": "ASUS ROG Strix X570-E Gaming / NCT6798D",
+        "firmwareVersion": "BIOS 5031",
+        "driverVersion": "PawnIO/LHM reference path",
+        "applyReadBackResetPassed": true,
+        "claimedWriteCapability": false,
+        "notes": "Experimental reference evidence only. A UAC-staged 0.4.0-alpha completed one Fan #1 60% two-second identification pulse with successful Prepare, Apply, Verify, and ResetToDefault; paired RPM was 1478.6 after reset. A later bounded 100%-to-0% calibration completed with stable samples, 1959.36 RPM maximum, and successful prior-policy rollback. The tach remained about 546 RPM at the requested 0% command; no stop, restart duty, or repeated restart evidence exists. The CASE_FAN_1 alias is a persisted software label, not physical-header proof. No general write claim follows."
+      }
+    ],
+    "notes": "This unsigned reference record intentionally does not count toward the 1.0 signed-system matrix."
+  }
+]

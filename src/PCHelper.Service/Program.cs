@@ -17,8 +17,22 @@ if (WindowsServiceHelpers.IsWindowsService())
     OperatorGroupInstaller.EnsureGroup();
 }
 
+if (!ServiceStartupArguments.TryParse(args, out ServiceStartupOptions startupOptions, out string? startupError))
+{
+    Console.Error.WriteLine(startupError);
+    Environment.ExitCode = 2;
+    return;
+}
+
+if (startupOptions.DataDirectory is not null)
+{
+    Environment.SetEnvironmentVariable("PCHELPER_DATA_DIR", startupOptions.DataDirectory, EnvironmentVariableTarget.Process);
+}
+
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
-string dataDirectory = Environment.GetEnvironmentVariable("PCHELPER_DATA_DIR") ?? DataPaths.GetDefaultDataDirectory();
+string dataDirectory = startupOptions.DataDirectory
+    ?? Environment.GetEnvironmentVariable("PCHELPER_DATA_DIR")
+    ?? DataPaths.GetDefaultDataDirectory();
 string logDirectory = Path.Combine(dataDirectory, "logs");
 try
 {

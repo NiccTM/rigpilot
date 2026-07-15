@@ -1,13 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Description>Safety, profiles, persistence, history, and diagnostics for PC Helper.</Description>
+    <Description>Safety, profiles, persistence, history, and diagnostics for RigPilot.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\PCHelper.Contracts\PCHelper.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageReference Include="NSec.Cryptography" Version="26.4.0" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
   </ItemGroup>
 </Project>

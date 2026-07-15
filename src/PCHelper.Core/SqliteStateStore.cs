@@ -4,7 +4,14 @@ using PCHelper.Contracts;
 
 namespace PCHelper.Core;
 
-public sealed class SqliteStateStore : IProfileStore, IProfileTransactionJournal, ISensorHistoryStore, IAsyncDisposable
+public sealed class SqliteStateStore :
+    IProfileStore,
+    IProfileTransactionJournal,
+    ISensorHistoryStore,
+    IHardwareOperationStore,
+    IAutomationRuleStore,
+    ISuiteStateStore,
+    IAsyncDisposable
 {
     private const long MaximumDatabaseBytes = 250L * 1024 * 1024;
     private readonly string _databasePath;
@@ -47,9 +54,29 @@ public sealed class SqliteStateStore : IProfileStore, IProfileTransactionJournal
                     json TEXT NOT NULL,
                     updated_utc INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS hardware_operations (
+                    id TEXT PRIMARY KEY,
+                    state TEXT NOT NULL,
+                    is_pending INTEGER NOT NULL,
+                    json TEXT NOT NULL,
+                    updated_utc INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS automation_rules (
+                    id TEXT PRIMARY KEY,
+                    json TEXT NOT NULL,
+                    updated_utc INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS suite_entities (
+                    kind TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    updated_utc INTEGER NOT NULL,
+                    PRIMARY KEY(kind, id)
+                );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await EnsureSensorSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+            await EnsureSuiteSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -133,6 +160,188 @@ public sealed class SqliteStateStore : IProfileStore, IProfileTransactionJournal
         await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = "UPDATE profile_transactions SET is_pending = 0 WHERE id = $id";
         command.Parameters.AddWithValue("$id", transactionId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SaveOperationAsync(HardwareOperationStatus operation, CancellationToken cancellationToken)
+    {
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO hardware_operations(id, state, is_pending, json, updated_utc)
+            VALUES($id, $state, $pending, $json, $updated)
+            ON CONFLICT(id) DO UPDATE SET state = excluded.state, is_pending = excluded.is_pending,
+                json = excluded.json, updated_utc = excluded.updated_utc
+            """;
+        command.Parameters.AddWithValue("$id", operation.Id);
+        command.Parameters.AddWithValue("$state", operation.State.ToString());
+        command.Parameters.AddWithValue("$pending", IsPending(operation.State) ? 1 : 0);
+        command.Parameters.AddWithValue("$json", JsonSerializer.Serialize(operation, JsonDefaults.Options));
+        command.Parameters.AddWithValue("$updated", operation.UpdatedAt.ToUnixTimeMilliseconds());
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<HardwareOperationStatus?> GetLatestOperationAsync(CancellationToken cancellationToken)
+    {
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT json FROM hardware_operations ORDER BY updated_utc DESC LIMIT 1";
+        object? result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is string json
+            ? JsonSerializer.Deserialize<HardwareOperationStatus>(json, JsonDefaults.Options)
+            : null;
+    }
+
+    public async Task<HardwareOperationStatus?> GetOperationAsync(string operationId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(operationId))
+        {
+            throw new ArgumentException("An operation identifier is required.", nameof(operationId));
+        }
+
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT json FROM hardware_operations WHERE id = $id";
+        command.Parameters.AddWithValue("$id", operationId);
+        object? result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is string json
+            ? JsonSerializer.Deserialize<HardwareOperationStatus>(json, JsonDefaults.Options)
+            : null;
+    }
+
+    public async Task<HardwareOperationStatus?> GetPendingOperationAsync(CancellationToken cancellationToken)
+    {
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT json FROM hardware_operations WHERE is_pending = 1 ORDER BY updated_utc DESC LIMIT 1";
+        object? result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is string json
+            ? JsonSerializer.Deserialize<HardwareOperationStatus>(json, JsonDefaults.Options)
+            : null;
+    }
+
+    public async Task ClearPendingOperationAsync(string operationId, CancellationToken cancellationToken)
+    {
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "UPDATE hardware_operations SET is_pending = 0 WHERE id = $id";
+        command.Parameters.AddWithValue("$id", operationId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<AutomationRuleV1>> GetAutomationRulesAsync(CancellationToken cancellationToken)
+    {
+        List<AutomationRuleV1> rules = [];
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT json FROM automation_rules ORDER BY updated_utc, id";
+        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            AutomationRuleV1? rule = JsonSerializer.Deserialize<AutomationRuleV1>(reader.GetString(0), JsonDefaults.Options);
+            if (rule is not null)
+            {
+                rules.Add(rule);
+            }
+        }
+
+        return rules;
+    }
+
+    public async Task SaveAutomationRuleAsync(AutomationRuleV1 rule, CancellationToken cancellationToken)
+    {
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO automation_rules(id, json, updated_utc) VALUES($id, $json, $updated)
+            ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_utc = excluded.updated_utc
+            """;
+        command.Parameters.AddWithValue("$id", rule.Id);
+        command.Parameters.AddWithValue("$json", JsonSerializer.Serialize(rule, JsonDefaults.Options));
+        command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task DeleteAutomationRuleAsync(string ruleId, CancellationToken cancellationToken)
+    {
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM automation_rules WHERE id = $id";
+        command.Parameters.AddWithValue("$id", ruleId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<T>> GetSuiteEntitiesAsync<T>(
+        SuiteEntityKind kind,
+        CancellationToken cancellationToken)
+    {
+        EnsureSuiteEntityType<T>(kind);
+        List<T> entities = [];
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT json FROM suite_entities WHERE kind = $kind ORDER BY id";
+        command.Parameters.AddWithValue("$kind", kind.ToString());
+        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            T? entity = JsonSerializer.Deserialize<T>(reader.GetString(0), JsonDefaults.Options);
+            if (entity is not null)
+            {
+                entities.Add(entity);
+            }
+        }
+        return entities;
+    }
+
+    public async Task<T?> GetSuiteEntityAsync<T>(
+        SuiteEntityKind kind,
+        string id,
+        CancellationToken cancellationToken)
+    {
+        EnsureSuiteEntityType<T>(kind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT json FROM suite_entities WHERE kind = $kind AND id = $id";
+        command.Parameters.AddWithValue("$kind", kind.ToString());
+        command.Parameters.AddWithValue("$id", id);
+        object? result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is string json ? JsonSerializer.Deserialize<T>(json, JsonDefaults.Options) : default;
+    }
+
+    public async Task SaveSuiteEntityAsync<T>(
+        SuiteEntityKind kind,
+        string id,
+        T entity,
+        CancellationToken cancellationToken)
+    {
+        EnsureSuiteEntityType<T>(kind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentNullException.ThrowIfNull(entity);
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO suite_entities(kind, id, json, updated_utc) VALUES($kind, $id, $json, $updated)
+            ON CONFLICT(kind, id) DO UPDATE SET json = excluded.json, updated_utc = excluded.updated_utc
+            """;
+        command.Parameters.AddWithValue("$kind", kind.ToString());
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$json", JsonSerializer.Serialize(entity, JsonDefaults.Options));
+        command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task DeleteSuiteEntityAsync(
+        SuiteEntityKind kind,
+        string id,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM suite_entities WHERE kind = $kind AND id = $id";
+        command.Parameters.AddWithValue("$kind", kind.ToString());
+        command.Parameters.AddWithValue("$id", id);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -367,9 +576,91 @@ public sealed class SqliteStateStore : IProfileStore, IProfileTransactionJournal
             );
             CREATE INDEX IF NOT EXISTS ix_sensor_samples_time ON sensor_samples(timestamp_utc);
             CREATE INDEX IF NOT EXISTS ix_sensor_aggregates_time ON sensor_aggregates(minute_utc);
-            PRAGMA user_version = 2;
+            PRAGMA user_version = 3;
             """;
         await schema.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task EnsureSuiteSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        List<ProfileV2> migratedProfiles = [];
+        await using (SqliteCommand read = connection.CreateCommand())
+        {
+            read.CommandText = "SELECT json FROM profiles ORDER BY id";
+            await using SqliteDataReader reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                ProfileV1? profile = JsonSerializer.Deserialize<ProfileV1>(reader.GetString(0), JsonDefaults.Options);
+                if (profile is not null)
+                {
+                    migratedProfiles.Add(ProfileMigration.Upgrade(profile));
+                }
+            }
+        }
+
+        await using SqliteTransaction migration = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        foreach (ProfileV2 profile in migratedProfiles)
+        {
+            await using SqliteCommand insert = connection.CreateCommand();
+            insert.Transaction = migration;
+            insert.CommandText = """
+                INSERT OR IGNORE INTO suite_entities(kind, id, json, updated_utc)
+                VALUES($kind, $id, $json, $updated)
+                """;
+            insert.Parameters.AddWithValue("$kind", SuiteEntityKind.ProfileV2.ToString());
+            insert.Parameters.AddWithValue("$id", profile.Id);
+            insert.Parameters.AddWithValue("$json", JsonSerializer.Serialize(profile, JsonDefaults.Options));
+            insert.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using SqliteCommand version = connection.CreateCommand();
+        version.Transaction = migration;
+        version.CommandText = "PRAGMA user_version = 4";
+        await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await migration.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void EnsureSuiteEntityType<T>(SuiteEntityKind kind)
+    {
+        Type expected = kind switch
+        {
+            SuiteEntityKind.ProfileV2 => typeof(ProfileV2),
+            SuiteEntityKind.CoolingGraph => typeof(CoolingGraphV1),
+            SuiteEntityKind.SensorGraph => typeof(SensorGraphV1),
+            SuiteEntityKind.FanCalibration => typeof(FanCalibrationV2),
+            SuiteEntityKind.FanCommissioningSession => typeof(FanCommissioningSessionV1),
+            SuiteEntityKind.CoolingOutputAssignment => typeof(CoolingOutputAssignmentV1),
+            SuiteEntityKind.OwnershipConsent => typeof(OwnershipConsentV1),
+            SuiteEntityKind.OwnershipLease => typeof(OwnershipLeaseV1),
+            SuiteEntityKind.AutomationWorkflow => typeof(AutomationWorkflowV1),
+            SuiteEntityKind.Macro => typeof(MacroV1),
+            SuiteEntityKind.MacroRecordingSession => typeof(MacroRecordingSessionV1),
+            SuiteEntityKind.ScriptAction => typeof(ScriptActionV1),
+            SuiteEntityKind.EffectGraph => typeof(EffectGraphV1),
+            SuiteEntityKind.EffectScript => typeof(EffectScriptManifestV1),
+            SuiteEntityKind.LightingScene => typeof(LightingSceneV1),
+            SuiteEntityKind.GameEntry => typeof(GameEntryV1),
+            SuiteEntityKind.OsdLayout => typeof(OsdLayoutV1),
+            SuiteEntityKind.OsdPresentationSettings => typeof(OsdPresentationSettingsV1),
+            SuiteEntityKind.MonitoringPreferences => typeof(MonitoringPreferencesV1),
+            SuiteEntityKind.MonitoringComparisonLayout => typeof(MonitoringComparisonLayoutV1),
+            SuiteEntityKind.HealthRule => typeof(HealthRuleV1),
+            SuiteEntityKind.HealthAlertEvent => typeof(HealthAlertEventV1),
+            SuiteEntityKind.SafetyRecoveryState => typeof(SafetyRecoveryStateV1),
+            SuiteEntityKind.CapturePreset => typeof(CapturePresetV1),
+            SuiteEntityKind.UpdateCandidate => typeof(UpdateCandidateV1),
+            SuiteEntityKind.UpdatePlan => typeof(UpdatePlanV1),
+            SuiteEntityKind.UpdateTransaction => typeof(UpdateTransactionV1),
+            SuiteEntityKind.AdapterPackInspection => typeof(AdapterPackInspection),
+            SuiteEntityKind.TakeoverPlan => typeof(TakeoverPlanV1),
+            SuiteEntityKind.TakeoverTransaction => typeof(TakeoverTransactionV1),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+        };
+        if (typeof(T) != expected)
+        {
+            throw new ArgumentException($"Suite entity kind {kind} requires {expected.Name}, not {typeof(T).Name}.", nameof(kind));
+        }
     }
 
     private async Task EnforceSizeCapAsync(SqliteConnection connection, CancellationToken cancellationToken)
@@ -425,4 +716,10 @@ public sealed class SqliteStateStore : IProfileStore, IProfileTransactionJournal
         ProfileTransactionState.Applying or
         ProfileTransactionState.Verifying or
         ProfileTransactionState.RollingBack;
+
+    private static bool IsPending(HardwareOperationState state) => state is
+        HardwareOperationState.Pending or
+        HardwareOperationState.Running or
+        HardwareOperationState.Screening or
+        HardwareOperationState.RecoveryRequired;
 }
