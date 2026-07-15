@@ -2790,7 +2790,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             {
                 try
                 {
-                    _gpuFanTransport.RestoreAutomaticAsync(fanChannel, CancellationToken.None).GetAwaiter().GetResult();
+                    await _gpuFanTransport.RestoreAutomaticAsync(fanChannel, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception restoreException) when (restoreException is GpuFanSafetyException or InvalidOperationException)
                 {
@@ -2802,8 +2802,20 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _gpuFanArmed = payload.Armed;
         _gpuFanTransport.SetArmed(payload.Armed);
         IncrementSuiteRevision();
-        // Re-probe so the capability list reflects the new armed/read-only state.
-        await RefreshAsync(persistSensors: false, cancellationToken).ConfigureAwait(false);
+        // Re-probe so the capability list reflects the new armed/read-only state, but do
+        // not block the response on a full adapter re-probe (which can outrun the client
+        // timeout). The armed state is already applied; the snapshot catches up shortly.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await RefreshAsync(persistSensors: false, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception refreshException) when (refreshException is not OperationCanceledException)
+            {
+                // A background snapshot refresh failure is non-fatal; the next poll recovers.
+            }
+        }, CancellationToken.None);
         return Success(request, new GpuFanControlStatus(
             true,
             payload.Armed,
