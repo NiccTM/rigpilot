@@ -33,6 +33,7 @@ public sealed class VendorControlEligibilityAdapter : IHardwareAdapter
         try
         {
             string biosVersion = TryGetBiosVersion();
+            PawnIoRuntimeStatus pawnIo = PawnIoRuntimeProbe.Detect();
             Query("Win32_Processor", row =>
             {
                 string name = GetString(row, "Name")?.Trim() ?? "Unknown processor";
@@ -44,7 +45,10 @@ public sealed class VendorControlEligibilityAdapter : IHardwareAdapter
                 if (manufacturer.Contains("AMD", StringComparison.OrdinalIgnoreCase)
                     || name.Contains("Ryzen", StringComparison.OrdinalIgnoreCase))
                 {
-                    string reason = $"{recognised}AMD Zen tuning is detected on BIOS {biosVersion}. A rule-compliant SMU path exists (signed PawnIO with a RyzenSMU module) but Curve Optimizer / PBO writes stay blocked until exact per-family mailbox bounds, applied-curve read-back, guaranteed stock reset, and a boot-recovery revert are qualified. See docs/qualification/cpu-tuning-and-intel-arc.md.";
+                    string pawnIoEvidence = pawnIo.Available
+                        ? $"A rule-compliant SMU path is reachable: {pawnIo.Describe()} (RyzenSMU module transport)."
+                        : $"A rule-compliant SMU path exists (signed PawnIO with a RyzenSMU module) but {pawnIo.Describe()}.";
+                    string reason = $"{recognised}AMD Zen tuning is detected on BIOS {biosVersion}. {pawnIoEvidence} Curve Optimizer / PBO writes stay blocked until exact per-family mailbox bounds, applied-curve read-back, guaranteed stock reset, and a boot-recovery revert are qualified. See docs/qualification/cpu-tuning-and-intel-arc.md.";
                     capabilities.Add(Feasibility(
                         $"amd.zen.feasibility:{deviceId}",
                         deviceId,
