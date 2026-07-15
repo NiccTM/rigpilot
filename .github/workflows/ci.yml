@@ -30,10 +30,10 @@ jobs:
         run: dotnet package list --project PCHelper.sln --vulnerable --include-transitive
       - name: Publish framework-dependent x64 payload
         shell: pwsh
-        run: ./scripts/publish.ps1 -Version 0.2.0
+        run: ./scripts/publish.ps1 -Version 0.4.0
       - name: Compile MSI authoring
         shell: pwsh
-        run: ./scripts/build-installer.ps1 -Version 0.2.0 -SkipPublish
+        run: ./scripts/build-installer.ps1 -Version 0.4.0 -SkipPublish
       - uses: actions/upload-artifact@v7
         if: always()
         with:
