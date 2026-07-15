@@ -58,6 +58,23 @@ public sealed class AdapterCoordinator : IAsyncDisposable
             health);
     }
 
+    /// <summary>
+    /// Probes a single adapter and applies the same conflict-ownership resolution as a
+    /// full <see cref="CaptureAsync"/>, returning just that adapter's capabilities. Used to
+    /// refresh one adapter's state synchronously (for example immediately after arming GPU
+    /// fan control) without the cost of re-probing every adapter.
+    /// </summary>
+    public static async Task<IReadOnlyList<CapabilityDescriptor>> CaptureAdapterCapabilitiesAsync(
+        IHardwareAdapter adapter,
+        CancellationToken cancellationToken)
+    {
+        AdapterProbeResult probe = await adapter.ProbeAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<ConflictDescriptor> conflicts = ConflictDetector.Detect();
+        return probe.Capabilities
+            .Select(capability => ApplyConflictOwnership(capability, conflicts))
+            .ToArray();
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (IHardwareAdapter adapter in _adapters.Reverse())

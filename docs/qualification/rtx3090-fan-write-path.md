@@ -59,18 +59,23 @@ Following the `qualificationBlocker` string already in the adapter, un-gating re
 
 Remaining before a `Verified` (not `Experimental`) claim: longer soak (10 active-use hours across 7 calendar days), 3 clean cold boots, and a second independent system. Per change discipline, one multi-cycle session is `Passed a bounded pass`, not `stable`.
 
-### Latent issue found during the 2026-07-15 repeated-cycle pass (not yet fixed)
+### Arm/apply race found during the 2026-07-15 repeated-cycle pass — FIXED and live-verified
 
-`SetGpuFanControlArmed` applies the armed state synchronously but **backgrounds** the
+`SetGpuFanControlArmed` applied the armed state synchronously but **backgrounded** the
 capability re-probe (`Task.Run(RefreshAsync)` in `PCHelperRuntime`, added so the arm
-response returns before the client timeout). As a result the command returns success
-before the capability snapshot flips `gpufan.duty:0` from `ReadOnly` to `Experimental`,
-so an `ApplyProfileV2` issued *immediately* after arm is rejected as read-only until the
-background refresh lands (~1-2 s). A human clicking Arm then Apply never hits this, but
-rapid scripted arm->apply does. Recommended fix: after setting the armed flag, re-probe
-just the GPU-fan adapter synchronously and patch that capability's state into the
-snapshot (respecting conflict detection) before returning, then background the full
-refresh. Requires a service redeploy to verify, so it is deferred, not applied.
+response returns before the client timeout). The command therefore returned success
+before the capability snapshot flipped `gpufan.duty:0` from `ReadOnly` to `Experimental`,
+so an `ApplyProfileV2` issued *immediately* after arm was rejected as read-only until the
+background refresh landed (~1-2 s). A human clicking Arm then Apply never hit this, but
+rapid scripted arm->apply did (0/4 zero-settle cycles in the first repeated-cycle run).
+
+**Fix (deployed 2026-07-15, `0.4.0-alpha-20260715-102042`):** after applying the armed
+flag the arm handler synchronously re-probes just the GPU-fan adapter and patches its
+capabilities into the cached snapshot before returning, reusing the coordinator's
+conflict-ownership resolution (so a competing writer still yields `Blocked`, not a false
+`Experimental`); the full every-adapter re-probe stays backgrounded. Live re-verified on
+the reference RTX 3090: **8/8 zero-settle arm->apply cycles committed** and 3/3
+back-to-back applies under a single arm, versus 0/4 before the fix.
 
 Absence of a failure report is **not** qualification (per change discipline). Provisional status still requires the standard 10 active-use hours, 7 calendar days, and 3 clean cold boots.
 

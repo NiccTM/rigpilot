@@ -26,6 +26,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private ProfileTransactionEngine? _engine;
     private AdapterPackManager? _adapterPackManager;
     private NvmlGpuFanCoolerTransport? _gpuFanTransport;
+    private IHardwareAdapter? _gpuFanAdapter;
     private volatile bool _gpuFanArmed;
     private string _gpuFanDeviceId = "nvidia:gpu-0";
     private WindowsTakeoverExecutionGate? _takeoverGate;
@@ -100,8 +101,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             {
                 _gpuFanTransport = fanTransport;
                 _gpuFanDeviceId = "nvidia:gpu-0";
-                adapters.Add(new TraceableHardwareAdapter(
-                    new NvidiaGpuFanAdapter(fanTransport, _gpuFanDeviceId, "0", () => _gpuFanArmed)));
+                TraceableHardwareAdapter gpuFanAdapter = new(
+                    new NvidiaGpuFanAdapter(fanTransport, _gpuFanDeviceId, "0", () => _gpuFanArmed));
+                _gpuFanAdapter = gpuFanAdapter;
+                adapters.Add(gpuFanAdapter);
             }
             else
             {
@@ -160,6 +163,38 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
         await EvaluateHealthRulesAsync(snapshot, cancellationToken).ConfigureAwait(false);
         await TickCoolingGraphAsync(snapshot, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Replaces the given capabilities in the cached snapshot in place, matched by
+    /// capability id, leaving every other capability untouched. Used to apply a targeted
+    /// single-adapter re-probe synchronously (for example immediately after arming GPU fan
+    /// control) so a following request observes the new state without a full capture.
+    /// </summary>
+    private async Task PatchSnapshotCapabilitiesAsync(
+        IReadOnlyList<CapabilityDescriptor> refreshed,
+        CancellationToken cancellationToken)
+    {
+        if (refreshed.Count == 0)
+        {
+            return;
+        }
+
+        HashSet<string> refreshedIds = refreshed.Select(capability => capability.Id).ToHashSet(StringComparer.Ordinal);
+        await _snapshotGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            CapabilityDescriptor[] merged = _snapshot.Capabilities
+                .Where(capability => !refreshedIds.Contains(capability.Id))
+                .Concat(refreshed)
+                .OrderBy(capability => capability.Id, StringComparer.Ordinal)
+                .ToArray();
+            _snapshot = _snapshot with { Capabilities = merged };
+        }
+        finally
+        {
+            _snapshotGate.Release();
+        }
     }
 
     public Task EnforceRetentionAsync(CancellationToken cancellationToken)
@@ -2802,9 +2837,31 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _gpuFanArmed = payload.Armed;
         _gpuFanTransport.SetArmed(payload.Armed);
         IncrementSuiteRevision();
-        // Re-probe so the capability list reflects the new armed/read-only state, but do
-        // not block the response on a full adapter re-probe (which can outrun the client
-        // timeout). The armed state is already applied; the snapshot catches up shortly.
+
+        // Synchronously refresh just the GPU-fan adapter's capabilities into the cached
+        // snapshot so that an ApplyProfileV2 issued immediately after this call sees the new
+        // Experimental/ReadOnly state instead of the stale one. This targeted re-probe is
+        // fast (a single adapter) and applies the same conflict resolution as a full
+        // capture. The full re-probe of every adapter stays backgrounded below because it
+        // can outrun the client timeout.
+        if (_gpuFanAdapter is not null && _coordinator is not null)
+        {
+            try
+            {
+                IReadOnlyList<CapabilityDescriptor> refreshed = await AdapterCoordinator
+                    .CaptureAdapterCapabilitiesAsync(_gpuFanAdapter, cancellationToken)
+                    .ConfigureAwait(false);
+                await PatchSnapshotCapabilitiesAsync(refreshed, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception patchException) when (patchException is not OperationCanceledException)
+            {
+                // If the targeted re-probe fails, the backgrounded full refresh still
+                // reconciles the snapshot; the armed flag itself is already applied.
+            }
+        }
+
+        // Reconcile the rest of the snapshot (other adapters, health, cooling graph) without
+        // blocking the response on a full adapter re-probe.
         _ = Task.Run(async () =>
         {
             try
