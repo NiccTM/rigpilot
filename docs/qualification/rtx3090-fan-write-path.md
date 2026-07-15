@@ -50,13 +50,27 @@ Following the `qualificationBlocker` string already in the adapter, un-gating re
 | Apply | **[MET, 1 pass]** 60% and 80% commands produced measured fan rise 0%->56%->73%. |
 | Read-back | **[MET, 1 pass]** target fan speed matched each command (60/60, 80/80). |
 | Default reset | **[MET, 1 pass]** RestoreAutomatic returned targets to 30%; `nvidia-smi` then read 0% at 44 C. |
-| Rollback | **[MET, fake-adapter]** injected verification failure restores prior policy+duty (integration test); not yet exercised live. |
-| Conflict | **[MET, fake-adapter]** competing writer -> `Blocked` (test); live pass ran with no competing writer present. |
-| Physical safety | **[MET, 1 pass]** 0 WHEA, 0 display-driver reset, 0 nvlddmkm events across the bounded pass; no thermal protective event. |
+| Conflict | **[MET, fake-adapter + live]** competing writer -> `Blocked` (test); confirmed live on 2026-07-15 when MSI Afterburner / FanControl owned the fans (`OwnedByAnotherApplication`), and cleared to `Experimental` once they were closed. |
+| Physical safety | **[MET, 2 passes]** 0 WHEA, 0 display-driver reset, 0 nvlddmkm events across both bounded passes; no thermal protective event. The 2026-07-15 repeated-cycle pass ran 20 writes with GPU temperature falling 55 C -> 44 C as the fan drove. |
 | Acknowledgement | **[MET, 1 pass]** the 2026-07-15 pass armed via `SetGpuFanControlArmed` with exact-device Experimental acknowledgement, then wrote through `ApplyProfileV2` (`ConfirmExperimental` + `ConfirmedDeviceIds`); no env opt-in was used. |
 | End-to-end verify | **[MET, 1 pass]** after the policy read-back fix, three armed-service transactions (75/55/90%) were accepted and committed — verification (`Policy == Manual` and duty within 5%) passed on real hardware. |
+| Repeated cycles | **[MET, 1 session]** 2026-07-15 repeated-cycle pass: 20/20 armed-service `ApplyProfileV2` writes committed across duties 50-100%, the fan tracked 16/16 Phase-A commands, and 4/4 full arm -> write -> disarm cycles succeeded, each ending on the automatic curve. This is one multi-cycle session, not the multi-day soak. |
+| Rollback | **[MET, fake-adapter]** injected verification failure restores prior policy+duty (integration test). Not naturally reproducible live: the real transport reads back the true target, so a healthy fan never fails `Verify`. A live rollback would require an out-of-service elevated harness with a deliberately-failing sibling action — artificial and not yet run. |
 
-Remaining before a `Verified` (not `Experimental`) claim: repeated stop/restart-style cycles, longer soak, a second independent system, live rollback exercise. Per change discipline, one bounded pass is `Passed a bounded pass`, not `stable`.
+Remaining before a `Verified` (not `Experimental`) claim: longer soak (10 active-use hours across 7 calendar days), 3 clean cold boots, and a second independent system. Per change discipline, one multi-cycle session is `Passed a bounded pass`, not `stable`.
+
+### Latent issue found during the 2026-07-15 repeated-cycle pass (not yet fixed)
+
+`SetGpuFanControlArmed` applies the armed state synchronously but **backgrounds** the
+capability re-probe (`Task.Run(RefreshAsync)` in `PCHelperRuntime`, added so the arm
+response returns before the client timeout). As a result the command returns success
+before the capability snapshot flips `gpufan.duty:0` from `ReadOnly` to `Experimental`,
+so an `ApplyProfileV2` issued *immediately* after arm is rejected as read-only until the
+background refresh lands (~1-2 s). A human clicking Arm then Apply never hits this, but
+rapid scripted arm->apply does. Recommended fix: after setting the armed flag, re-probe
+just the GPU-fan adapter synchronously and patch that capability's state into the
+snapshot (respecting conflict detection) before returning, then background the full
+refresh. Requires a service redeploy to verify, so it is deferred, not applied.
 
 Absence of a failure report is **not** qualification (per change discipline). Provisional status still requires the standard 10 active-use hours, 7 calendar days, and 3 clean cold boots.
 
