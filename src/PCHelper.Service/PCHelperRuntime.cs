@@ -302,6 +302,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.ApplyUpdate => await ApplyUpdateAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.GetUpdateStatus => await GetUpdateStatusAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.DiscoverControllers => await DiscoverControllersAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.DiscoverHidInventory => await DiscoverHidInventoryAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuFanControlArmed => await SetGpuFanControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
                 _ when IsUserAgentCommand(request.Command) => Failure(
                     request,
@@ -2890,6 +2891,17 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ContainedControllerDiscovery discovery = new(
             static () => new AdapterHostControllerDiscoveryProcess());
         ControllerDiscoveryResultV1 result = await discovery.DiscoverAsync(cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private async Task<IpcResponse> DiscoverHidInventoryAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        // Read-only HID peripheral enumeration runs behind the same process boundary so a
+        // native HidSharp fault cannot terminate the service. The result is inventory
+        // evidence only; it never produces a writable capability.
+        ContainedHidInventory inventory = new(
+            static () => new AdapterHostControllerDiscoveryProcess("--discover-hid"));
+        HidInventoryResultV1 result = await inventory.DiscoverAsync(cancellationToken).ConfigureAwait(false);
         return Success(request, result);
     }
 
