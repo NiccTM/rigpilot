@@ -123,6 +123,28 @@ public sealed class NvidiaGpuFanAdapterTests
         Assert.False(verification.Success);
     }
 
+    // Regression guard for the 2026-07-15 defect: NvmlGpuFanCoolerTransport.ReadStateAsync
+    // hard-coded the policy to Automatic, so a manual write's Verify (which requires
+    // Policy == Manual) always rolled back even though the duty matched. This locks the
+    // adapter contract: a transport that reports Automatic must fail Verify regardless of
+    // the read-back duty, so any transport must report the true fan-control policy.
+    [Fact]
+    public async Task VerifyFailsWhenPolicyReadsAutomaticEvenIfDutyMatches()
+    {
+        FakeGpuFanCoolerTransport transport = new(new GpuFanBounds(50, 100));
+        await using NvidiaGpuFanAdapter adapter = new(transport, DeviceId, ChannelId, enableWrites: true);
+
+        PreparedAction prepared = await adapter.PrepareAsync(Action(70), default);
+        await adapter.ApplyAsync(prepared, default);
+        // The write reached the hardware (duty is exactly 70) but the transport reports
+        // the policy as Automatic — precisely the pre-fix NVML read-back behaviour.
+        transport.OverrideReportedPolicy(GpuFanControlPolicy.Automatic);
+
+        ActionVerification verification = await adapter.VerifyAsync(prepared, default);
+
+        Assert.False(verification.Success);
+    }
+
     [Fact]
     public async Task RollbackRestoresAPriorManualDuty()
     {
@@ -208,6 +230,7 @@ public sealed class NvidiaGpuFanAdapterTests
         GpuFanChannelState? initial = null) : IGpuFanCoolerTransport
     {
         private int? _measuredOverride;
+        private GpuFanControlPolicy? _policyOverride;
 
         public GpuFanChannelState State { get; private set; } =
             initial ?? new GpuFanChannelState(GpuFanControlPolicy.Automatic, null, null);
@@ -218,14 +241,24 @@ public sealed class NvidiaGpuFanAdapterTests
 
         public void OverrideMeasuredDuty(int measured) => _measuredOverride = measured;
 
+        public void OverrideReportedPolicy(GpuFanControlPolicy policy) => _policyOverride = policy;
+
         public Task<GpuFanBounds?> ReadBoundsAsync(string channelId, CancellationToken cancellationToken) =>
             Task.FromResult(bounds);
 
         public Task<GpuFanChannelState> ReadStateAsync(string channelId, CancellationToken cancellationToken)
         {
-            GpuFanChannelState state = _measuredOverride is int measured
-                ? State with { MeasuredDutyPercent = measured }
-                : State;
+            GpuFanChannelState state = State;
+            if (_measuredOverride is int measured)
+            {
+                state = state with { MeasuredDutyPercent = measured };
+            }
+
+            if (_policyOverride is GpuFanControlPolicy policy)
+            {
+                state = state with { Policy = policy };
+            }
+
             return Task.FromResult(state);
         }
 

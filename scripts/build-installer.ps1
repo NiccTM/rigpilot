@@ -53,8 +53,12 @@ if (-not $SkipPublish) {
 
 $publishDirectory = Join-Path $repoRoot "artifacts\publish"
 $runtimePayloadCheck = Join-Path $PSScriptRoot "Test-RuntimePayload.ps1"
-& $runtimePayloadCheck -PayloadRoot $publishDirectory -ExpectedProductVersion $Version
-if ($LASTEXITCODE -ne 0) {
+# Test-RuntimePayload.ps1 is a PowerShell script: it throws on any failure and returns a
+# result object on success, so it never sets $LASTEXITCODE. Check its result rather than
+# $LASTEXITCODE, which is unset here when -SkipPublish means no native command ran first
+# (StrictMode then errors on the unset variable).
+$payloadResult = & $runtimePayloadCheck -PayloadRoot $publishDirectory -ExpectedProductVersion $Version
+if (-not $payloadResult.Passed) {
     throw "Runtime payload contract verification failed."
 }
 $installerOutput = Join-Path $repoRoot "artifacts\installer"
