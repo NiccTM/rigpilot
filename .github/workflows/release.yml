@@ -67,9 +67,15 @@ jobs:
           npm test
           Pop-Location
 
-      - name: Publish application payload
+      - name: Block unqualified version 1.0 release
         shell: pwsh
-        run: ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION
+        run: |
+          if ($env:PRODUCT_VERSION -match '^1\.0\.\d+$') {
+            dotnet run --project src\PCHelper.Cli --configuration Release --no-build -- qualification --ledger docs\qualification\reference-system.json --json
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Version 1.0 is blocked until the signed physical qualification ledger passes.'
+            }
+          }
 
       - name: Require signing authority for releasable artifacts
         shell: pwsh
@@ -78,27 +84,30 @@ jobs:
             throw 'Signing credentials are required. Use allow_unsigned only for private development artifacts.'
           }
 
-      - name: Sign application executables
+      - name: Import release signing identity
         if: env.SIGNING_CERTIFICATE_BASE64 != ''
         shell: pwsh
         run: |
           $pfx = Join-Path $env:RUNNER_TEMP 'pchelper-signing.pfx'
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
-          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-          $targets = @(
-            'artifacts\publish\app\PCHelper.App.exe',
-            'artifacts\publish\service\PCHelper.Service.exe',
-            'artifacts\publish\adapter-host\PCHelper.AdapterHost.exe',
-            'artifacts\publish\cli\pchelper-cli.exe'
-          )
-          foreach ($target in $targets) {
-            & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:SIGNING_CERTIFICATE_PASSWORD $target
-            if ($LASTEXITCODE -ne 0) { throw "Signing failed: $target" }
+          $password = ConvertTo-SecureString $env:SIGNING_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password |
+            Where-Object { $_.HasPrivateKey } |
+            Select-Object -First 1
+          if ($null -eq $certificate) {
+            throw 'The signing PFX did not import a private-key certificate.'
           }
-          Get-ChildItem artifacts\publish -Recurse -File | Where-Object Name -ne 'SHA256SUMS.txt' | Get-FileHash -Algorithm SHA256 | ForEach-Object {
-            $relative = [IO.Path]::GetRelativePath((Resolve-Path artifacts\publish), $_.Path)
-            "{0} *{1}" -f $_.Hash.ToLowerInvariant(), $relative
-          } | Set-Content artifacts\publish\SHA256SUMS.txt -Encoding UTF8
+          "SIGNING_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Remove-Item -LiteralPath $pfx -Force
+
+      - name: Publish application payload
+        shell: pwsh
+        run: |
+          if ($env:ALLOW_UNSIGNED -eq 'true') {
+            ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION
+          } else {
+            ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION -RequireSigning -SigningCertificateThumbprint $env:SIGNING_THUMBPRINT
+          }
 
       - name: Download and verify .NET Desktop Runtime
         shell: pwsh
@@ -106,34 +115,22 @@ jobs:
 
       - name: Build MSI
         shell: pwsh
-        run: ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish
-
-      - name: Sign MSI before bundle embedding
-        if: env.SIGNING_CERTIFICATE_BASE64 != ''
-        shell: pwsh
         run: |
-          $pfx = Join-Path $env:RUNNER_TEMP 'pchelper-signing.pfx'
-          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-          $target = 'artifacts\installer\PCHelper.Installer.msi'
-          & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:SIGNING_CERTIFICATE_PASSWORD $target
-          if ($LASTEXITCODE -ne 0) { throw "Signing failed: $target" }
+          if ($env:ALLOW_UNSIGNED -eq 'true') {
+            ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish
+          } else {
+            ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish -RequireSigning -SigningCertificateThumbprint $env:SIGNING_THUMBPRINT
+          }
 
       - name: Build Burn bundle around signed MSI
         shell: pwsh
         run: |
           $runtime = Get-ChildItem artifacts\dependencies\windowsdesktop-runtime-10.*-win-x64.exe | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 -ExpandProperty FullName
-          ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish -SkipMsiBuild -RuntimeInstaller $runtime
-
-      - name: Sign bundle
-        if: env.SIGNING_CERTIFICATE_BASE64 != ''
-        shell: pwsh
-        run: |
-          $pfx = Join-Path $env:RUNNER_TEMP 'pchelper-signing.pfx'
-          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-          $target = 'artifacts\installer\PCHelper.Bundle.exe'
-          & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:SIGNING_CERTIFICATE_PASSWORD $target
-          if ($LASTEXITCODE -ne 0) { throw "Signing failed: $target" }
-          Remove-Item -LiteralPath $pfx -Force
+          if ($env:ALLOW_UNSIGNED -eq 'true') {
+            ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish -SkipMsiBuild -RuntimeInstaller $runtime
+          } else {
+            ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish -SkipMsiBuild -RuntimeInstaller $runtime -RequireSigning -SigningCertificateThumbprint $env:SIGNING_THUMBPRINT
+          }
 
       - name: Create release archive
         shell: pwsh

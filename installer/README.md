@@ -2,7 +2,7 @@
 
 The WiX 5 MSI installs the app, CLI, service, and adapter host as framework-dependent x64 binaries. WiX 5.0.2 is pinned because WiX 6 introduced the Open Source Maintenance Fee and WiX 7 requires an explicit EULA acceptance. The build must not accept third-party legal terms on a contributor's behalf.
 
-The installer invokes a narrow, elevated service maintenance mode after files are installed. That mode uses `NetLocalGroupAdd` and `NetLocalGroupAddMembers` directly to create the local `PC Helper Operators` group and add the installing user. It accepts no arbitrary command or script. The group remains on uninstall so removing PC Helper cannot break another installation's access policy.
+The RigPilot installer invokes a narrow, elevated service maintenance mode after files are installed. That mode uses `NetLocalGroupAdd` and `NetLocalGroupAddMembers` directly to create the local `PC Helper Operators` group and add the installing user. The legacy group name is deliberately retained so a PC Helper upgrade keeps its existing authorisation. It accepts no arbitrary command or script. The group remains on uninstall so removing RigPilot cannot break another installation's access policy.
 
 Build an MSI:
 

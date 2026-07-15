@@ -1,0 +1,18 @@
+<Application
+    x:Class="PCHelper.GameBarWidget.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <SolidColorBrush x:Key="RigPilotPanel" Color="#171B24" />
+            <SolidColorBrush x:Key="RigPilotBorder" Color="#2C3444" />
+            <SolidColorBrush x:Key="RigPilotText" Color="#F3F6FA" />
+            <SolidColorBrush x:Key="RigPilotMuted" Color="#B6C2D5" />
+            <SolidColorBrush x:Key="RigPilotAccent" Color="#69ADFF" />
+            <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{StaticResource RigPilotText}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

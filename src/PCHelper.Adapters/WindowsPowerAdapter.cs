@@ -50,7 +50,8 @@ public sealed partial class WindowsPowerAdapter : IHardwareAdapter
             null,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["availableSchemeCount"] = _availableSchemes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                ["availableSchemeCount"] = _availableSchemes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["availableSchemes"] = string.Join(';', _availableSchemes.OrderBy(value => value).Select(value => value.ToString("D")))
             });
         CapabilityDescriptor capability = new(
             CapabilityId,

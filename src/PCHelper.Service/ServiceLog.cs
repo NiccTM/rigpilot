@@ -4,10 +4,10 @@ namespace PCHelper.Service;
 
 internal static partial class ServiceLog
 {
-    [LoggerMessage(EventId = 1000, Level = LogLevel.Information, Message = "PC Helper service initialised at {Time}.")]
+    [LoggerMessage(EventId = 1000, Level = LogLevel.Information, Message = "RigPilot service initialised at {Time}.")]
     public static partial void Initialised(ILogger logger, DateTimeOffset time);
 
-    [LoggerMessage(EventId = 1001, Level = LogLevel.Information, Message = "PC Helper service is stopping; no unqualified hardware controls are owned.")]
+    [LoggerMessage(EventId = 1001, Level = LogLevel.Information, Message = "RigPilot service is stopping; active operations will be cancelled and restored before Adapter Host shutdown.")]
     public static partial void Stopping(ILogger logger);
 
     [LoggerMessage(EventId = 2000, Level = LogLevel.Warning, Message = "A sensor refresh failed; the service will retry.")]
@@ -22,6 +22,12 @@ internal static partial class ServiceLog
     [LoggerMessage(EventId = 2003, Level = LogLevel.Warning, Message = "ProgramData was not writable; using development data directory {Directory}.")]
     public static partial void UsingFallbackDirectory(ILogger logger, string directory);
 
-    [LoggerMessage(EventId = 3000, Level = LogLevel.Critical, Message = "PC Helper service stopped unexpectedly.")]
+    [LoggerMessage(EventId = 2004, Level = LogLevel.Warning, Message = "The active cooling graph was disabled and returned to firmware/default control.")]
+    public static partial void CoolingGraphDeactivated(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 2005, Level = LogLevel.Critical, Message = "Cooling graph {GraphId} entered emergency recovery: {Reason}. Recovery details: {RecoveryDetails}")]
+    public static partial void CoolingGraphEmergency(ILogger logger, string graphId, string reason, string? recoveryDetails);
+
+    [LoggerMessage(EventId = 3000, Level = LogLevel.Critical, Message = "RigPilot service stopped unexpectedly.")]
     public static partial void ServiceFailed(ILogger logger, Exception exception);
 }

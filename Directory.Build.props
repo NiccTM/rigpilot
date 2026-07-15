@@ -8,9 +8,14 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <Authors>PC Helper contributors</Authors>
-    <Copyright>Copyright (c) PC Helper contributors</Copyright>
+    <RuntimeIdentifiers Condition="'$(MSBuildProjectExtension)' == '.csproj'">win-x64</RuntimeIdentifiers>
+    <Authors>RigPilot contributors</Authors>
+    <Copyright>Copyright (c) RigPilot contributors</Copyright>
     <RepositoryUrl>https://github.com/pchelper/pchelper</RepositoryUrl>
     <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.4.0</VersionPrefix>
+    <VersionSuffix Condition="'$(VersionSuffix)' == ''">alpha</VersionSuffix>
+    <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">$(VersionPrefix).0</AssemblyVersion>
+    <FileVersion Condition="'$(FileVersion)' == ''">$(VersionPrefix).0</FileVersion>
   </PropertyGroup>
 </Project>

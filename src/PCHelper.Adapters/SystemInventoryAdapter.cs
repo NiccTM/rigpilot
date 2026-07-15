@@ -9,7 +9,7 @@ public sealed class SystemInventoryAdapter : IHardwareAdapter
     public AdapterManifest Manifest { get; } = new(
         "windows.inventory",
         "Windows Inventory",
-        "0.2.0",
+        "0.4.0-alpha",
         "GPL-3.0-only",
         null,
         AdapterExecutionContext.SystemService,
@@ -51,6 +51,7 @@ public sealed class SystemInventoryAdapter : IHardwareAdapter
         {
             string manufacturer = GetString(row, "Manufacturer") ?? "Unknown";
             string product = GetString(row, "Product") ?? "Unknown motherboard";
+            HardwareCompatibilityMatch compatibility = HardwareCompatibilityCatalog.ClassifyMotherboard(manufacturer, product);
             devices.Add(new HardwareDevice(
                 StableIds.Create("motherboard", manufacturer, product, GetString(row, "Version")),
                 $"{manufacturer} {product}".Trim(),
@@ -58,7 +59,9 @@ public sealed class SystemInventoryAdapter : IHardwareAdapter
                 manufacturer,
                 product,
                 null,
-                Properties(("version", GetString(row, "Version")))));
+                PropertiesWithCompatibility(
+                    compatibility,
+                    ("version", GetString(row, "Version")))));
         }, warnings);
 
         QuerySingle("Win32_BIOS", row =>
@@ -79,6 +82,7 @@ public sealed class SystemInventoryAdapter : IHardwareAdapter
         {
             string name = GetString(row, "Name")?.Trim() ?? "Unknown processor";
             string manufacturer = GetString(row, "Manufacturer") ?? "Unknown";
+            HardwareCompatibilityMatch compatibility = HardwareCompatibilityCatalog.ClassifyCpu(manufacturer, name);
             devices.Add(new HardwareDevice(
                 StableIds.Create("cpu", manufacturer, name),
                 name,
@@ -86,7 +90,8 @@ public sealed class SystemInventoryAdapter : IHardwareAdapter
                 manufacturer,
                 name,
                 null,
-                Properties(
+                PropertiesWithCompatibility(
+                    compatibility,
                     ("cores", GetString(row, "NumberOfCores")),
                     ("logicalProcessors", GetString(row, "NumberOfLogicalProcessors")),
                     ("maxClockMHz", GetString(row, "MaxClockSpeed")))));
@@ -96,16 +101,26 @@ public sealed class SystemInventoryAdapter : IHardwareAdapter
         {
             string name = GetString(row, "Name")?.Trim() ?? "Unknown display adapter";
             string pnpId = GetString(row, "PNPDeviceID") ?? string.Empty;
+            string? manufacturer = InferGpuManufacturer(name);
+            HardwareCompatibilityMatch compatibility = HardwareCompatibilityCatalog.ClassifyGpu(manufacturer, name);
+            HardwareCompatibilityMatch boardPartner = HardwareCompatibilityCatalog.ClassifyGpuBoardPartner(
+                pnpId,
+                GetString(row, "AdapterCompatibility"),
+                name);
             devices.Add(new HardwareDevice(
                 StableIds.Create("gpu", name, pnpId),
                 name,
                 DeviceKind.Gpu,
-                InferGpuManufacturer(name),
+                manufacturer,
                 name,
                 pnpId,
-                Properties(
+                PropertiesWithCompatibility(
+                    compatibility,
                     ("driverVersion", GetString(row, "DriverVersion")),
-                    ("adapterRamBytes", GetString(row, "AdapterRAM")))));
+                    ("adapterRamBytes", GetString(row, "AdapterRAM")),
+                    ("boardPartnerFamily", boardPartner.IsRecognized ? boardPartner.FamilyId : null),
+                    ("boardPartnerLabel", boardPartner.IsRecognized ? boardPartner.DisplayName : null),
+                    ("boardPartnerEvidence", boardPartner.IsRecognized ? boardPartner.Summary : null))));
         }, warnings);
 
         return Task.FromResult(new AdapterProbeResult(Manifest, devices, [], warnings));
@@ -194,6 +209,15 @@ public sealed class SystemInventoryAdapter : IHardwareAdapter
     private static Dictionary<string, string> Properties(params (string Key, string? Value)[] values) =>
         values.Where(value => !string.IsNullOrWhiteSpace(value.Value))
             .ToDictionary(value => value.Key, value => value.Value!, StringComparer.OrdinalIgnoreCase);
+
+    private static Dictionary<string, string> PropertiesWithCompatibility(
+        HardwareCompatibilityMatch compatibility,
+        params (string Key, string? Value)[] values)
+    {
+        Dictionary<string, string> properties = Properties(values);
+        HardwareCompatibilityCatalog.AddToProperties(properties, compatibility);
+        return properties;
+    }
 
     private static string? InferGpuManufacturer(string name)
     {

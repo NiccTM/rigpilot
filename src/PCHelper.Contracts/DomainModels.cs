@@ -109,6 +109,44 @@ public enum TuningObjective
     Performance
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<HardwareOperationKind>))]
+public enum HardwareOperationKind
+{
+    Calibration,
+    CommissioningPulse,
+    Tuning
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<HardwareOperationState>))]
+public enum HardwareOperationState
+{
+    Pending,
+    Running,
+    Screening,
+    Completed,
+    Aborted,
+    Failed,
+    RecoveryRequired
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<TuneDirection>))]
+public enum TuneDirection
+{
+    Minimize,
+    Maximize
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<AutomationTriggerKind>))]
+public enum AutomationTriggerKind
+{
+    Process,
+    ForegroundApplication,
+    Schedule,
+    SessionLock,
+    Idle,
+    Hotkey
+}
+
 public sealed record HardwareDevice(
     string Id,
     string Name,
@@ -235,6 +273,121 @@ public sealed record TunePlan(
     DateTimeOffset? SoakStartedAt,
     TimeSpan ActiveUseRequired,
     int ColdBootsRequired);
+
+public sealed record StartCalibrationRequest(
+    string CapabilityId,
+    string RpmSensorId,
+    bool ConfirmExperimental,
+    bool ConfirmDevice,
+    bool AllowFanStop = false,
+    TimeSpan? SettlingTime = null,
+    int StableSampleCount = 3,
+    int MaximumSampleCount = 15,
+    TimeSpan? SampleInterval = null,
+    double StabilityTolerancePercent = 10,
+    int RestartVerificationCycles = 2,
+    IReadOnlyList<FanCalibrationTemperatureLimit>? TemperatureLimits = null,
+    string? CommissioningSessionId = null);
+
+public sealed record FanCalibrationTemperatureLimit(string SensorId, double MaximumCelsius);
+
+public sealed record FanCalibrationPoint(
+    double DutyPercent,
+    double Rpm,
+    int SampleCount = 1,
+    double RpmSpread = 0,
+    bool Stable = true);
+
+public sealed record FanCalibrationResult(
+    string CapabilityId,
+    string RpmSensorId,
+    double MaximumRpm,
+    double? StallDutyPercent,
+    double? RestartDutyPercent,
+    double MinimumDutyPercent,
+    bool RestartVerified,
+    IReadOnlyList<FanCalibrationPoint> Measurements,
+    int RestartVerificationCyclesCompleted = 0,
+    int StableSampleCount = 1,
+    TimeSpan? SampleInterval = null,
+    double StabilityTolerancePercent = 0,
+    bool AllMeasurementsStable = true,
+    double? VerifiedStopDutyPercent = null,
+    IReadOnlyDictionary<string, double>? MaximumTemperaturesCelsius = null,
+    double? EffectiveFloorDutyPercent = null,
+    double? EffectiveFloorRpm = null,
+    double? FirstResponsiveDutyPercent = null,
+    bool NonStopFloorObserved = false);
+
+public sealed record StartTuneRequest(
+    TunePlan Plan,
+    string CapabilityId,
+    TuneDirection Direction,
+    bool ConfirmExperimental,
+    bool ConfirmDevice,
+    TimeSpan? CandidateScreeningTime = null,
+    int MaximumCandidates = 12);
+
+public sealed record TuneScreeningResult(
+    bool Passed,
+    string Message,
+    double? MaximumTemperatureCelsius,
+    double? AveragePowerWatts,
+    double? AverageClockMegahertz);
+
+public sealed record TuneCandidateResult(
+    double Value,
+    bool Passed,
+    string Message,
+    TuneScreeningResult Screening);
+
+public sealed record TuneResult(
+    string CapabilityId,
+    string StatusLabel,
+    double? SelectedValue,
+    IReadOnlyList<TuneCandidateResult> Candidates,
+    ProfileV1? GeneratedProfile);
+
+public sealed record HardwareOperationStatus(
+    string Id,
+    HardwareOperationKind Kind,
+    HardwareOperationState State,
+    string CapabilityId,
+    string CapabilityName,
+    DateTimeOffset StartedAt,
+    DateTimeOffset UpdatedAt,
+    double ProgressPercent,
+    string Message,
+    FanCalibrationResult? CalibrationResult,
+    TuneResult? TuneResult,
+    string? Error);
+
+public sealed record AutomationRuleV1(
+    int SchemaVersion,
+    string Id,
+    string Name,
+    bool Enabled,
+    AutomationTriggerKind TriggerKind,
+    string TriggerValue,
+    string ProfileId,
+    int Priority)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
+public sealed record AutomationObservation(
+    DateTimeOffset Timestamp,
+    IReadOnlySet<string> RunningProcesses,
+    string? ForegroundProcess,
+    bool SessionLocked,
+    TimeSpan IdleTime,
+    string? Hotkey);
+
+public sealed record AutomationDecision(
+    string? ProfileId,
+    bool ShouldSwitch,
+    string Reason,
+    IReadOnlyList<string> ActiveRuleIds);
 
 public sealed record AdapterManifest(
     string Id,

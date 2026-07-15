@@ -12,9 +12,11 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\PCHelper.App\PCHelper.App.csproj" />
     <ProjectReference Include="..\..\src\PCHelper.Contracts\PCHelper.Contracts.csproj" />
     <ProjectReference Include="..\..\src\PCHelper.Ipc\PCHelper.Ipc.csproj" />
     <ProjectReference Include="..\..\src\PCHelper.Service\PCHelper.Service.csproj" />
+    <ProjectReference Include="..\..\src\PCHelper.EffectHost\PCHelper.EffectHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />

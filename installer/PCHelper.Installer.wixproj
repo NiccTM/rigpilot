@@ -1,9 +1,11 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
   <PropertyGroup>
     <OutputType>Package</OutputType>
+    <OutputName>RigPilot.Installer</OutputName>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <Platform>x64</Platform>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">0.2.0</ProductVersion>
+    <NuGetLockFilePath>packages.installer.lock.json</NuGetLockFilePath>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.4.0</ProductVersion>
     <PublishDir Condition="'$(PublishDir)' == ''">$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)..\artifacts\publish'))</PublishDir>
     <DefineConstants>ProductVersion=$(ProductVersion);PublishDir=$(PublishDir)</DefineConstants>
     <SuppressValidation>false</SuppressValidation>
@@ -13,9 +15,12 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Product.wxs" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
   </ItemGroup>
   <Target Name="VerifyPublishPayload" BeforeTargets="Build">
     <Error Condition="!Exists('$(PublishDir)\app\PCHelper.App.exe')" Text="Publish payload missing. Run scripts\publish.ps1 first." />
     <Error Condition="!Exists('$(PublishDir)\service\PCHelper.Service.exe')" Text="Service publish payload missing." />
+    <Error Condition="!Exists('$(PublishDir)\effect-host\PCHelper.EffectHost.exe')" Text="Effect Host publish payload missing." />
+    <Error Condition="!Exists('$(PublishDir)\runtime-contract.json')" Text="Runtime contract missing. Run scripts\publish.ps1 before building the installer." />
   </Target>
 </Project>

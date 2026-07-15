@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
-    <Description>Length-prefixed, versioned named-pipe transport for PC Helper.</Description>
+    <Description>Length-prefixed, versioned named-pipe transport for RigPilot.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\PCHelper.Contracts\PCHelper.Contracts.csproj" />

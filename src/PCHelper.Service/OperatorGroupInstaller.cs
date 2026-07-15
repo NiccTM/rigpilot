@@ -23,7 +23,7 @@ internal static class OperatorGroupInstaller
         LocalGroupInfo group = new()
         {
             Name = GroupName,
-            Comment = "Users authorised to operate the local PC Helper service"
+            Comment = "Users authorised to operate the local RigPilot service (legacy PCHelper identity)"
         };
         int result = NetLocalGroupAdd(null, 1, ref group, out _);
         return result is Success or GroupExists ? Success : result;

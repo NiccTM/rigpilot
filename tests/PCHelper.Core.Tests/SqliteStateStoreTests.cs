@@ -49,6 +49,125 @@ public sealed class SqliteStateStoreTests
     }
 
     [Fact]
+    public async Task PendingHardwareOperationRoundTripsAndCanBeCleared()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"pchelper-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await using SqliteStateStore store = new(Path.Combine(directory, "state.db"));
+            await store.InitializeAsync(CancellationToken.None);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            HardwareOperationStatus operation = new(
+                "operation",
+                HardwareOperationKind.Tuning,
+                HardwareOperationState.Screening,
+                "capability",
+                "GPU power",
+                now,
+                now,
+                50,
+                "screening",
+                null,
+                null,
+                null);
+
+            await store.SaveOperationAsync(operation, CancellationToken.None);
+
+            Assert.Equal(operation, await store.GetPendingOperationAsync(CancellationToken.None));
+            Assert.Equal(operation, await store.GetLatestOperationAsync(CancellationToken.None));
+
+            await store.ClearPendingOperationAsync(operation.Id, CancellationToken.None);
+
+            Assert.Null(await store.GetPendingOperationAsync(CancellationToken.None));
+            Assert.Equal(operation, await store.GetLatestOperationAsync(CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HistoricalHardwareOperationCanBeReadByExactIdentifier()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"pchelper-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await using SqliteStateStore store = new(Path.Combine(directory, "state.db"));
+            await store.InitializeAsync(CancellationToken.None);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            HardwareOperationStatus older = new(
+                "operation-older",
+                HardwareOperationKind.Calibration,
+                HardwareOperationState.Completed,
+                "fan.older",
+                "Older fan",
+                now,
+                now,
+                100,
+                "completed",
+                null,
+                null,
+                null);
+            HardwareOperationStatus newer = older with
+            {
+                Id = "operation-newer",
+                CapabilityId = "fan.newer",
+                CapabilityName = "Newer fan",
+                UpdatedAt = now.AddMinutes(1)
+            };
+
+            await store.SaveOperationAsync(older, CancellationToken.None);
+            await store.SaveOperationAsync(newer, CancellationToken.None);
+
+            Assert.Equal(older, await store.GetOperationAsync(older.Id, CancellationToken.None));
+            Assert.Equal(newer, await store.GetLatestOperationAsync(CancellationToken.None));
+            Assert.Null(await store.GetOperationAsync("operation-missing", CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AutomationRulesCanBeSavedUpdatedAndDeleted()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"pchelper-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await using SqliteStateStore store = new(Path.Combine(directory, "state.db"));
+            await store.InitializeAsync(CancellationToken.None);
+            AutomationRuleV1 rule = new(
+                AutomationRuleV1.CurrentSchemaVersion,
+                "rule",
+                "Game mode",
+                true,
+                AutomationTriggerKind.ForegroundApplication,
+                "game.exe",
+                "performance",
+                100);
+
+            await store.SaveAutomationRuleAsync(rule, CancellationToken.None);
+            Assert.Equal(rule, Assert.Single(await store.GetAutomationRulesAsync(CancellationToken.None)));
+
+            AutomationRuleV1 updated = rule with { Priority = 200 };
+            await store.SaveAutomationRuleAsync(updated, CancellationToken.None);
+            Assert.Equal(200, Assert.Single(await store.GetAutomationRulesAsync(CancellationToken.None)).Priority);
+
+            await store.DeleteAutomationRuleAsync(rule.Id, CancellationToken.None);
+            Assert.Empty(await store.GetAutomationRulesAsync(CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task AggregatesRawSamplesAfterTwentyFourHoursAndExpiresAfterThirtyDays()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"pchelper-tests-{Guid.NewGuid():N}");
@@ -159,6 +278,84 @@ public sealed class SqliteStateStoreTests
 
             Assert.Null(stored.Value);
             Assert.Equal(SensorQuality.Invalid, stored.Quality);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MigratesV1ProfilesAndPersistsTypedSuiteEntities()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"pchelper-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string database = Path.Combine(directory, "state.db");
+        ProfileV1 legacy = BuiltInProfiles.Create()[0];
+        try
+        {
+            await using (SqliteStateStore initial = new(database))
+            {
+                await initial.InitializeAsync(CancellationToken.None);
+                await initial.SaveProfileAsync(legacy, CancellationToken.None);
+            }
+
+            await using SqliteStateStore migrated = new(database);
+            await migrated.InitializeAsync(CancellationToken.None);
+            ProfileV2 upgraded = Assert.Single(await migrated.GetSuiteEntitiesAsync<ProfileV2>(
+                SuiteEntityKind.ProfileV2,
+                CancellationToken.None));
+            Assert.Equal(legacy.Id, upgraded.Id);
+            Assert.Equal(legacy.Actions, upgraded.HardwareActions);
+
+            CoolingGraphV1 graph = new(
+                CoolingGraphV1.CurrentSchemaVersion,
+                "cooling.test",
+                "Test cooling",
+                [new CoolingGraphNodeV1("flat", "Flat", CoolingNodeKind.Flat, [], null, [], new Dictionary<string, double> { ["value"] = 50 })],
+                [new CoolingGraphOutputV1("fan.cpu", "flat", FanOutputMode.DutyPercent, 20, 100, 0, 100, 100, [])]);
+            await migrated.SaveSuiteEntityAsync(SuiteEntityKind.CoolingGraph, graph.Id, graph, CancellationToken.None);
+            CoolingGraphV1? storedGraph = await migrated.GetSuiteEntityAsync<CoolingGraphV1>(
+                SuiteEntityKind.CoolingGraph,
+                graph.Id,
+                CancellationToken.None);
+            Assert.NotNull(storedGraph);
+            Assert.Equal(graph.Id, storedGraph.Id);
+            Assert.Equal("flat", Assert.Single(storedGraph.Nodes).Id);
+            Assert.Equal("fan.cpu", Assert.Single(storedGraph.Outputs).CapabilityId);
+
+            CoolingOutputAssignmentV1 pumpAssignment = new(
+                CoolingOutputAssignmentV1.CurrentSchemaVersion,
+                "lhm.control:/lpc/nct6798d/0/control/4",
+                "lhm.control:/lpc/nct6798d/0/control/4",
+                "librehardwaremonitor",
+                "lhm.device:/lpc/nct6798d/0",
+                "lhm.sensor:/lpc/nct6798d/0/fan/4",
+                "AIO_PUMP",
+                CoolingOutputRole.Pump,
+                DateTimeOffset.UtcNow,
+                "User-confirmed pump role.");
+            await migrated.SaveSuiteEntityAsync(
+                SuiteEntityKind.CoolingOutputAssignment,
+                pumpAssignment.Id,
+                pumpAssignment,
+                CancellationToken.None);
+            CoolingOutputAssignmentV1? storedPump = await migrated.GetSuiteEntityAsync<CoolingOutputAssignmentV1>(
+                SuiteEntityKind.CoolingOutputAssignment,
+                pumpAssignment.Id,
+                CancellationToken.None);
+            Assert.NotNull(storedPump);
+            Assert.Equal(CoolingOutputRole.Pump, storedPump.Role);
+            Assert.True(storedPump.IsSafetyCritical);
+
+            await Assert.ThrowsAsync<ArgumentException>(() => migrated.GetSuiteEntitiesAsync<ProfileV2>(
+                SuiteEntityKind.CoolingGraph,
+                CancellationToken.None));
+            await migrated.DeleteSuiteEntityAsync(SuiteEntityKind.CoolingGraph, graph.Id, CancellationToken.None);
+            Assert.Null(await migrated.GetSuiteEntityAsync<CoolingGraphV1>(
+                SuiteEntityKind.CoolingGraph,
+                graph.Id,
+                CancellationToken.None));
         }
         finally
         {

@@ -6,12 +6,23 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Description>Non-elevated WPF dashboard and tray agent for PC Helper.</Description>
+    <Description>Non-elevated WPF dashboard and tray agent for RigPilot.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\PCHelper.Adapters\PCHelper.Adapters.csproj" />
     <ProjectReference Include="..\PCHelper.Contracts\PCHelper.Contracts.csproj" />
     <ProjectReference Include="..\PCHelper.Core\PCHelper.Core.csproj" />
     <ProjectReference Include="..\PCHelper.Ipc\PCHelper.Ipc.csproj" />
+    <ProjectReference Include="..\PCHelper.AutomationHost\PCHelper.AutomationHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ScottPlot.WPF" Version="5.1.59" />
+    <PackageReference Include="System.Management" Version="10.0.9" />
+  </ItemGroup>
+  <Target Name="CopyAutomationHost" AfterTargets="Build">
+    <ItemGroup>
+      <AutomationHostFiles Include="..\PCHelper.AutomationHost\bin\$(Configuration)\net10.0-windows10.0.19041.0\PCHelper.AutomationHost.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AutomationHostFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

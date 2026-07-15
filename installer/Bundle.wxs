@@ -1,8 +1,8 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
      xmlns:netfx="http://wixtoolset.org/schemas/v4/wxs/netfx">
-  <Bundle Name="PC Helper"
-          Manufacturer="PC Helper contributors"
+  <Bundle Name="RigPilot"
+          Manufacturer="RigPilot contributors"
           Version="$(var.ProductVersion)"
           UpgradeCode="D75DF430-B830-4C7F-B9DC-8E4480BA2221">
     <BootstrapperApplication>

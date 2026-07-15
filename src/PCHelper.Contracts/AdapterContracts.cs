@@ -21,6 +21,45 @@ public interface IHardwareAdapter : IAsyncDisposable
     Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken);
 }
 
+public interface IOwnershipAwareAdapter
+{
+    Task<OwnershipLeaseV1> AcquireOwnershipAsync(
+        IReadOnlyList<string> resourceFamilies,
+        CancellationToken cancellationToken);
+
+    Task ReleaseOwnershipAsync(OwnershipLeaseV1 lease, CancellationToken cancellationToken);
+}
+
+public interface IUpdateAdapter
+{
+    Task<IReadOnlyList<UpdateCandidateV1>> DiscoverUpdatesAsync(
+        HardwareDevice device,
+        CancellationToken cancellationToken);
+
+    Task<UpdatePlanV1> ValidateUpdateAsync(UpdatePlanV1 plan, CancellationToken cancellationToken);
+
+    Task<UpdateTransactionV1> ApplyUpdateAsync(UpdatePlanV1 plan, CancellationToken cancellationToken);
+
+    Task<UpdateTransactionV1> VerifyUpdateAsync(UpdateTransactionV1 transaction, CancellationToken cancellationToken);
+
+    Task<UpdateTransactionV1> RollbackUpdateAsync(UpdateTransactionV1 transaction, CancellationToken cancellationToken);
+}
+
+public interface ITraceableAdapter
+{
+    IAsyncEnumerable<AdapterTraceEvent> ReadTraceAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Optional, privacy-minimised diagnostics for an isolated adapter host. This
+/// is not a control surface and must never include a session token, user name,
+/// device path, or raw native exception text.
+/// </summary>
+public interface IAdapterDiagnosticsProvider
+{
+    Task<AdapterHostDiagnosticsV1?> GetDiagnosticsAsync(CancellationToken cancellationToken);
+}
+
 public interface IProfileTransactionJournal
 {
     Task SaveAsync(ProfileTransaction transaction, CancellationToken cancellationToken);
@@ -50,4 +89,49 @@ public interface ISensorHistoryStore
         CancellationToken cancellationToken);
 
     Task EnforceRetentionAsync(CancellationToken cancellationToken);
+}
+
+public interface IHardwareOperationStore
+{
+    Task SaveOperationAsync(HardwareOperationStatus operation, CancellationToken cancellationToken);
+
+    Task<HardwareOperationStatus?> GetLatestOperationAsync(CancellationToken cancellationToken);
+
+    Task<HardwareOperationStatus?> GetOperationAsync(string operationId, CancellationToken cancellationToken);
+
+    Task<HardwareOperationStatus?> GetPendingOperationAsync(CancellationToken cancellationToken);
+
+    Task ClearPendingOperationAsync(string operationId, CancellationToken cancellationToken);
+}
+
+public interface IAutomationRuleStore
+{
+    Task<IReadOnlyList<AutomationRuleV1>> GetAutomationRulesAsync(CancellationToken cancellationToken);
+
+    Task SaveAutomationRuleAsync(AutomationRuleV1 rule, CancellationToken cancellationToken);
+
+    Task DeleteAutomationRuleAsync(string ruleId, CancellationToken cancellationToken);
+}
+
+public interface ISuiteStateStore
+{
+    Task<IReadOnlyList<T>> GetSuiteEntitiesAsync<T>(
+        SuiteEntityKind kind,
+        CancellationToken cancellationToken);
+
+    Task<T?> GetSuiteEntityAsync<T>(
+        SuiteEntityKind kind,
+        string id,
+        CancellationToken cancellationToken);
+
+    Task SaveSuiteEntityAsync<T>(
+        SuiteEntityKind kind,
+        string id,
+        T entity,
+        CancellationToken cancellationToken);
+
+    Task DeleteSuiteEntityAsync(
+        SuiteEntityKind kind,
+        string id,
+        CancellationToken cancellationToken);
 }
