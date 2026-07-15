@@ -4557,6 +4557,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 new SystemInventoryAdapter(),
                 new WindowsPowerAdapter(),
                 new NvmlTelemetryAdapter(),
+                new IntelGraphicsControlAdapter(),
                 new VendorControlEligibilityAdapter(),
                 new WindowsPeripheralInventoryAdapter(),
                 new LibreHardwareMonitorAdapter()

@@ -77,6 +77,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             new TraceableHardwareAdapter(new SystemInventoryAdapter()),
             new TraceableHardwareAdapter(new WindowsPowerAdapter()),
             new TraceableHardwareAdapter(new NvmlTelemetryAdapter()),
+            new TraceableHardwareAdapter(new IntelGraphicsControlAdapter()),
             new TraceableHardwareAdapter(new VendorControlEligibilityAdapter()),
             new TraceableHardwareAdapter(new WindowsPeripheralInventoryAdapter()),
             new TraceableHardwareAdapter(new AdapterHostProxy())

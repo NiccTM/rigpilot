@@ -80,6 +80,7 @@ internal static class Cli
                 new SystemInventoryAdapter(),
                 new WindowsPowerAdapter(),
                 new NvmlTelemetryAdapter(),
+                new IntelGraphicsControlAdapter(),
                 new VendorControlEligibilityAdapter(),
                 new WindowsPeripheralInventoryAdapter(),
                 new LibreHardwareMonitorAdapter()
@@ -534,6 +535,7 @@ internal static class Cli
                 new SystemInventoryAdapter(),
                 new WindowsPowerAdapter(),
                 new NvmlTelemetryAdapter(),
+                new IntelGraphicsControlAdapter(),
                 new VendorControlEligibilityAdapter(),
                 new WindowsPeripheralInventoryAdapter(),
                 new LibreHardwareMonitorAdapter()

@@ -69,6 +69,31 @@ public sealed class VendorTelemetryAdapterTests
     }
 
     [Fact]
+    public async Task IntelGraphicsControlAdapterIsReadOnlyAndFailsSafeWithoutIntel()
+    {
+        await using IntelGraphicsControlAdapter adapter = new();
+
+        AdapterProbeResult probe = await adapter.ProbeAsync(CancellationToken.None);
+        AdapterHealth health = await adapter.GetHealthAsync(CancellationToken.None);
+
+        // On a system without the Intel driver, IGCL is absent: no capability is
+        // surfaced and health is reported without error (nothing to control).
+        Assert.All(probe.Capabilities, capability =>
+        {
+            Assert.Equal(CapabilityAccessState.ReadOnly, capability.State);
+            Assert.False(capability.CanResetToDefault);
+            Assert.Equal(ControlDomain.Gpu, capability.Domain);
+        });
+        Assert.True(health.Healthy);
+
+        // The adapter never exposes a write, regardless of hardware.
+        ProfileAction action = new("a", "intel.igcl", "igcl.feasibility:intel.igcl", ControlValue.FromNumeric(1), true, 0);
+        PreparedAction prepared = new(action, null, DateTimeOffset.UtcNow, string.Empty);
+        await Assert.ThrowsAsync<NotSupportedException>(() => adapter.PrepareAsync(action, CancellationToken.None));
+        await Assert.ThrowsAsync<NotSupportedException>(() => adapter.ApplyAsync(prepared, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task DetectedDirectUsbHidDevicesRemainReadOnly()
     {
         await using WindowsPeripheralInventoryAdapter adapter = new();

@@ -44,7 +44,7 @@ public sealed class VendorControlEligibilityAdapter : IHardwareAdapter
                 if (manufacturer.Contains("AMD", StringComparison.OrdinalIgnoreCase)
                     || name.Contains("Ryzen", StringComparison.OrdinalIgnoreCase))
                 {
-                    string reason = $"{recognised}AMD Zen tuning is detected on BIOS {biosVersion}, but no audited SMU/PawnIO endpoint with exact bounds, read-back, default reset, and crash recovery is included in this alpha.";
+                    string reason = $"{recognised}AMD Zen tuning is detected on BIOS {biosVersion}. A rule-compliant SMU path exists (signed PawnIO with a RyzenSMU module) but Curve Optimizer / PBO writes stay blocked until exact per-family mailbox bounds, applied-curve read-back, guaranteed stock reset, and a boot-recovery revert are qualified. See docs/qualification/cpu-tuning-and-intel-arc.md.";
                     capabilities.Add(Feasibility(
                         $"amd.zen.feasibility:{deviceId}",
                         deviceId,
