@@ -31,6 +31,16 @@ if (args.Contains("--discover-controllers", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--discover-hid", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable read-only HID inventory child. Native HidSharp enumeration runs here so a
+    // fault is contained by the parent; the result is classification-only inventory that
+    // never carries a write capability.
+    HidInventoryResultV1 hid = HidPeripheralInventory.Enumerate();
+    Console.WriteLine(JsonSerializer.Serialize(hid, JsonDefaults.Options));
+    return;
+}
+
 using CancellationTokenSource shutdown = new();
 Console.CancelKeyPress += (_, eventArgs) =>
 {

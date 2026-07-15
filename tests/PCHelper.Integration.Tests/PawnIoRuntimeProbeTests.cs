@@ -45,6 +45,18 @@ public sealed class PawnIoRuntimeProbeTests
         Assert.Equal("the signed PawnIO runtime is not installed", status.Describe());
     }
 
+    [Fact]
+    public void FunctionalRequiresAVersionOnTopOfAvailability()
+    {
+        PawnIoRuntimeStatus available = new(LibraryPresent: true, DriverRunning: true, LibraryPath: @"C:\x.dll");
+        Assert.True(available.Available);
+        Assert.False(available.Functional);
+
+        PawnIoRuntimeStatus functional = available with { LibraryVersion = "2.0.0" };
+        Assert.True(functional.Functional);
+        Assert.Equal("the signed PawnIO driver is present and running (library 2.0.0)", functional.Describe());
+    }
+
     [Theory]
     [InlineData("Running", true)]
     [InlineData("running", true)]
