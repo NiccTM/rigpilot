@@ -1344,7 +1344,7 @@
                     <TextBox Text="{Binding TunePowerCeilingText, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="Optional tuning power ceiling in watts" automation:AutomationProperties.AutomationId="Performance.PowerCeiling" />
                     <TextBlock Text="{Binding TuneEligibilityReason}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,7,0,12" />
                     <CheckBox IsChecked="{Binding AdvancedWritesAcknowledged}" Content="I understand Experimental writes can crash or misconfigure unsupported hardware." Margin="0,0,0,8" />
-                    <CheckBox IsChecked="{Binding TuneDeviceAcknowledged}" Margin="0,0,0,13">
+                    <CheckBox IsChecked="{Binding TuneDeviceAcknowledged}" Margin="0,0,0,13" automation:AutomationProperties.Name="I confirm this exact tuning target">
                       <TextBlock Text="{Binding SelectedTuneTarget.DisplayName, StringFormat=I confirm this exact target: {0}}" TextWrapping="Wrap" />
                     </CheckBox>
                     <WrapPanel>
