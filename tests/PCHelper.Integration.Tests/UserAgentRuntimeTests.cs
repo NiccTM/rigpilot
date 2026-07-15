@@ -54,6 +54,35 @@ public sealed class UserAgentRuntimeTests
     }
 
     [Fact]
+    public async Task DiscoverUpdatesIsHandledAndHonestlyReportsNoConfiguredSource()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"pchelper-user-agent-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await using UserAgentRuntime runtime = new(directory);
+            await runtime.InitializeAsync(CancellationToken.None);
+            IpcClientContext current = new(false, WindowsIdentity.GetCurrent().Name);
+
+            IpcResponse response = await runtime.HandleRequestAsync(
+                Request(IpcCommand.DiscoverUpdates),
+                current,
+                CancellationToken.None);
+
+            // Previously a dead route (WRONG_EXECUTION_CONTEXT); now handled truthfully.
+            Assert.True(response.Success);
+            Assert.NotEqual("WRONG_EXECUTION_CONTEXT", response.ErrorCode);
+            UpdateDiscoveryResultV1 result = IpcJson.FromElement<UpdateDiscoveryResultV1>(response.Payload)!;
+            Assert.False(result.SourceConfigured);
+            Assert.Empty(result.Candidates);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task InvalidMacroNeverEntersUserState()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"pchelper-user-agent-{Guid.NewGuid():N}");

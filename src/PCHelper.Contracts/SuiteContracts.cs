@@ -1239,6 +1239,29 @@ public sealed record UpdateStatusV1(
 }
 
 /// <summary>
+/// Result of a user-process update discovery. Discovery runs only in the network-
+/// capable user agent (never the service). A build with no configured update feed
+/// returns an empty candidate list and <see cref="SourceConfigured"/> = false rather
+/// than contacting an endpoint, so this reflects reality instead of a dead route.
+/// </summary>
+public sealed record UpdateDiscoveryResultV1(
+    int SchemaVersion,
+    bool SourceConfigured,
+    IReadOnlyList<UpdateCandidateV1> Candidates,
+    string Message,
+    DateTimeOffset CheckedAt)
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public static UpdateDiscoveryResultV1 NoSourceConfigured() => new(
+        CurrentSchemaVersion,
+        false,
+        [],
+        "No update source is configured; this build does not auto-discover updates.",
+        DateTimeOffset.UtcNow);
+}
+
+/// <summary>
 /// A privacy-preserving, physical-system qualification record. SystemId must
 /// be a random per-machine identifier, never a serial number, hostname, or
 /// Windows account name. Records are evidence inputs to the release gate; a

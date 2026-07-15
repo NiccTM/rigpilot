@@ -127,6 +127,7 @@ public sealed class UserAgentRuntime : IAsyncDisposable
                 IpcCommand.GetMonitorBrightnesses => Success(request, _monitorBrightness.Discover()),
                 IpcCommand.SetMonitorBrightness => await SetMonitorBrightnessAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.RunInteractiveFanPreflight => await RunInteractiveFanPreflightAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.DiscoverUpdates => Success(request, UpdateDiscoveryResultV1.NoSourceConfigured()),
                 _ => Failure(request, "WRONG_EXECUTION_CONTEXT", $"Command {request.Command} is not owned by the user agent.")
             };
         }
