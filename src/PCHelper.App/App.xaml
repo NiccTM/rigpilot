@@ -4,27 +4,30 @@
   <Application.Resources>
     <!-- Dark neutral surfaces keep live telemetry readable. Accent colours are
          reserved for focus, actions, and explicit status; colour never carries
-         status without a text label or icon. -->
-    <Color x:Key="CanvasColor">#0C1017</Color>
-    <Color x:Key="SidebarColor">#10151E</Color>
-    <Color x:Key="SurfaceColor">#141B25</Color>
-    <Color x:Key="SurfaceRaisedColor">#192230</Color>
-    <Color x:Key="SurfaceHoverColor">#202C3C</Color>
-    <Color x:Key="SurfacePressedColor">#26364B</Color>
-    <Color x:Key="BorderColor">#263244</Color>
-    <Color x:Key="BorderStrongColor">#384A63</Color>
-    <Color x:Key="TextColor">#F3F6FA</Color>
-    <Color x:Key="MutedTextColor">#A1AEC0</Color>
-    <Color x:Key="SubtleTextColor">#748196</Color>
-    <Color x:Key="AccentColor">#69ADFF</Color>
-    <Color x:Key="AccentHoverColor">#86BCFF</Color>
-    <Color x:Key="AccentSoftColor">#142A45</Color>
-    <Color x:Key="SafeColor">#50D6A0</Color>
-    <Color x:Key="SafeSoftColor">#102D25</Color>
-    <Color x:Key="WarningColor">#F0BD67</Color>
-    <Color x:Key="WarningSoftColor">#302611</Color>
-    <Color x:Key="CriticalColor">#FF7883</Color>
-    <Color x:Key="CriticalSoftColor">#35191F</Color>
+         status without a text label or icon. The palette is deliberately
+         chroma-free graphite with alpha-white hairline borders, so elevation
+         comes from surface lightness rather than outlines; the single accent
+         and the status colours follow the iOS/macOS dark-mode system palette. -->
+    <Color x:Key="CanvasColor">#0E0E10</Color>
+    <Color x:Key="SidebarColor">#131316</Color>
+    <Color x:Key="SurfaceColor">#1B1B1F</Color>
+    <Color x:Key="SurfaceRaisedColor">#242429</Color>
+    <Color x:Key="SurfaceHoverColor">#2C2C33</Color>
+    <Color x:Key="SurfacePressedColor">#35353D</Color>
+    <Color x:Key="BorderColor">#1FFFFFFF</Color>
+    <Color x:Key="BorderStrongColor">#3DFFFFFF</Color>
+    <Color x:Key="TextColor">#F5F5F7</Color>
+    <Color x:Key="MutedTextColor">#A8A8B0</Color>
+    <Color x:Key="SubtleTextColor">#818188</Color>
+    <Color x:Key="AccentColor">#0A84FF</Color>
+    <Color x:Key="AccentHoverColor">#3F9FFF</Color>
+    <Color x:Key="AccentSoftColor">#2E0A84FF</Color>
+    <Color x:Key="SafeColor">#30D158</Color>
+    <Color x:Key="SafeSoftColor">#2930D158</Color>
+    <Color x:Key="WarningColor">#FFB340</Color>
+    <Color x:Key="WarningSoftColor">#29FF9F0A</Color>
+    <Color x:Key="CriticalColor">#FF6961</Color>
+    <Color x:Key="CriticalSoftColor">#29FF453A</Color>
 
     <SolidColorBrush x:Key="WindowBrush" Color="{StaticResource CanvasColor}" />
     <SolidColorBrush x:Key="SidebarBrush" Color="{StaticResource SidebarColor}" />
@@ -55,14 +58,14 @@
     <DrawingImage x:Key="RigPilotMark">
       <DrawingImage.Drawing>
         <DrawingGroup>
-          <GeometryDrawing Brush="#101E32">
+          <GeometryDrawing Brush="#16181D">
             <GeometryDrawing.Geometry>
               <RectangleGeometry Rect="0,0,64,64" RadiusX="17" RadiusY="17" />
             </GeometryDrawing.Geometry>
           </GeometryDrawing>
-          <GeometryDrawing Brush="#69ADFF" Geometry="M32,5 L55,18 L55,44 L32,58 L9,44 L9,18 Z" />
-          <GeometryDrawing Brush="#0C1626" Geometry="M32,11 L49,21 L49,41 L32,52 L15,41 L15,21 Z" />
-          <GeometryDrawing Brush="#F3F6FA" Geometry="M32,17 L44,31 L36,31 L36,45 L28,45 L28,31 L20,31 Z" />
+          <GeometryDrawing Brush="#0A84FF" Geometry="M32,5 L55,18 L55,44 L32,58 L9,44 L9,18 Z" />
+          <GeometryDrawing Brush="#0E1420" Geometry="M32,11 L49,21 L49,41 L32,52 L15,41 L15,21 Z" />
+          <GeometryDrawing Brush="#F5F5F7" Geometry="M32,17 L44,31 L36,31 L36,45 L28,45 L28,31 L20,31 Z" />
           <GeometryDrawing Brush="#50D6A0">
             <GeometryDrawing.Geometry>
               <EllipseGeometry Center="48,13" RadiusX="3.5" RadiusY="3.5" />
@@ -78,7 +81,7 @@
           <ControlTemplate>
             <Border BorderBrush="{StaticResource AccentBrush}"
                     BorderThickness="2"
-                    CornerRadius="9"
+                    CornerRadius="12"
                     Margin="-3" />
           </ControlTemplate>
         </Setter.Value>
@@ -117,8 +120,8 @@
     <Style x:Key="PageHeaderStyle" TargetType="TextBlock">
       <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
       <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI" />
-      <Setter Property="FontSize" Value="28" />
-      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="FontSize" Value="30" />
+      <Setter Property="FontWeight" Value="Bold" />
       <Setter Property="Margin" Value="0,0,0,4" />
     </Style>
 
@@ -147,8 +150,8 @@
       <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
       <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="12" />
-      <Setter Property="Padding" Value="20" />
+      <Setter Property="CornerRadius" Value="16" />
+      <Setter Property="Padding" Value="22" />
       <Setter Property="Margin" Value="0,0,12,12" />
     </Style>
 
@@ -156,7 +159,7 @@
       <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
       <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="9" />
+      <Setter Property="CornerRadius" Value="11" />
       <Setter Property="Padding" Value="14" />
     </Style>
 
@@ -164,7 +167,7 @@
       <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
       <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="9" />
+      <Setter Property="CornerRadius" Value="11" />
       <Setter Property="Padding" Value="24" />
     </Style>
 
@@ -184,9 +187,9 @@
     <Style TargetType="Button">
       <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
       <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
-      <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
+      <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="Padding" Value="14,8" />
+      <Setter Property="Padding" Value="15,8" />
       <Setter Property="MinHeight" Value="36" />
       <Setter Property="Cursor" Value="Hand" />
       <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusVisualStyle}" />
@@ -197,7 +200,7 @@
                     Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}"
                     BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="8"
+                    CornerRadius="10"
                     Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
@@ -206,7 +209,7 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="Chrome" Property="Background" Value="{StaticResource SurfaceHoverBrush}" />
-                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
                 <Setter TargetName="Chrome" Property="Background" Value="{StaticResource SurfacePressedBrush}" />
@@ -224,11 +227,11 @@
     </Style>
 
     <Style x:Key="PrimaryButtonStyle" TargetType="Button">
-      <Setter Property="Foreground" Value="#07101B" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
       <Setter Property="Background" Value="{StaticResource AccentBrush}" />
       <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="Padding" Value="15,8" />
+      <Setter Property="Padding" Value="16,8" />
       <Setter Property="MinHeight" Value="36" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Cursor" Value="Hand" />
@@ -240,7 +243,7 @@
                     Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}"
                     BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="8"
+                    CornerRadius="10"
                     Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
             </Border>
@@ -304,7 +307,7 @@
                     Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}"
                     BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="8">
+                    CornerRadius="10">
               <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" />
             </Border>
             <ControlTemplate.Triggers>
@@ -328,7 +331,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ComboBoxItem">
-            <Border x:Name="Chrome" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="5">
+            <Border x:Name="Chrome" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="8">
               <ContentPresenter />
             </Border>
             <ControlTemplate.Triggers>
@@ -352,7 +355,7 @@
         <Setter.Value>
           <ControlTemplate TargetType="ComboBox">
             <Grid>
-              <Border x:Name="ComboChrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
+              <Border x:Name="ComboChrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10">
                 <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="34" /></Grid.ColumnDefinitions>
                   <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center" Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" />
@@ -366,7 +369,7 @@
                 </Grid>
               </Border>
               <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
-                <Border MinWidth="{Binding ActualWidth, ElementName=ComboChrome}" MaxHeight="300" Margin="0,4,0,0" Padding="4" Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource BorderStrongBrush}" BorderThickness="1" CornerRadius="8">
+                <Border MinWidth="{Binding ActualWidth, ElementName=ComboChrome}" MaxHeight="300" Margin="0,4,0,0" Padding="5" Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource BorderStrongBrush}" BorderThickness="1" CornerRadius="12">
                   <ScrollViewer VerticalScrollBarVisibility="Auto"><ItemsPresenter /></ScrollViewer>
                 </Border>
               </Popup>
@@ -390,7 +393,7 @@
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
               <Border x:Name="Box" Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,1,0,0" Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource BorderStrongBrush}" BorderThickness="1" CornerRadius="4">
-                <TextBlock x:Name="Mark" Text="✓" FontSize="11" FontWeight="Bold" Foreground="#07101B" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed" />
+                <TextBlock x:Name="Mark" Text="✓" FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed" />
               </Border>
               <ContentPresenter Grid.Column="1" Margin="7,0,0,0" VerticalAlignment="Center" />
             </Grid>
@@ -422,7 +425,7 @@
           <ControlTemplate TargetType="ListBoxItem">
             <Border x:Name="Chrome"
                     Background="Transparent"
-                    CornerRadius="8"
+                    CornerRadius="10"
                     Padding="{TemplateBinding Padding}"
                     Margin="0,2">
               <Grid>
@@ -476,7 +479,7 @@
                   <Thumb>
                     <Thumb.Template>
                       <ControlTemplate TargetType="Thumb">
-                        <Border Background="{StaticResource BorderStrongBrush}" CornerRadius="4" Margin="2,1" />
+                        <Border Background="#42FFFFFF" CornerRadius="4" Margin="2,1" />
                       </ControlTemplate>
                     </Thumb.Template>
                   </Thumb>
@@ -499,7 +502,7 @@
                       <Thumb>
                         <Thumb.Template>
                           <ControlTemplate TargetType="Thumb">
-                            <Border Background="{StaticResource BorderStrongBrush}" CornerRadius="4" Margin="1,2" />
+                            <Border Background="#42FFFFFF" CornerRadius="4" Margin="1,2" />
                           </ControlTemplate>
                         </Thumb.Template>
                       </Thumb>

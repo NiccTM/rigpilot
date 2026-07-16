@@ -571,6 +571,12 @@ Version 1.0 is blocked by any unresolved BSOD, stuck fan, failed reset, unauthor
 - The Lighting static-colour field gained a live **colour preview swatch** (`Lighting.OpenRgbColourPreview`) via a new fail-safe `HexColourToBrushConverter` (unparsable text renders transparent, never throws).
 - Validation: build 0 warnings/0 errors; full suite 542 tests passed; all nine pages re-rendered to `artifacts\ui-snapshots-polish2` and the Cooling, Performance, and Lighting renders were visually reviewed (live Nuvoton RPM + duty rows, CPU/GPU-only performance rows, and the #4EA1FF swatch confirmed). Presentation-only change: no IPC, capability, safety, or persistence path was touched.
 
+## Verification snapshot: 2026-07-16 (Apple-inspired theme refresh)
+
+- The design tokens in `App.xaml` moved to an Apple-dark-mode-inspired language, keeping the token structure and every automation ID/name intact: chroma-free graphite neutrals (canvas #0E0E10 → raised surface #35353D) instead of the blue-navy set; **alpha-white hairline borders** (#1F/#3DFFFFFF) so elevation reads from surface lightness rather than outlines; the iOS system accent #0A84FF with **white-on-blue** primary buttons (previously dark-on-light-blue; the hardcoded Refresh-button and checkbox-mark foregrounds updated to match); iOS dark status colours (safe #30D158, warning #FFB340, critical #FF6961, soft variants as 16% alpha washes); larger continuous-feel radii (cards 16, buttons/inputs/list items 10, popups 12); Bold 30 px page titles; quieter default buttons (hairline border, no accent hover outline) and subtler alpha scrollbar thumbs. The RigPilot mark's blue was aligned to the new accent.
+- Contrast spot-checks: muted text #A8A8B0 on card surface ≈ 6.5:1; warning #FFB340 and critical #FF6961 were chosen over the raw iOS values for legibility as dark-background text. Colour still never carries status without a text label.
+- Validation: build 0 warnings/0 errors; full suite 542 tests passed; all nine pages rendered to `artifacts\ui-snapshots-apple` and Overview, Profiles, and Cooling were visually reviewed (blue primary actions, graphite cards, hairline rows confirmed). Presentation-only: no IPC, capability, safety, or persistence path was touched.
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.
