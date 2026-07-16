@@ -91,7 +91,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             new TraceableHardwareAdapter(new AmdGraphicsControlAdapter()),
             new TraceableHardwareAdapter(new VendorControlEligibilityAdapter()),
             new TraceableHardwareAdapter(new WindowsPeripheralInventoryAdapter()),
-            new TraceableHardwareAdapter(new AdapterHostProxy())
+            new TraceableHardwareAdapter(new AdapterHostProxy()),
+            // Operator-declared file-backed sensor inputs (read-only; exposes no
+            // capability). Definitions live in file-sensors.json beside the service
+            // state and are re-read when the file changes.
+            new TraceableHardwareAdapter(new FileSensorAdapter(Path.Combine(_dataDirectory!, "file-sensors.json")))
         ];
 
         // Experimental GPU-fan control. The transport is created write-capable (fan
@@ -3933,6 +3937,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         IpcCommand.PublishRtssOsdText or IpcCommand.ReleaseRtssOsd or
         IpcCommand.StartFrametimeBenchmark or IpcCommand.StopFrametimeBenchmark or
         IpcCommand.GetFrametimeBenchmarkStatus or
+        IpcCommand.StartPresentMonBenchmark or IpcCommand.StopPresentMonBenchmark or
+        IpcCommand.GetPresentMonBenchmarkStatus or
         IpcCommand.GetMonitorBrightnesses or IpcCommand.SetMonitorBrightness or
         IpcCommand.RunInteractiveFanPreflight or
         IpcCommand.DiscoverUpdates;

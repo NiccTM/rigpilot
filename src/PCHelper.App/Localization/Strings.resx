@@ -27,4 +27,31 @@
   <data name="Portable_BusyMessage" xml:space="preserve">
     <value>Starting portable read-only probe</value>
   </data>
+  <data name="Nav_Overview" xml:space="preserve">
+    <value>Overview</value>
+  </data>
+  <data name="Nav_Profiles" xml:space="preserve">
+    <value>Profiles</value>
+  </data>
+  <data name="Nav_Cooling" xml:space="preserve">
+    <value>Cooling</value>
+  </data>
+  <data name="Nav_Performance" xml:space="preserve">
+    <value>Performance</value>
+  </data>
+  <data name="Nav_Lighting" xml:space="preserve">
+    <value>Lighting</value>
+  </data>
+  <data name="Nav_Automation" xml:space="preserve">
+    <value>Automation</value>
+  </data>
+  <data name="Nav_GamesTools" xml:space="preserve">
+    <value>Games &amp; tools</value>
+  </data>
+  <data name="Nav_Devices" xml:space="preserve">
+    <value>Devices</value>
+  </data>
+  <data name="Nav_Diagnostics" xml:space="preserve">
+    <value>Diagnostics</value>
+  </data>
 </root>

@@ -297,6 +297,28 @@ Still hardware/user/policy-gated (unchanged): signing, the 18-system matrix, wit
 Aura SMBus native writes, Polychrome/RGB Fusion, peripheral packs, AIO pump control, ADLX/IGCL
 telemetry on real hardware, live PBO/CO writes, auto-update delivery, report-api deployment.
 
+### Addendum — 2026-07-16 (evening): repo public; open-source-informed feature slice
+
+The repository is **public at https://github.com/NiccTM/rigpilot** (SignPath Foundation
+prerequisite satisfied; the signing-route decision itself is still open: SignPath free/OSS vs
+Azure Trusted Signing ~$9.99/mo). An ecosystem research pass (2026-07-16) reshaped the pure-code
+tail; shipped this slice (suite 542 tests, 0 warnings):
+
+- **Intel PresentMon per-frame benchmark** (MIT, github.com/GameTechDev/PresentMon; external
+  optional tool, never bundled): true per-frame 1%/0.1% lows via passive ETW CSV capture —
+  removes the RTSS dependency for benchmarking and upgrades the honest window-based labelling.
+- **File-backed sensor inputs** (Fan Control parity): read-only, plausibility- and
+  staleness-gated, zero write capability.
+- **Battle.net library scanning** via NGDP markers (GOG/Xbox scanning already existed).
+- **Nav-title localization slice** with German satellites.
+
+Research notes for later phases: liquidctl documents the Kraken X3 pump-duty protocol (AIO write
+qualification homework done, hardware witness still required); namazso/PawnIO.Modules ships
+signed module releases with Zen 1–4 RyzenSMU codename coverage (sourcing path beyond LHM's
+embedded module); OpenRGB 1.0 RC3 now uses PawnIO itself for SMBus (validates the PawnIO-only
+stance; GPL-2.0 reuse caution unchanged); winget requires signed installers (distribution is
+signing-gated); Playnite (MIT) is the manifest-format reference for further launcher coverage.
+
 ## Risks
 
 - Scope: each workstream lands per-device/per-family; a missed qualification ships as honest

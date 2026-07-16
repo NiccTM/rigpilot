@@ -20,6 +20,7 @@ public sealed class UserAgentRuntime : IAsyncDisposable
     private readonly IDesktopVideoRecorder _videoRecorder;
     private readonly IRtssOsdBridge _rtssOsd;
     private readonly IFrametimeBenchmarkRecorder _frametimeBenchmark;
+    private readonly IFrametimeBenchmarkRecorder _presentMonBenchmark;
     private readonly IMonitorBrightnessBackend _monitorBrightness;
     private readonly IInteractiveFanPreflightLauncher _interactiveFanPreflight;
     private readonly HashSet<string> _gameBarPackageSids;
@@ -41,7 +42,8 @@ public sealed class UserAgentRuntime : IAsyncDisposable
         IMonitorBrightnessBackend? monitorBrightness = null,
         IDesktopVideoRecorder? videoRecorder = null,
         IRtssOsdBridge? rtssOsdBridge = null,
-        IFrametimeBenchmarkRecorder? frametimeBenchmark = null)
+        IFrametimeBenchmarkRecorder? frametimeBenchmark = null,
+        IFrametimeBenchmarkRecorder? presentMonBenchmark = null)
     {
         string resolvedStateRoot = stateRoot is null
             ? Path.Combine(
@@ -55,6 +57,7 @@ public sealed class UserAgentRuntime : IAsyncDisposable
         _videoRecorder = videoRecorder ?? new WindowsDesktopVideoRecorder(() => _desktopSnapshots!.DiscoverTargets());
         _rtssOsd = rtssOsdBridge ?? new RtssSharedMemoryBridge();
         _frametimeBenchmark = frametimeBenchmark ?? new FrametimeBenchmarkRecorder(() => _rtssOsd!.ReadFrameStats());
+        _presentMonBenchmark = presentMonBenchmark ?? new PresentMonBenchmarkRecorder(new PresentMonSessionFactory());
         _monitorBrightness = monitorBrightness ?? new WindowsMonitorBrightnessBackend();
         _interactiveFanPreflight = interactiveFanPreflight ?? new ElevatedInteractiveFanPreflightLauncher();
         _gameBarPackageSids = new HashSet<string>(
@@ -95,7 +98,7 @@ public sealed class UserAgentRuntime : IAsyncDisposable
                     ProtocolConstants.LegacyReadOnlyVersion,
                     typeof(UserAgentRuntime).Assembly.GetName().Version?.ToString() ?? "0.4.0-alpha",
                     _revision,
-                    ["workflows", "effects", "effect-host", "games", "macros", "macro-recording", "scripts", "osd", "osd-presentation", "monitoring-preferences", "monitoring-comparison", "overlay-status", "capture", "desktop-snapshot", "monitor-brightness", "wgc-recording-preflight", "interactive-fan-preflight", "rtss-osd", "frametime-benchmark"])),
+                    ["workflows", "effects", "effect-host", "games", "macros", "macro-recording", "scripts", "osd", "osd-presentation", "monitoring-preferences", "monitoring-comparison", "overlay-status", "capture", "desktop-snapshot", "monitor-brightness", "wgc-recording-preflight", "interactive-fan-preflight", "rtss-osd", "frametime-benchmark", "presentmon-benchmark"])),
                 IpcCommand.GetWorkflows => await GetAsync<AutomationWorkflowV1>(request, SuiteEntityKind.AutomationWorkflow, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SaveWorkflow => await SaveWorkflowAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.DeleteWorkflow => await DeleteAsync(request, SuiteEntityKind.AutomationWorkflow, cancellationToken).ConfigureAwait(false),
@@ -140,9 +143,12 @@ public sealed class UserAgentRuntime : IAsyncDisposable
                 IpcCommand.GetRtssFrameStats => Success(request, _rtssOsd.ReadFrameStats()),
                 IpcCommand.PublishRtssOsdText => PublishRtssOsdText(request),
                 IpcCommand.ReleaseRtssOsd => ReleaseRtssOsd(request),
-                IpcCommand.StartFrametimeBenchmark => StartFrametimeBenchmark(request),
+                IpcCommand.StartFrametimeBenchmark => StartBenchmark(request, _frametimeBenchmark),
                 IpcCommand.StopFrametimeBenchmark => Success(request, _frametimeBenchmark.StopBenchmark()),
                 IpcCommand.GetFrametimeBenchmarkStatus => Success(request, _frametimeBenchmark.Status),
+                IpcCommand.StartPresentMonBenchmark => StartBenchmark(request, _presentMonBenchmark),
+                IpcCommand.StopPresentMonBenchmark => Success(request, _presentMonBenchmark.StopBenchmark()),
+                IpcCommand.GetPresentMonBenchmarkStatus => Success(request, _presentMonBenchmark.Status),
                 IpcCommand.GetMonitorBrightnesses => Success(request, _monitorBrightness.Discover()),
                 IpcCommand.SetMonitorBrightness => await SetMonitorBrightnessAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.RunInteractiveFanPreflight => await RunInteractiveFanPreflightAsync(request, cancellationToken).ConfigureAwait(false),
@@ -201,6 +207,7 @@ public sealed class UserAgentRuntime : IAsyncDisposable
         }
         await _macroRecorder.DisposeAsync().ConfigureAwait(false);
         _frametimeBenchmark.Dispose();
+        _presentMonBenchmark.Dispose();
         _rtssOsd.Dispose();
         _macroGate.Dispose();
         _effectGate.Dispose();
@@ -802,12 +809,12 @@ public sealed class UserAgentRuntime : IAsyncDisposable
         }
     }
 
-    private IpcResponse StartFrametimeBenchmark(IpcRequest request)
+    private IpcResponse StartBenchmark(IpcRequest request, IFrametimeBenchmarkRecorder recorder)
     {
         FrametimeBenchmarkStartRequestV1 payload = Payload<FrametimeBenchmarkStartRequestV1>(request);
         try
         {
-            FrametimeBenchmarkStatusV1 status = _frametimeBenchmark.Start(payload);
+            FrametimeBenchmarkStatusV1 status = recorder.Start(payload);
             Interlocked.Increment(ref _revision);
             return Success(request, status);
         }
