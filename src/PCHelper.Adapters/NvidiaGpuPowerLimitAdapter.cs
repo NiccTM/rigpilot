@@ -97,7 +97,7 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter
                 state,
                 AdapterExecutionContext.SystemService,
                 ControlValueKind.Numeric,
-                new NumericRange(minWatts, maxWatts, 1),
+                new NumericRange(minWatts, maxWatts, 1, defaultWatts),
                 "W",
                 RiskLevel.Experimental,
                 EvidenceLevel.Detected,

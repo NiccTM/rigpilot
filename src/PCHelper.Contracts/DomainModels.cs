@@ -156,7 +156,13 @@ public sealed record HardwareDevice(
     string? PnpId,
     IReadOnlyDictionary<string, string> Properties);
 
-public sealed record NumericRange(double Minimum, double Maximum, double Step);
+/// <summary>
+/// Numeric control bounds. <see cref="Default"/> is the vendor default value
+/// when the adapter can discover one (e.g. the NVML default power limit) — it
+/// lets UIs show Afterburner-style percentages where 100% is stock, not max.
+/// Optional and additive: absent in JSON means unknown.
+/// </summary>
+public sealed record NumericRange(double Minimum, double Maximum, double Step, double? Default = null);
 
 public sealed record CapabilityDescriptor(
     string Id,

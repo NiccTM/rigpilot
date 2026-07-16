@@ -8,12 +8,14 @@
          chroma-free graphite with alpha-white hairline borders, so elevation
          comes from surface lightness rather than outlines; the single accent
          and the status colours follow the iOS/macOS dark-mode system palette. -->
-    <Color x:Key="CanvasColor">#0E0E10</Color>
-    <Color x:Key="SidebarColor">#131316</Color>
-    <Color x:Key="SurfaceColor">#1B1B1F</Color>
-    <Color x:Key="SurfaceRaisedColor">#242429</Color>
-    <Color x:Key="SurfaceHoverColor">#2C2C33</Color>
-    <Color x:Key="SurfacePressedColor">#35353D</Color>
+    <!-- Material 3 tonal elevation: each step up tints subtly toward the blue
+         primary instead of pure grey, so depth reads as light, not outlines. -->
+    <Color x:Key="CanvasColor">#0C0D11</Color>
+    <Color x:Key="SidebarColor">#111319</Color>
+    <Color x:Key="SurfaceColor">#1A1C23</Color>
+    <Color x:Key="SurfaceRaisedColor">#232732</Color>
+    <Color x:Key="SurfaceHoverColor">#2C313F</Color>
+    <Color x:Key="SurfacePressedColor">#353B4C</Color>
     <Color x:Key="BorderColor">#1FFFFFFF</Color>
     <Color x:Key="BorderStrongColor">#3DFFFFFF</Color>
     <Color x:Key="TextColor">#F5F5F7</Color>
@@ -51,6 +53,20 @@
     <SolidColorBrush x:Key="CriticalSoftBrush" Color="{StaticResource CriticalSoftColor}" />
 
     <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+
+    <!-- Liquid-Glass card material: a faint top-lit gradient plus a specular
+         top edge, so cards read as translucent panes floating over the canvas
+         rather than flat rectangles. -->
+    <LinearGradientBrush x:Key="CardBackgroundBrush" StartPoint="0,0" EndPoint="0,1">
+      <GradientStop Color="#222530" Offset="0" />
+      <GradientStop Color="#1A1C23" Offset="0.45" />
+      <GradientStop Color="#181A21" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="CardBorderBrush" StartPoint="0,0" EndPoint="0,1">
+      <GradientStop Color="#40FFFFFF" Offset="0" />
+      <GradientStop Color="#17FFFFFF" Offset="0.25" />
+      <GradientStop Color="#10FFFFFF" Offset="1" />
+    </LinearGradientBrush>
 
     <!-- RigPilot mark: a control-ring hexagon, a forward pilot arrow, and a
          live-status point. Keep this vector source as the visual reference
@@ -111,6 +127,63 @@
       <Setter Property="FontSize" Value="12" />
     </Style>
 
+    <!-- Themed Expander: a flat chevron + header row instead of the stock
+         Windows-gray circle button, matching the dark card language. -->
+    <Style TargetType="Expander">
+      <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusVisualStyle}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Expander">
+            <StackPanel>
+              <ToggleButton x:Name="HeaderToggle"
+                            IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                            Focusable="True"
+                            FocusVisualStyle="{StaticResource KeyboardFocusVisualStyle}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border Background="Transparent" Padding="0,2">
+                      <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="Chevron"
+                                   Text="&#xE76C;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="10"
+                                   Foreground="{StaticResource SubtleTextBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,7,0"
+                                   RenderTransformOrigin="0.5,0.5" />
+                        <ContentPresenter Content="{Binding Header, RelativeSource={RelativeSource AncestorType=Expander}}" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="Chevron" Property="RenderTransform">
+                          <Setter.Value>
+                            <RotateTransform Angle="90" />
+                          </Setter.Value>
+                        </Setter>
+                        <Setter TargetName="Chevron" Property="Foreground" Value="{StaticResource AccentBrush}" />
+                      </Trigger>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Chevron" Property="Foreground" Value="{StaticResource AccentBrush}" />
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <ContentPresenter x:Name="ExpandedContent" Visibility="Collapsed" />
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsExpanded" Value="True">
+                <Setter TargetName="ExpandedContent" Property="Visibility" Value="Visible" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="EyebrowStyle" TargetType="TextBlock">
       <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
       <Setter Property="FontSize" Value="11" />
@@ -147,20 +220,25 @@
     </Style>
 
     <Style x:Key="CardStyle" TargetType="Border">
-      <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
-      <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+      <Setter Property="Background" Value="{StaticResource CardBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="16" />
-      <Setter Property="Padding" Value="22" />
-      <Setter Property="Margin" Value="0,0,12,12" />
+      <Setter Property="CornerRadius" Value="18" />
+      <Setter Property="Padding" Value="24" />
+      <Setter Property="Margin" Value="0,0,12,14" />
+      <Setter Property="Effect">
+        <Setter.Value>
+          <DropShadowEffect Color="#000000" BlurRadius="22" ShadowDepth="7" Direction="270" Opacity="0.32" />
+        </Setter.Value>
+      </Setter>
     </Style>
 
     <Style x:Key="InsetCardStyle" TargetType="Border">
       <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
       <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="11" />
-      <Setter Property="Padding" Value="14" />
+      <Setter Property="CornerRadius" Value="12" />
+      <Setter Property="Padding" Value="15" />
     </Style>
 
     <Style x:Key="EmptyStateStyle" TargetType="Border">
@@ -200,7 +278,7 @@
                     Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}"
                     BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="10"
+                    CornerRadius="18"
                     Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
@@ -243,7 +321,7 @@
                     Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}"
                     BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="10"
+                    CornerRadius="18"
                     Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
             </Border>

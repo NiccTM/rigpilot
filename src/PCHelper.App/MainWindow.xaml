@@ -56,7 +56,6 @@
           </Grid.ColumnDefinitions>
           <StackPanel Margin="0,0,16,0">
             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" />
-            <TextBlock Text="{Binding Reason}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
           </StackPanel>
           <Border Grid.Column="1" CornerRadius="12" Padding="9,4" VerticalAlignment="Top">
             <Border.Style>
@@ -89,14 +88,28 @@
             <TextBlock Text="{Binding Risk, StringFormat=Risk: {0}}" Style="{StaticResource SubtleStyle}" Margin="0,0,16,0" />
             <TextBlock Text="{Binding Owner}" Style="{StaticResource SubtleStyle}" />
           </WrapPanel>
-          <Border Grid.Row="2" Grid.ColumnSpan="2" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="7" Padding="9,6" Margin="0,10,0,0">
-            <TextBlock Text="{Binding NextSafeStep}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" />
-          </Border>
+          <!-- The evidence rationale and next safe step stay one click away so the
+               capability list scans as name + state + bounds instead of a wall of
+               repeated paragraphs. The full wording is unchanged, only collapsed. -->
+          <Expander Grid.Row="2" Grid.ColumnSpan="2" Margin="0,7,0,0"
+                    IsExpanded="{Binding IsDetailsExpanded, Mode=TwoWay}"
+                    Foreground="{StaticResource MutedTextBrush}">
+            <Expander.Header>
+              <TextBlock Text="Why, and the next safe step" Style="{StaticResource SubtleStyle}" />
+            </Expander.Header>
+            <StackPanel Margin="0,6,0,0">
+              <TextBlock Text="{Binding Reason}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" />
+              <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="7" Padding="9,6" Margin="0,8,0,0">
+                <TextBlock Text="{Binding NextSafeStep}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" />
+              </Border>
+            </StackPanel>
+          </Expander>
         </Grid>
       </Border>
     </DataTemplate>
 
     <local:HexColourToBrushConverter x:Key="HexColourToBrush" />
+    <local:SliderValueLabelConverter x:Key="SliderValueLabel" />
     <DataTemplate x:Key="SensorRowTemplate">
       <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
         <Grid>
@@ -321,6 +334,14 @@
                   automation:AutomationProperties.AutomationId="Header.InterfaceMode">
             <TextBlock Text="{Binding InterfaceModeLabel}" Style="{StaticResource BadgeTextStyle}" />
           </Border>
+          <CheckBox IsChecked="{Binding HardwareControlEnabled}"
+                    VerticalAlignment="Center"
+                    Margin="0,0,14,0"
+                    ToolTip="Owner acknowledgement, remembered on this machine: arms every implemented GPU write family (fan, power limit, clocks) while connected. Turning it off restores vendor defaults."
+                    automation:AutomationProperties.Name="Enable hardware control on this machine"
+                    automation:AutomationProperties.AutomationId="Header.HardwareControl">
+            <TextBlock Text="Hardware control" FontWeight="SemiBold" />
+          </CheckBox>
           <Button Command="{Binding ToggleAdvancedLabCommand}"
                   Margin="0,0,10,0"
                   ToolTip="Switch between daily controls and exact capability detail"
@@ -504,7 +525,7 @@
                     </Border>
                     <StackPanel Grid.Column="1">
                       <TextBlock Text="Experimental Control Center" FontSize="16" FontWeight="SemiBold" />
-                      <TextBlock Text="Review exact controls before commissioning. This surface is explanatory: opening a route or recording an acknowledgement never sends a hardware command." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                      <TextBlock Text="Explanatory only — nothing on this panel sends a hardware command." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
                     </StackPanel>
                     <Border Grid.Column="2" Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" CornerRadius="12" Padding="9,4" Margin="14,0,0,0" VerticalAlignment="Top">
                       <TextBlock Text="{Binding ExperimentalGateBadge}" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource WarningBrush}" />
@@ -930,6 +951,62 @@
                   <TextBlock Text="EVIDENCE GATED" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource WarningBrush}" />
                 </Border>
               </Grid>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,12,0,0">
+              <StackPanel>
+                <Grid>
+                  <StackPanel>
+                    <TextBlock Text="Fan controls" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="Set any fan directly. Every apply is bounds-clamped and read-back verified; pump and CPU-fan protections always hold." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                  </StackPanel>
+                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
+                    <TextBlock Text="{Binding FanControlSliders.Count, StringFormat={}{0} outputs}" Style="{StaticResource BadgeTextStyle}" />
+                  </Border>
+                </Grid>
+                <ItemsControl ItemsSource="{Binding FanControlSliders}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="190" />
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="135" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                        <Slider x:Name="FanSlider" Grid.Column="1" Minimum="{Binding Minimum}" Maximum="{Binding Maximum}"
+                                Value="{Binding Value, Mode=TwoWay}" IsSnapToTickEnabled="True" TickFrequency="1"
+                                VerticalAlignment="Center" Margin="10,0"
+                                automation:AutomationProperties.Name="{Binding Name}" />
+                        <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,10,0">
+                          <Run Text="{Binding Value, ElementName=FanSlider, Mode=OneWay, StringFormat={}{0:0}}" /><Run Text=" " /><Run Text="{Binding Unit, Mode=OneWay}" />
+                        </TextBlock>
+                        <Button Grid.Column="3" Content="Apply"
+                                Command="{Binding DataContext.ApplyGpuControlCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding}"
+                                automation:AutomationProperties.Name="{Binding Name, StringFormat=Apply {0}}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <WrapPanel Margin="0,14,0,0">
+                  <Button Content="Set up fan curves &amp; calibration" Command="{Binding ToggleAdvancedLabCommand}" Margin="0,0,8,8"
+                          ToolTip="Opens the Advanced Lab curve studio on this page: adaptive curve creation, custom curve points with hysteresis, and the bounded 0-100% calibration wizard."
+                          automation:AutomationProperties.Name="Open fan curve and calibration studio">
+                    <Button.Style>
+                      <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding IsAdvancedLab}" Value="True">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Button.Style>
+                  </Button>
+                </WrapPanel>
+                <TextBlock Text="Turn on Hardware control in the header to apply. Fans return to firmware control when the service restarts or a cooling profile takes over. Curve creation and calibration live in the studio below (Advanced Lab)." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+              </StackPanel>
             </Border>
 
             <Grid x:Name="SimpleCoolingStatus" Style="{StaticResource SimpleOnlyPanelStyle}">
@@ -1381,6 +1458,65 @@
               </local:AdaptiveUniformGrid>
              </StackPanel>
             </Grid>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,12,0,0">
+              <StackPanel>
+                <Grid>
+                  <StackPanel>
+                    <TextBlock Text="GPU controls" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="Live fan, power, and clock control. Every apply is transactional: bounds-clamped, read-back verified, rolled back on failure." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                  </StackPanel>
+                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
+                    <TextBlock Text="{Binding HardwareControlEnabled, StringFormat=Hardware control: {0}}" Style="{StaticResource BadgeTextStyle}" />
+                  </Border>
+                </Grid>
+                <ItemsControl ItemsSource="{Binding GpuControlSliders}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="190" />
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="135" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Slider x:Name="ValueSlider" Grid.Column="1" Minimum="{Binding Minimum}" Maximum="{Binding Maximum}"
+                                Value="{Binding Value, Mode=TwoWay}" IsSnapToTickEnabled="True" TickFrequency="1"
+                                VerticalAlignment="Center" Margin="10,0"
+                                automation:AutomationProperties.Name="{Binding Name}" />
+                        <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,10,0">
+                          <TextBlock.Text>
+                            <MultiBinding Converter="{StaticResource SliderValueLabel}">
+                              <Binding Path="Value" ElementName="ValueSlider" Mode="OneWay" />
+                              <Binding Path="Unit" Mode="OneWay" />
+                              <Binding Path="Maximum" Mode="OneWay" />
+                              <Binding Path="Default" Mode="OneWay" />
+                            </MultiBinding>
+                          </TextBlock.Text>
+                        </TextBlock>
+                        <Button Grid.Column="3" Content="Apply"
+                                Command="{Binding DataContext.ApplyGpuControlCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding}"
+                                automation:AutomationProperties.Name="{Binding Name, StringFormat=Apply {0}}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <WrapPanel Margin="0,14,0,0">
+                  <Button Content="Auto OC (10-minute screen)" Command="{Binding StartGpuAutoOcCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                          ToolTip="Bounded automatic core-clock search with thermal/WHEA/display-reset aborts, rollback, and a boot sentinel. Result is labelled 'Passed 10-minute screening', never 'stable'."
+                          automation:AutomationProperties.Name="Start GPU auto overclock screening" />
+                  <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Margin="0,0,8,8" />
+                </WrapPanel>
+                <Grid Margin="0,2,0,0">
+                  <TextBlock Text="{Binding OperationTitle}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding OperationProgressText}" HorizontalAlignment="Right" Style="{StaticResource SubtleStyle}" />
+                </Grid>
+                <TextBlock Text="{Binding OperationMessage}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                <TextBlock Text="Sliders appear when the service reports the GPU control families. Turn on Hardware control in the header to apply; turning it off returns everything to vendor defaults." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,10,0,0" />
+              </StackPanel>
+            </Border>
 
             <Grid x:Name="AdvancedPerformanceWorkspace" Style="{StaticResource AdvancedOnlyPanelStyle}">
               <StackPanel>

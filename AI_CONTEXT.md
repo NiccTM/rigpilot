@@ -37,6 +37,19 @@ Version 1.0 remains blocked until the physical qualification matrix in `COMPATIB
 12. Reports are previewed and redacted locally. Upload requires explicit user approval. Do not collect usernames, hostnames, serial numbers, exact paths, network inventory, or unrelated installed applications.
 13. Capability labels are evidence claims: `Verified`, `Experimental`, `Read-only`, `Blocked`, or `Unsupported`. Do not widen them for UI convenience.
 
+### Owner policy amendment — 2026-07-16 (user-directed)
+
+At the owner's explicit instruction, per-family per-session arming ceremony is replaced by a
+**single persisted "Hardware control" acknowledgement** in the dashboard header: once the owner
+checks it, the app automatically arms every implemented GPU write family (fan duty, power
+limit, clock offsets) with the required Experimental + exact-device confirmations each time it
+connects to the service, and re-arms after service restarts. Unchecking disarms and restores
+vendor defaults. The dashboard also displays disarmed armable controls as "Off" and armed ones
+as "On" (the underlying `CapabilityAccessState` and rule 13 evidence semantics are unchanged in
+IPC, CLI, and stored records). Rules 1–12 are NOT relaxed: the voltage prohibition, pump/CPU-fan
+protection, stale-sensor fail-safe, transactional rollback, and the no-fabricated-qualification
+rule remain in force regardless of this switch.
+
 ## Solution map
 
 | Project | Responsibility |
@@ -576,6 +589,62 @@ Version 1.0 is blocked by any unresolved BSOD, stuck fan, failed reset, unauthor
 - The design tokens in `App.xaml` moved to an Apple-dark-mode-inspired language, keeping the token structure and every automation ID/name intact: chroma-free graphite neutrals (canvas #0E0E10 → raised surface #35353D) instead of the blue-navy set; **alpha-white hairline borders** (#1F/#3DFFFFFF) so elevation reads from surface lightness rather than outlines; the iOS system accent #0A84FF with **white-on-blue** primary buttons (previously dark-on-light-blue; the hardcoded Refresh-button and checkbox-mark foregrounds updated to match); iOS dark status colours (safe #30D158, warning #FFB340, critical #FF6961, soft variants as 16% alpha washes); larger continuous-feel radii (cards 16, buttons/inputs/list items 10, popups 12); Bold 30 px page titles; quieter default buttons (hairline border, no accent hover outline) and subtler alpha scrollbar thumbs. The RigPilot mark's blue was aligned to the new accent.
 - Contrast spot-checks: muted text #A8A8B0 on card surface ≈ 6.5:1; warning #FFB340 and critical #FF6961 were chosen over the raw iOS values for legibility as dark-background text. Colour still never carries status without a text label.
 - Validation: build 0 warnings/0 errors; full suite 542 tests passed; all nine pages rendered to `artifacts\ui-snapshots-apple` and Overview, Profiles, and Cooling were visually reviewed (blue primary actions, graphite cards, hairline rows confirmed). Presentation-only: no IPC, capability, safety, or persistence path was touched.
+
+## Verification snapshot: 2026-07-16 (Advanced Lab streamlining + UI review pass)
+
+- Full-UI review: all nine pages rendered in Advanced Lab mode against the live beta7 service (user-deployed; diagnostics show the new `amd.adlx`/`intel.igcl` adapters healthy and the clock-offset transports reporting valid ranges).
+- **Capability cards streamlined**: the shared `CapabilityTemplate` (Cooling list, Performance list, device decision matrix) now shows name + state badge + domain/range/evidence/risk chips, with the full evidence rationale and next-safe-step moved into a collapsed "Why, and the next safe step" expander. Wording unchanged, only collapsed — roughly twice as many capabilities fit per screen. Reason/NextSafeStep carry no automation IDs, so the accessibility surface is unaffected; the full UI automation smoke passes (all 9 pages, simple/advanced toggles, required automation IDs, accessible names).
+- Experimental Control Center intro deduplicated ("Explanatory only — nothing on this panel sends a hardware command."); the session acknowledgement checkbox wording is safety text and was deliberately left verbatim.
+- Navigation localization confirmed wired: nav labels resolve `{loc:Loc Nav_*}` from Strings.resx with the German satellite covering all nine (`Nav_Overview`…`Nav_Diagnostics`); localization tests cover neutral + de resolution.
+- `docs/next-steps-prompt.md` rewritten as a tighter, self-contained continuation prompt (current beta7 state, five ordered phases, verbatim standing rules).
+- Validation: suite **542 tests (309 core + 233 integration), 0 warnings**; UI smoke exit 0; payload `0.4.0-alpha-20260716-beta8` published and validated (6 components, protocol 2, Passed). A running dev-build dashboard instance was closed to unblock the build (relaunch is safe).
+
+## Verification snapshot: 2026-07-16 (first witnessed live GPU write via the new slider UI)
+
+- Beta12 deployed (owner UAC; runtime-preflight Ready, dashboard+service beta12/protocol 2). New in this line: the persisted "Hardware control" master switch (auto-arms GPU fan/power/clock families with the required confirmations on every connect), live GPU control sliders on the Performance page (one-action transactional profiles: bounds clamp, apply, read-back verify, rollback), the capability-card expander with per-capability persisted state, and the Install-LocalAlphaRuntime.ps1 fix for the transient SQLite `-shm` backup race.
+- Fixed en route: Apply buttons were dead because the command's can-execute was never re-queried after the master switch or connection state changed (AsyncCommand needs explicit RaiseCanExecuteChanged).
+- **Witnessed live pass (owner at the machine, screenshot evidence): GPU power limit applied and read-back verified at 259 W on the reference RTX 3090** via the slider — the first real arm-gated GPU write of the Phase 1 witnessed-pass list. Fan-duty, clock-offset writes, and the disarm-restores-defaults check remain to be witnessed.
+- Suite 543 tests, 0 warnings; UI smoke green through every change.
+
+## Verification snapshot: 2026-07-16 (design-language theme pass; beta13/14 deployed)
+
+- beta13 (deployed): On/Off labels restricted to genuinely armable controls (`gpufan.`/`gpupower.`/`gpuclock.` prefixes); informational read-only cards (e.g. NVML per-fan telemetry) say "Read Only" again so they do not masquerade as switches. Live check confirmed `gpufan.duty:0` Experimental (armed) while the NVML per-fan cards stay ReadOnly — the fan slider is the write path.
+- beta14 (deployed, live): theme rebuilt on three researched design languages — Material 3 tonal elevation (surfaces tint toward the blue primary per step: canvas #0C0D11 → surface #1A1C23 → raised #232732; M3 shape scale 18/12), Apple Liquid Glass card material (top-lit vertical gradient + specular top-edge border gradient + soft depth shadow via `CardBackgroundBrush`/`CardBorderBrush` in App.xaml), One UI pill buttons (18px radius) and looser padding. Colour still never carries status without a text label.
+- Validation each step: 543 tests, 0 warnings, UI automation smoke green; `runtime-preflight` Ready on beta14 after user-approved UAC deploys.
+
+## Verification snapshot: 2026-07-16 (all four GPU write families live-verified; operator-authorised self-test)
+
+- **Operator-authorised live write test (explicit user instruction to test writes directly): all four armed GPU write families PASSED with hardware read-back on the reference RTX 3090** via the real service pipe and transaction engine (one-action ApplyProfileV2 each): fan duty 62 % ("verified within 5% of 62%"), power limit 300 W ("verified at 300 W"), core clock offset +15 MHz, memory clock offset +15 MHz. Harness: scratchpad console app over PCHelper.Ipc/Contracts; no bounds bypassed — every write went through prepare → clamp → apply → read-back verify.
+- **Disarm-restores-defaults contract witnessed live**: `gpu-fan-disarm`/`gpu-power-disarm`/`gpu-clock-disarm` each confirmed restoration (auto fan curve, vendor default power limit, stock clocks). With the earlier 259 W slider apply, the Phase-1 "arm-gated GPU write" witnessed passes are now complete for fan/power/core/memory + restore.
+- Dashboard fix (user report, beta15 pending deploy): NVML's informational read-only cards (per-fan telemetry, fan write-transport feasibility, power-limit bounds) are hidden from the Cooling/Performance lists whenever the corresponding writable channel exists — they duplicated working controls as "Read Only" rows. Full evidence remains in the Devices decision matrix. Cooling list went 13 → 10 entries, all actionable. The "Off while armed" moment in the user's screenshot was the one-second snapshot-refresh lag at arm time, confirmed against live CLI state (all four families Experimental).
+- Validation: 543 tests, 0 warnings, UI smoke green; beta15 published/validated, awaiting the owner's UAC to deploy.
+
+## Verification snapshot: 2026-07-16 (Simple-mode control parity; every control live-verified incl. case fan)
+
+- **Fan controls card added to the Cooling page in BOTH Simple and Advanced modes**: every writable bounded motherboard fan output (`lhm.control:` Cooling, Experimental/Verified, numeric range) gets the same one-action transactional slider as the GPU families; LHM's duplicate GPU-fan path is excluded (the NVML `gpufan.duty` slider owns the GPU cooler). The GPU controls card on Performance is likewise visible in both modes. Engine-side floors, pump/CPU-fan protections, and read-back are unchanged.
+- **Operator-authorised live test, second pass — ALL controls verified on real hardware**: GPU fan 62 % / power 300 W / core +15 MHz / memory +15 MHz (all PASS with read-back) plus **Case Fan #1 to 60 % and back to 100 % via the LibreHardwareMonitor path (software-control read-back matched)**. One client-side pipe timeout occurred on rapid back-to-back applies to the same LHM channel (second apply succeeded standalone) — noted as a possible client-timeout hardening item, not a service defect. GPU vendor defaults restored via disarm afterwards.
+- Validation: 543 tests, 0 warnings, UI smoke green; Simple-mode Cooling render shows 9 actionable fan outputs. Payload `beta16` published/validated, awaiting owner UAC.
+
+## Verification snapshot: 2026-07-16 (beta17: one-click GPU Auto OC + curve/calibration entry points)
+
+- **Auto OC**: `StartGpuAutoOcCommand` on the always-visible GPU controls card drives the existing bounded tuning engine against `gpuclock.core:` — Performance objective, 83 °C ceiling, 10-minute screening, thermal/WHEA/display-reset aborts, rollback, boot sentinel; the Hardware-control switch supplies both acknowledgements. Result language stays "Passed 10-minute screening", never "stable". Abort + live operation status shown on the same card in both UI modes.
+- **Fan curves & calibration**: the Fan controls card gained a "Set up fan curves & calibration" button (Simple mode) that opens the existing Advanced Lab curve studio/calibration wizard in place; no engine changes.
+- Validation: 543 tests, 0 warnings, UI smoke green; beta16 then beta17 deployed via owner UAC (`runtime-preflight` Ready on beta17). The live Auto OC screening run is the user's to witness — it must not be fabricated on their behalf.
+
+## Verification snapshot: 2026-07-16 (OpenRGB installed by user instruction; lighting writes live via the bridge)
+
+- At the owner's explicit instruction, OpenRGB 0.9 (official openrgb.org release zip, 11.3 MB, GPL-2.0) was downloaded and extracted to `%LOCALAPPDATA%\Programs\OpenRGB` and its SDK server started (`--server --startminimized`, loopback 6742). **Not bundled** — GPL-2.0 vs GPL-3.0 incompatibility means it stays a separate user-installed app, exactly as the designed bridge contract requires. Note: first launch exited immediately (first-run behaviour); second launch is stable.
+- **RigPilot's own `OpenRgbSdkClient` verified end-to-end live**: connected (protocol 4) and enumerated 4 controllers — Lian Li O11 Dynamic Razer Edition (64 LEDs), NZXT Kraken X3 (9), ASUS ROG STRIX X570-E GAMING Aura (8), EVision keyboard (126) — i.e. every device the RGB routing page listed as read-only/setup-needed. **Live write PASS: static #0A84FF at 100% applied to all 4 controllers** through the bridge path the Lighting page uses.
+- OpenRGB is not auto-started at login (persistent-startup config needs owner consent); the Lighting page bridge toggle + Connect is the in-app route. "Better than OpenRGB" remains the native-adapter roadmap (Aura first) + signed pack ecosystem.
+
+## Verification snapshot: 2026-07-16 (beta19: improvement sweep — Auto OC search clamp, OpenRGB auto-launch, fan slider live-init, temp curation)
+
+- Discovered mid-sweep that the service had rolled back to the original Program Files 0.3 image (a declined UAC left beta18 undeployed) — the "service older than dashboard" lock in the user's screenshots was version mismatch, not a code regression. beta19 deploy restored a matched LocalAlpha runtime (runtime-preflight Ready).
+- **Auto OC**: Performance-objective tunes on `gpuclock.*` clamp the search floor to 0 (stock) — the engine previously searched the full driver delta range (−1000..+1000 MHz), wasting screening time on underclocks.
+- **RGB**: `EnsureOpenRgbServerRunningAsync` — the Lighting Connect action now auto-launches an installed OpenRGB (`%LOCALAPPDATA%\Programs\OpenRGB` or Program Files) in `--server --startminimized` mode when no server is running; on-demand only, nothing persistent, absent install falls through to the normal failure message.
+- **Fans**: Cooling-page fan sliders initialise from the fan's live duty sensor (matched by control path suffix, clamped to bounds) instead of defaulting to 100 %.
+- **Temps**: curated-sensor ranking now also promotes hotspot (both spellings) and liquid/coolant temperatures — the paste-mount delta and the AIO's true load signal.
+- Validation: 543 tests, 0 warnings, UI smoke green; beta19 deployed via owner UAC and the dashboard relaunched on the matched image.
 
 ## Change discipline
 

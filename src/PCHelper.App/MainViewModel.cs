@@ -316,6 +316,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public MainViewModel()
     {
         _refreshCommand = new AsyncCommand(_ => RefreshWithFeedbackAsync(), onError: ReportError);
+        _applyGpuControlCommand = new AsyncCommand(
+            parameter => ApplyGpuControlAsync((GpuControlSlider)parameter!),
+            parameter => IsServiceOnline && HardwareControlEnabled && parameter is GpuControlSlider,
+            ReportError);
+        _startGpuAutoOcCommand = new AsyncCommand(
+            _ => StartGpuAutoOcAsync(),
+            _ => IsServiceOnline && HardwareControlEnabled && !HasActiveOperation,
+            ReportError);
         _applyProfileCommand = new AsyncCommand(
             parameter => ApplyProfileCardAsync((ProfileCardDisplay)parameter!),
             parameter => CanUseServiceWrites
@@ -2115,6 +2123,353 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         ? "Select a local game to assign a profile, lighting scene, macro, OSD, and capture preset."
         : $"{SelectedGameProfile?.Name ?? "No profile"} · {SelectedGameLightingScene?.Name ?? "No scene"} · {SelectedGameMacro?.Name ?? "No macro"} · {SelectedGameOsdLayout?.Name ?? "No OSD"} · {SelectedGameCapturePreset?.Name ?? "No capture"}";
 
+    // --- Master hardware-control switch --------------------------------------
+    // One persisted, per-machine owner acknowledgement that arms every
+    // implemented GPU write family (fan duty, power limit, clock offsets)
+    // whenever the service is connected, replacing the per-family per-session
+    // arming ceremony. The service-side contract is unchanged: arming still
+    // requires the Experimental confirmation and exact device id (this switch
+    // supplies them), disarm restores vendor defaults, and the physical
+    // fail-safes (no voltage path, pump/CPU-fan protection, stale-sensor
+    // emergency cooling, rollback on failed verify) are untouched.
+
+    private static readonly string ControlPreferencesPath = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "RigPilot",
+        "control-preferences.json");
+
+    private bool _hardwareControlEnabled = ReadPersistedHardwareControlPreference();
+    private bool _hardwareControlArmedThisConnection;
+
+    public bool HardwareControlEnabled
+    {
+        get => _hardwareControlEnabled;
+        set
+        {
+            if (!Set(ref _hardwareControlEnabled, value))
+            {
+                return;
+            }
+
+            PersistHardwareControlPreference(value);
+            _hardwareControlArmedThisConnection = false;
+            _applyGpuControlCommand.RaiseCanExecuteChanged();
+            _startGpuAutoOcCommand.RaiseCanExecuteChanged();
+            _ = ApplyHardwareControlSafelyAsync(value);
+        }
+    }
+
+    private async Task ApplyHardwareControlSafelyAsync(bool enable)
+    {
+        try
+        {
+            await ApplyHardwareControlAsync(enable);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            ShowNotice($"Hardware control change failed: {exception.Message}", "Warning");
+        }
+    }
+
+    private async Task ApplyHardwareControlAsync(bool enable)
+    {
+        if (!IsServiceOnline || _snapshot is null)
+        {
+            return;
+        }
+
+        (IpcCommand Command, string Prefix)[] families =
+        [
+            (IpcCommand.SetGpuFanControlArmed, "gpufan."),
+            (IpcCommand.SetGpuPowerLimitArmed, "gpupower."),
+            (IpcCommand.SetGpuClockOffsetArmed, "gpuclock.")
+        ];
+        int armed = 0;
+        foreach ((IpcCommand command, string prefix) in families)
+        {
+            string? deviceId = _snapshot.Capabilities
+                .FirstOrDefault(capability => capability.Id.StartsWith(prefix, StringComparison.Ordinal))
+                ?.DeviceId;
+            if (deviceId is null)
+            {
+                continue;
+            }
+
+            IReadOnlyList<string> confirmed = [deviceId];
+            object payload = command switch
+            {
+                IpcCommand.SetGpuFanControlArmed => new SetGpuFanControlArmedRequest(enable, enable, confirmed),
+                IpcCommand.SetGpuPowerLimitArmed => new SetGpuPowerLimitArmedRequest(enable, enable, confirmed),
+                _ => new SetGpuClockOffsetArmedRequest(enable, enable, confirmed)
+            };
+            IpcResponse response = await _client.SendAsync(
+                NamedPipeRequestClient.CreateRequest(command, payload),
+                _lifetime.Token);
+            if (response.Success)
+            {
+                armed++;
+            }
+        }
+
+        _hardwareControlArmedThisConnection = enable && armed > 0;
+        if (armed > 0)
+        {
+            ShowNotice(enable
+                ? $"Hardware control enabled: {armed} GPU write famil{(armed == 1 ? "y" : "ies")} armed for this machine."
+                : "Hardware control disabled; vendor defaults restored.",
+                "Success");
+            await RefreshAsync(full: true, userInitiated: false);
+        }
+    }
+
+    /// <summary>
+    /// Live GPU control sliders (fan duty, power limit, clock offsets). Each
+    /// apply is a normal one-action transactional profile: prepare, bounds
+    /// clamp, apply, read-back verify, rollback on failure. The master
+    /// Hardware-control switch supplies the Experimental + exact-device
+    /// confirmations.
+    /// </summary>
+    public System.Collections.ObjectModel.ObservableCollection<GpuControlSlider> GpuControlSliders { get; } = [];
+
+    /// <summary>Motherboard fan outputs surfaced as the same one-action slider controls.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<GpuControlSlider> FanControlSliders { get; } = [];
+
+    private readonly AsyncCommand _applyGpuControlCommand;
+    private readonly AsyncCommand _startGpuAutoOcCommand;
+
+    public System.Windows.Input.ICommand ApplyGpuControlCommand => _applyGpuControlCommand;
+
+    public System.Windows.Input.ICommand StartGpuAutoOcCommand => _startGpuAutoOcCommand;
+
+    private void RebuildGpuControlSliders()
+    {
+        if (_snapshot is null)
+        {
+            return;
+        }
+
+        (string Prefix, string Label)[] families =
+        [
+            ("gpufan.duty:", "GPU fan duty"),
+            ("gpupower.limit:", "GPU power limit"),
+            ("gpuclock.core:", "GPU core clock offset"),
+            ("gpuclock.memory:", "GPU memory clock offset")
+        ];
+        List<GpuControlSlider> next = [];
+        foreach ((string prefix, string label) in families)
+        {
+            CapabilityDescriptor? capability = _snapshot.Capabilities
+                .FirstOrDefault(item => item.Id.StartsWith(prefix, StringComparison.Ordinal));
+            if (capability?.Range is NumericRange range)
+            {
+                next.Add(new GpuControlSlider
+                {
+                    CapabilityId = capability.Id,
+                    AdapterId = capability.AdapterId,
+                    DeviceId = capability.DeviceId,
+                    Name = label,
+                    Minimum = range.Minimum,
+                    Maximum = range.Maximum,
+                    Default = range.Default,
+                    Unit = capability.Unit ?? string.Empty,
+                    Value = prefix.StartsWith("gpuclock", StringComparison.Ordinal) ? 0
+                        : prefix == "gpufan.duty:" ? range.Maximum
+                        : range.Maximum
+                });
+            }
+        }
+
+        // Rebuild only when the capability set changes so a slider mid-drag is
+        // not reset by the one-second snapshot refresh.
+        if (!next.Select(item => item.CapabilityId).SequenceEqual(GpuControlSliders.Select(item => item.CapabilityId)))
+        {
+            GpuControlSliders.Clear();
+            foreach (GpuControlSlider slider in next)
+            {
+                GpuControlSliders.Add(slider);
+            }
+        }
+
+        // Motherboard fan outputs: every writable bounded cooling control gets
+        // the same slider treatment. The transaction engine still enforces the
+        // floors, pump/CPU-fan protections, and read-back on every apply.
+        List<GpuControlSlider> fans = _snapshot.Capabilities
+            .Where(capability => capability.Id.StartsWith("lhm.control:", StringComparison.Ordinal)
+                && capability.Domain == ControlDomain.Cooling
+                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
+                && capability.Range is NumericRange
+                // The NVML gpufan.duty slider owns the GPU cooler; LHM's own
+                // GPU-fan controls are the same physical fans via a second path.
+                && !capability.Id.Contains("/gpu-nvidia/", StringComparison.Ordinal))
+            .OrderBy(capability => capability.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(capability =>
+            {
+                NumericRange range = (NumericRange)capability.Range!;
+                // Start the slider at the fan's live duty when telemetry
+                // exposes it, so opening the page never suggests a jump to 100%.
+                string controlPath = capability.Id["lhm.control:".Length..];
+                double? currentDuty = _snapshot.Sensors
+                    .FirstOrDefault(sensor => sensor.Unit == "%"
+                        && sensor.Value is not null
+                        && sensor.SensorId.EndsWith(controlPath, StringComparison.Ordinal))
+                    ?.Value;
+                return new GpuControlSlider
+                {
+                    CapabilityId = capability.Id,
+                    AdapterId = capability.AdapterId,
+                    DeviceId = capability.DeviceId,
+                    Name = capability.Name,
+                    Minimum = range.Minimum,
+                    Maximum = range.Maximum,
+                    Unit = capability.Unit ?? "%",
+                    Value = currentDuty is double duty
+                        ? Math.Clamp(duty, range.Minimum, range.Maximum)
+                        : range.Maximum
+                };
+            })
+            .ToList();
+        if (!fans.Select(item => item.CapabilityId).SequenceEqual(FanControlSliders.Select(item => item.CapabilityId)))
+        {
+            FanControlSliders.Clear();
+            foreach (GpuControlSlider fan in fans)
+            {
+                FanControlSliders.Add(fan);
+            }
+        }
+    }
+
+    public async Task ApplyGpuControlAsync(GpuControlSlider slider)
+    {
+        ArgumentNullException.ThrowIfNull(slider);
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+
+        double value = Math.Round(slider.Value);
+        ProfileAction action = new(
+            $"gpu-slider-{Guid.NewGuid():N}",
+            slider.AdapterId,
+            slider.CapabilityId,
+            ControlValue.FromNumeric(value),
+            Required: true,
+            Order: 0);
+        ProfileV2 profile = new(
+            ProfileV2.CurrentSchemaVersion,
+            $"gpu-direct-{slider.CapabilityId}",
+            slider.Name,
+            "Direct GPU control from the Performance page.",
+            [action],
+            new SafetyLimits(),
+            null,
+            null,
+            null,
+            [],
+            [],
+            IsBuiltIn: false,
+            IsExperimental: true);
+        IpcRequest request = NamedPipeRequestClient.CreateRequest(
+            IpcCommand.ApplyProfileV2,
+            new ApplyProfileV2Request(
+                profile,
+                ProfileActivationSource.Manual,
+                ConfirmExperimental: true,
+                [slider.DeviceId],
+                ConfirmManualVoltage: false),
+            _status?.StateRevision,
+            Guid.NewGuid().ToString("N"));
+        IpcResponse response = await _client.SendAsync(request, _lifetime.Token);
+        EnsureSuccess(response);
+        ShowNotice($"{slider.Name} applied and read-back verified at {value:0.##} {slider.Unit}.", "Success");
+        await RefreshAsync(full: true, userInitiated: false);
+    }
+
+    /// <summary>
+    /// One-click GPU auto-OC: targets the armed core clock offset with the
+    /// existing bounded tuning engine (Performance objective, 83 °C ceiling,
+    /// 10-minute screening, WHEA/thermal/display-reset aborts, rollback, boot
+    /// sentinel). The Hardware-control switch supplies the acknowledgements.
+    /// </summary>
+    public async Task StartGpuAutoOcAsync()
+    {
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+
+        OperationTargetDisplay? target = TuneTargets.FirstOrDefault(
+            item => item.Descriptor.Id.StartsWith("gpuclock.core:", StringComparison.Ordinal));
+        if (target is null)
+        {
+            ShowNotice("The GPU core clock target is not available on this system.", "Warning");
+            return;
+        }
+
+        SelectedTuneTarget = target;
+        SelectedTuneObjective = TuningObjective.Performance;
+        TuneTemperatureCeilingText = "83";
+        AdvancedWritesAcknowledged = true;
+        TuneDeviceAcknowledged = true;
+        await StartTuneCoreAsync();
+    }
+
+    private async Task EnsureHardwareControlArmedAsync()
+    {
+        if (HardwareControlEnabled && !_hardwareControlArmedThisConnection)
+        {
+            _hardwareControlArmedThisConnection = true; // set first so a failure does not retry every second
+            await ApplyHardwareControlSafelyAsync(true);
+        }
+    }
+
+    private static bool ReadPersistedHardwareControlPreference()
+    {
+        try
+        {
+            return System.IO.File.Exists(ControlPreferencesPath)
+                && System.Text.Json.JsonSerializer.Deserialize<ControlPreferences>(
+                    System.IO.File.ReadAllText(ControlPreferencesPath))?.HardwareControlEnabled == true;
+        }
+        catch (Exception exception) when (exception is System.IO.IOException or System.Text.Json.JsonException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static void PersistHardwareControlPreference(bool enabled)
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(ControlPreferencesPath)!);
+            System.IO.File.WriteAllText(
+                ControlPreferencesPath,
+                System.Text.Json.JsonSerializer.Serialize(new ControlPreferences(enabled)));
+        }
+        catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException)
+        {
+            // A failed preference write only means the switch resets next launch.
+        }
+    }
+
+    private sealed record ControlPreferences(bool HardwareControlEnabled);
+
+    public sealed class GpuControlSlider
+    {
+        public string CapabilityId { get; init; } = string.Empty;
+        public string AdapterId { get; init; } = string.Empty;
+        public string DeviceId { get; init; } = string.Empty;
+        public string Name { get; init; } = string.Empty;
+        public double Minimum { get; init; }
+        public double Maximum { get; init; }
+        public string Unit { get; init; } = string.Empty;
+        public double Value { get; set; }
+
+        /// <summary>Vendor default (Afterburner-style 100% reference), when the adapter discovered one.</summary>
+        public double? Default { get; init; }
+    }
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -2148,6 +2503,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged(nameof(CanWrite));
             OnPropertyChanged(nameof(CanUseServiceWrites));
             OnPropertyChanged(nameof(WriteStateLabel));
+            _applyGpuControlCommand.RaiseCanExecuteChanged();
+            _startGpuAutoOcCommand.RaiseCanExecuteChanged();
             _applyProfileCommand.RaiseCanExecuteChanged();
             _resetVerifiedCommand.RaiseCanExecuteChanged();
             _startCalibrationCommand.RaiseCanExecuteChanged();
@@ -3860,6 +4217,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             }
 
             DataSourceLabel = "Service";
+            await EnsureHardwareControlArmedAsync();
             DisposeLocalCoordinator();
             UpdateDisplays();
             ApplyCoolingOutputAssignmentForTarget();
@@ -3880,6 +4238,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         catch (Exception exception)
         {
             IsServiceOnline = false;
+            _hardwareControlArmedThisConnection = false; // re-arm on the next successful connection
             _status = null;
             _operation = null;
             NotifyOperationProperties();
@@ -7062,6 +7421,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             && SelectedTuneObjective == TuningObjective.Performance
                 ? range.Maximum
                 : range.Minimum;
+        // A GPU clock-offset overclocking search must never probe below stock:
+        // negative offsets are underclocks and only waste screening time. The
+        // driver delta range spans e.g. -1000..+1000 MHz; clamp the search
+        // floor to 0 (stock) so the engine converges inside the useful half.
+        if (SelectedTuneObjective == TuningObjective.Performance
+            && target.Descriptor.Id.StartsWith("gpuclock.", StringComparison.Ordinal))
+        {
+            minimum = Math.Max(0, minimum);
+        }
         return new TunePlan(
             Guid.NewGuid().ToString("N"),
             target.Descriptor.DeviceId,
@@ -7115,6 +7483,44 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             System.Globalization.CultureInfo.InvariantCulture,
             out result);
 
+    /// <summary>
+    /// If the user has OpenRGB installed but its SDK server is not running,
+    /// launch it minimized on demand (loopback server mode) so "Connect" is a
+    /// single click. Nothing persistent is configured, nothing is downloaded,
+    /// and an absent installation just falls through to the normal
+    /// connection-failed message.
+    /// </summary>
+    private static async Task EnsureOpenRgbServerRunningAsync()
+    {
+        if (System.Diagnostics.Process.GetProcessesByName("OpenRGB").Length > 0)
+        {
+            return;
+        }
+
+        string[] candidates =
+        [
+            System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                @"Programs\OpenRGB\OpenRGB Windows 64-bit\OpenRGB.exe"),
+            System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                @"OpenRGB\OpenRGB.exe")
+        ];
+        string? executable = candidates.FirstOrDefault(System.IO.File.Exists);
+        if (executable is null)
+        {
+            return;
+        }
+
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(executable)
+        {
+            Arguments = "--server --startminimized",
+            UseShellExecute = true
+        });
+        // Give device enumeration a moment before the first SDK negotiation.
+        await Task.Delay(TimeSpan.FromSeconds(8));
+    }
+
     private void EnsureServiceWritesAvailable()
     {
         if (!CanUseServiceWrites)
@@ -7163,6 +7569,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         IsBusy = true;
         try
         {
+            await EnsureOpenRgbServerRunningAsync();
             OpenRgbSdkClient client = new();
             OpenRgbConnectionResult result = await client.ProbeAsync(_lifetime.Token);
             SetOpenRgbControllers(result.Controllers);
@@ -7302,6 +7709,32 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         return match.IsRecognized ? match.DisplayName : null;
     }
 
+    /// <summary>
+    /// NVML publishes read-only informational cards (per-fan telemetry, the
+    /// write-transport feasibility card, the power-limit bounds card) alongside
+    /// the actual writable channels. On the working Cooling/Performance pages
+    /// they read as broken "Read Only" duplicates of controls that work, so
+    /// they are hidden there whenever the corresponding writable channel
+    /// exists. The full evidence set stays visible in the Devices decision
+    /// matrix.
+    /// </summary>
+    private static bool IsInformationalDuplicate(
+        CapabilityDescriptor capability,
+        IReadOnlyList<CapabilityDescriptor> all)
+    {
+        if (capability.Id.StartsWith("nvml.fan", StringComparison.Ordinal))
+        {
+            return all.Any(other => other.Id.StartsWith("gpufan.duty:", StringComparison.Ordinal));
+        }
+
+        if (capability.Id.StartsWith("nvml.power-limit", StringComparison.Ordinal))
+        {
+            return all.Any(other => other.Id.StartsWith("gpupower.limit:", StringComparison.Ordinal));
+        }
+
+        return false;
+    }
+
     private void UpdateDisplays()
     {
         if (_snapshot is null)
@@ -7310,6 +7743,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
 
         UpdateMonitoringTrends();
+        RebuildGpuControlSliders();
         ActiveProfileName = Profiles.FirstOrDefault(profile => profile.Id == _status?.ActiveProfileId)?.Name ?? "None";
         Replace(ProfileCards, Profiles.Select(profile =>
         {
@@ -7345,11 +7779,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         Replace(CoolingCapabilities, _snapshot.Capabilities
             .Where(IsCoolingCapability)
+            .Where(capability => !IsInformationalDuplicate(capability, _snapshot.Capabilities))
             .OrderBy(CapabilityRank)
             .ThenBy(capability => capability.Name, StringComparer.OrdinalIgnoreCase)
             .Select(CapabilityDisplay.From));
         Replace(PerformanceCapabilities, _snapshot.Capabilities
             .Where(capability => !IsCoolingCapability(capability) && capability.Domain != ControlDomain.Lighting)
+            .Where(capability => !IsInformationalDuplicate(capability, _snapshot.Capabilities))
             .OrderBy(CapabilityRank)
             .ThenBy(capability => capability.Name, StringComparer.OrdinalIgnoreCase)
             .Select(CapabilityDisplay.From));
@@ -8224,7 +8660,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             return 0;
         }
 
-        return name.Contains("hot spot", StringComparison.OrdinalIgnoreCase) ? 1 : 2;
+        // Hotspot (either spelling) and coolant temperature are the two most
+        // actionable secondary readings: hotspot-to-core delta reveals paste or
+        // mount problems, and liquid temperature is the AIO's true load signal.
+        return name.Contains("hot spot", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("hotspot", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("liquid", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("coolant", StringComparison.OrdinalIgnoreCase)
+            ? 1
+            : 2;
     }
 
     private static void EnsureSuccess(IpcResponse response)
@@ -8443,6 +8887,40 @@ public sealed record CapabilityDisplay(
     string NextSafeStep,
     string StateTone)
 {
+    // The capability lists are rebuilt on every snapshot refresh, which
+    // recreates these display records. The details-expander state must survive
+    // that churn or an open expander snaps shut within a second, so it is
+    // persisted per capability ID for the lifetime of the process.
+    private static readonly HashSet<string> ExpandedDetailIds = [];
+
+    /// <summary>Stable capability identity used to persist UI state across refreshes.</summary>
+    public string Id { get; init; } = string.Empty;
+
+    public bool IsDetailsExpanded
+    {
+        get
+        {
+            lock (ExpandedDetailIds)
+            {
+                return ExpandedDetailIds.Contains(Id);
+            }
+        }
+        set
+        {
+            lock (ExpandedDetailIds)
+            {
+                if (value)
+                {
+                    ExpandedDetailIds.Add(Id);
+                }
+                else
+                {
+                    ExpandedDetailIds.Remove(Id);
+                }
+            }
+        }
+    }
+
     public static CapabilityDisplay From(CapabilityDescriptor capability)
     {
         string range = capability.Range is NumericRange numeric
@@ -8459,10 +8937,25 @@ public sealed record CapabilityDisplay(
             CapabilityAccessState.Blocked or CapabilityAccessState.Faulted => "Critical",
             _ => "Neutral"
         };
+        // Friendlier state labels: an armable-but-disarmed control reads as
+        // "Off" rather than bureaucratic "Read Only"; an armed Experimental
+        // control reads as "On". The underlying AccessState is unchanged.
+        // "Off"/"On" only for controls the Hardware-control switch can actually
+        // arm; permanently informational read-only cards keep "Read Only" so
+        // they do not masquerade as switches.
+        bool armable = capability.Id.StartsWith("gpufan.", StringComparison.Ordinal)
+            || capability.Id.StartsWith("gpupower.", StringComparison.Ordinal)
+            || capability.Id.StartsWith("gpuclock.", StringComparison.Ordinal);
+        string stateLabel = capability.State switch
+        {
+            CapabilityAccessState.ReadOnly when armable => "Off",
+            CapabilityAccessState.Experimental when armable => "On",
+            _ => SplitWords(capability.State.ToString())
+        };
         return new CapabilityDisplay(
             capability.State,
             capability.Name,
-            SplitWords(capability.State.ToString()),
+            stateLabel,
             capability.Reason,
             range,
             SplitWords(capability.Evidence.ToString()),
@@ -8470,7 +8963,10 @@ public sealed record CapabilityDisplay(
             capability.Risk.ToString(),
             owner,
             nextSafeStep,
-            tone);
+            tone)
+        {
+            Id = capability.Id
+        };
     }
 
     private static string GetNextSafeStep(CapabilityDescriptor capability) => capability.State switch

@@ -190,6 +190,43 @@ public sealed class UiPresentationTests
     }
 
     [Fact]
+    public void CapabilityDetailsExpansionSurvivesTheDisplayRecreationEveryRefreshCauses()
+    {
+        CapabilityDescriptor capability = new(
+            $"fan:expander-{Guid.NewGuid():N}",
+            "adapter",
+            "board",
+            "Case fan",
+            CapabilityAccessState.ReadOnly,
+            AdapterExecutionContext.SystemService,
+            ControlValueKind.Numeric,
+            new NumericRange(20, 100, 5),
+            "%",
+            RiskLevel.Guarded,
+            EvidenceLevel.Detected,
+            null,
+            "Telemetry only.",
+            CanResetToDefault: false,
+            ControlDomain.Cooling);
+
+        CapabilityDisplay first = CapabilityDisplay.From(capability);
+        Assert.False(first.IsDetailsExpanded);
+
+        first.IsDetailsExpanded = true;
+
+        // The snapshot refresh rebuilds the list every second, producing a NEW
+        // display record for the same capability; the open expander must survive.
+        CapabilityDisplay recreated = CapabilityDisplay.From(capability);
+        Assert.True(recreated.IsDetailsExpanded);
+
+        recreated.IsDetailsExpanded = false;
+        Assert.False(CapabilityDisplay.From(capability).IsDetailsExpanded);
+
+        CapabilityDisplay other = CapabilityDisplay.From(capability with { Id = $"fan:other-{Guid.NewGuid():N}" });
+        Assert.False(other.IsDetailsExpanded); // state is per capability, not global
+    }
+
+    [Fact]
     public void ExperimentalControlCenterRoutesOnlyBoundedNonProtectedChassisFans()
     {
         CapabilityDescriptor chassisFan = new(
