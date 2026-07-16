@@ -298,7 +298,15 @@ try {
     if (Test-Path -LiteralPath $serviceDataRoot -PathType Container) {
         New-Item -ItemType Directory -Path $stateBackupPath -Force | Out-Null
         Get-ChildItem -LiteralPath $serviceDataRoot -Force | ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $stateBackupPath -Recurse -Force
+            # SQLite -shm/-wal sidecar files are transient: they can vanish
+            # between enumeration and copy when the service releases the
+            # database. A file that no longer exists needs no backup.
+            try {
+                Copy-Item -LiteralPath $_.FullName -Destination $stateBackupPath -Recurse -Force -ErrorAction Stop
+            }
+            catch [System.Management.Automation.ItemNotFoundException] {
+                Write-Verbose "Skipped transient file that disappeared during backup: $($_.FullName)"
+            }
         }
         $manifest.stateBackupCreated = $true
         Write-Manifest $manifest $manifestPath

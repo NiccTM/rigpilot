@@ -88,10 +88,39 @@ $installArguments = @{
 if (-not [string]::IsNullOrWhiteSpace($DeploymentRoot)) {
     $installArguments.DeploymentRoot = $DeploymentRoot
 }
-$deployment = & $installScript @installArguments
+
+$reinstalledPreviousAlpha = $false
+try {
+    $deployment = & $installScript @installArguments
+}
+catch {
+    # The restore-first step has already returned the service to the original
+    # Program Files image, so a failed install would otherwise strand the
+    # machine on the old runtime ("rolled back" from the operator's point of
+    # view). The previously active LocalAlpha payload directory is retained on
+    # disk, so best-effort re-install it before surfacing the failure.
+    $installError = $_
+    if ($restored -and $previousImagePath -match '(?i)^"?(?<exe>.+?PCHelper\.Service\.exe)') {
+        $previousPayload = Split-Path -Parent (Split-Path -Parent $Matches.exe)
+        if (Test-Path -LiteralPath (Join-Path $previousPayload "service\PCHelper.Service.exe") -PathType Leaf) {
+            try {
+                & $installScript -PayloadRoot $previousPayload -ServiceTimeoutSeconds $ServiceTimeoutSeconds | Out-Null
+                $reinstalledPreviousAlpha = (Get-PCHelperImagePath) -match '(?i)\\RigPilot\\LocalAlpha\\'
+            }
+            catch {
+                # Fall through: the original registry backup restore already ran.
+            }
+        }
+    }
+    if ($reinstalledPreviousAlpha) {
+        throw "Installing the new payload failed and the previously active LocalAlpha runtime was re-installed instead: $installError"
+    }
+    throw
+}
 
 [pscustomobject]@{
     PreviousImagePath = $previousImagePath
     RestoredExistingLocalAlpha = $restored
+    ReinstalledPreviousAlphaAfterFailure = $reinstalledPreviousAlpha
     Deployment = $deployment
 }
