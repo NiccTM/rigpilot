@@ -79,6 +79,42 @@ public sealed class OpenRgbSdkClient(
             $"Applied {rgbHex.ToUpperInvariant()} at {brightnessPercent}% to {session.Controllers.Count(item => item.LedCount > 0)} controller(s).");
     }
 
+    /// <summary>
+    /// Applies a static per-LED colourway frame to every controller through the
+    /// same custom-mode + UpdateLeds path as <see cref="SetStaticColourAsync"/>.
+    /// The frame is deterministic and written once; no animation loop runs.
+    /// </summary>
+    public async Task<OpenRgbConnectionResult> SetColourwayAsync(
+        string colourwayId,
+        string rgbHex,
+        int brightnessPercent,
+        CancellationToken cancellationToken)
+    {
+        uint staticColour = ParseColour(rgbHex, 100);
+        (byte R, byte G, byte B) staticRgb = ((byte)staticColour, (byte)(staticColour >> 8), (byte)(staticColour >> 16));
+        await using OpenRgbSession session = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        foreach (OpenRgbController controller in session.Controllers.Where(item => item.LedCount > 0))
+        {
+            await WritePacketAsync(
+                session.Stream, controller.Id, SetCustomMode, ReadOnlyMemory<byte>.Empty, cancellationToken).ConfigureAwait(false);
+            uint[] frame = LightingColourways.Generate(colourwayId, controller.LedCount, staticRgb, brightnessPercent);
+            byte[] payload = new byte[checked(6 + (controller.LedCount * 4))];
+            BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, 4), (uint)payload.Length);
+            BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4, 2), checked((ushort)controller.LedCount));
+            for (int index = 0; index < controller.LedCount; index++)
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(6 + (index * 4), 4), frame[index]);
+            }
+
+            await WritePacketAsync(session.Stream, controller.Id, UpdateLeds, payload, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new OpenRgbConnectionResult(
+            session.ProtocolVersion,
+            session.Controllers,
+            $"Applied the '{colourwayId}' colourway at {brightnessPercent}% to {session.Controllers.Count(item => item.LedCount > 0)} controller(s).");
+    }
+
     private async Task<OpenRgbSession> ConnectAsync(CancellationToken cancellationToken)
     {
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

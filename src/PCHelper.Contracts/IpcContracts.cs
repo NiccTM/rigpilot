@@ -138,7 +138,8 @@ public enum IpcCommand
     SetCpuTuningArmed,
     StartPresentMonBenchmark,
     StopPresentMonBenchmark,
-    GetPresentMonBenchmarkStatus
+    GetPresentMonBenchmarkStatus,
+    SetKrakenLighting
 }
 
 public static class ProtocolConstants

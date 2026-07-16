@@ -17,7 +17,7 @@ internal sealed class AdapterHostControllerDiscoveryProcess : IControllerDiscove
     private readonly Process _process;
     private bool _disposed;
 
-    public AdapterHostControllerDiscoveryProcess(string discoveryArgument = "--discover-controllers")
+    public AdapterHostControllerDiscoveryProcess(params string[] arguments)
     {
         string executable = AdapterHostProxy.ResolveAdapterHostPath();
         ProcessStartInfo startInfo = new(executable)
@@ -29,7 +29,10 @@ internal sealed class AdapterHostControllerDiscoveryProcess : IControllerDiscove
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        startInfo.ArgumentList.Add(discoveryArgument);
+        foreach (string argument in arguments.Length == 0 ? ["--discover-controllers"] : arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
 
         _process = Process.Start(startInfo)
             ?? throw new ControllerDiscoveryProcessException("The discovery process could not be started.");

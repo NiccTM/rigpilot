@@ -384,6 +384,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.DiscoverControllers => await DiscoverControllersAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.DiscoverHidInventory => await DiscoverHidInventoryAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.ReadKrakenTelemetry => await ReadKrakenTelemetryAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetKrakenLighting => await SetKrakenLightingAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.ReadRyzenSmuFeasibility => await ReadRyzenSmuFeasibilityAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuFanControlArmed => await SetGpuFanControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuPowerLimitArmed => await SetGpuPowerLimitArmedAsync(request, cancellationToken).ConfigureAwait(false),
@@ -939,7 +940,21 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 .FirstOrDefault();
             if (session is null)
             {
-                return $"Cooling output '{output.CapabilityId}' has no physically observed commissioning session.";
+                // Conservative automatic-mode route (owner amendment 2026-07-16):
+                // an uncalibrated output is acceptable only when its floor is at
+                // or above the deterministic 50% safety floor AND its ceiling is
+                // the full controller maximum (emergency headroom). Bounds/reset
+                // checks above and pump/CPU-fan role blocks still apply, and the
+                // graph runtime's stale-sensor maximum-cooling behaviour is
+                // unchanged. Anything below the safety floor still requires a
+                // physically observed commissioning session and calibration.
+                if (output.Minimum >= Math.Max(range.Minimum, AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent) - 1e-6
+                    && output.Maximum >= range.Maximum - 1e-6)
+                {
+                    continue;
+                }
+
+                return $"Cooling output '{output.CapabilityId}' has no physically observed commissioning session; without one, automatic mode requires a minimum duty of at least {AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent:0}% and the full controller maximum.";
             }
 
             FanCalibrationV2? calibration = calibrations
@@ -3278,6 +3293,28 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ContainedKrakenTelemetry telemetry = new(
             static () => new AdapterHostControllerDiscoveryProcess("--read-kraken"));
         KrakenTelemetryV1 result = await telemetry.ReadAsync(cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private async Task<IpcResponse> SetKrakenLightingAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        // RigPilot's own native Kraken lighting write. Experimental and
+        // double-confirmed (explicit Experimental flag + exact device id);
+        // lighting only — pump/cooling registers are never touched — and the
+        // write runs in the crash-contained Adapter Host child. There is no
+        // firmware read-back for lighting, so the result never claims
+        // verification; an exclusively-held device is a designed refusal.
+        KrakenLightingRequestV1 payload = IpcJson.FromElement<KrakenLightingRequestV1>(request.Payload)
+            ?? throw new InvalidDataException("SetKrakenLighting requires a KrakenLightingRequestV1 payload.");
+        if (payload.Validate() is string refusal)
+        {
+            return Failure(request, "KRAKEN_LIGHTING_NOT_CONFIRMED", refusal);
+        }
+
+        string argument = payload.TurnOff ? "off" : payload.Colour.Trim().TrimStart('#');
+        ContainedKrakenLighting lighting = new(
+            () => new AdapterHostControllerDiscoveryProcess("--set-kraken-rgb", argument));
+        KrakenLightingResultV1 result = await lighting.WriteAsync(cancellationToken).ConfigureAwait(false);
         return Success(request, result);
     }
 

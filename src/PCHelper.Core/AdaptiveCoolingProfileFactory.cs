@@ -48,6 +48,133 @@ public static class AdaptiveCoolingProfileFactory
             samples);
     }
 
+    /// <summary>
+    /// One-click "Automatic mode": a conservative temperature→duty curve over
+    /// one or more writable cooling outputs that have NOT been calibrated.
+    /// Safety comes from construction instead of measurement: every output's
+    /// floor is the deterministic 50% safety floor (the established policy for
+    /// unverified fans — no fan stalls at half duty), the curve always reaches
+    /// the controller maximum for emergency headroom, and the graph runtime's
+    /// stale-sensor maximum-cooling behaviour applies unchanged. Pump and
+    /// CPU-fan role protections are enforced by the service on save and apply.
+    /// </summary>
+    public static AdaptiveCoolingProfileDraft CreateAutomaticMode(
+        IReadOnlyList<CapabilityDescriptor> outputs,
+        string name,
+        IReadOnlyList<SensorSample> samples,
+        bool preferGpuSourceOnly = false)
+    {
+        ArgumentNullException.ThrowIfNull(outputs);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(samples);
+        if (outputs.Count == 0)
+        {
+            throw new InvalidOperationException("Automatic mode needs at least one writable cooling output.");
+        }
+
+        SensorSample[] temperatureSources = SelectTemperatureSources(samples);
+        if (preferGpuSourceOnly)
+        {
+            SensorSample[] gpuOnly = [.. temperatureSources.Where(sample =>
+                ContainsAny(Identity(sample), "gpu", "hot spot", "hotspot", "junction", "geforce", "radeon", "arc", "nvidia"))];
+            if (gpuOnly.Length > 0)
+            {
+                temperatureSources = gpuOnly;
+            }
+        }
+        if (temperatureSources.Length == 0)
+        {
+            throw new InvalidOperationException("No current CPU or GPU temperature source is available for automatic mode.");
+        }
+
+        string token = ToToken(name);
+        List<CoolingGraphNodeV1> nodes = [];
+        List<string> sourceNodeIds = [];
+        foreach ((SensorSample sample, int index) in temperatureSources.Select((sample, index) => (sample, index)))
+        {
+            string nodeId = $"source-{index + 1}";
+            sourceNodeIds.Add(nodeId);
+            nodes.Add(new CoolingGraphNodeV1(
+                nodeId, sample.Name, CoolingNodeKind.Sensor, [], sample.SensorId, [],
+                new Dictionary<string, double>(), null, CoolingMixFunction.Maximum));
+        }
+
+        string mixedSource = sourceNodeIds[0];
+        if (sourceNodeIds.Count > 1)
+        {
+            mixedSource = "mixed-temperature";
+            nodes.Add(new CoolingGraphNodeV1(
+                mixedSource, "Maximum temperature", CoolingNodeKind.Mix, sourceNodeIds, null, [],
+                new Dictionary<string, double>(), null, CoolingMixFunction.Maximum));
+        }
+
+        List<CoolingGraphOutputV1> graphOutputs = [];
+        bool anyExperimental = false;
+        foreach (CapabilityDescriptor output in outputs)
+        {
+            if (output.Domain is not (ControlDomain.Cooling or ControlDomain.CoolingSafety)
+                || output.ValueKind != ControlValueKind.Numeric
+                || output.Range is not NumericRange range)
+            {
+                throw new InvalidOperationException($"'{output.Name}' is not a numeric cooling control with bounds.");
+            }
+
+            double floor = Math.Max(range.Minimum, ConservativeFloorDutyPercent);
+            if (floor >= range.Maximum)
+            {
+                throw new InvalidOperationException($"'{output.Name}' leaves no dynamic range above the {ConservativeFloorDutyPercent:0}% safety floor.");
+            }
+
+            string curveNodeId = $"auto-curve-{graphOutputs.Count + 1}";
+            double quietDuty = Math.Max(floor, Math.Min(range.Maximum, 55));
+            double loadDuty = Math.Max(floor, Math.Min(range.Maximum, 75));
+            nodes.Add(new CoolingGraphNodeV1(
+                curveNodeId, $"{output.Name} automatic curve", CoolingNodeKind.Graph, [mixedSource], null,
+                [
+                    new CurvePoint(40, floor),
+                    new CurvePoint(60, quietDuty),
+                    new CurvePoint(75, loadDuty),
+                    new CurvePoint(85, range.Maximum)
+                ],
+                new Dictionary<string, double>
+                {
+                    ["hysteresisUp"] = 1,
+                    ["hysteresisDown"] = 2,
+                    ["responseUpSeconds"] = 1,
+                    ["responseDownSeconds"] = 5
+                }));
+            graphOutputs.Add(new CoolingGraphOutputV1(
+                output.Id, curveNodeId, FanOutputMode.DutyPercent,
+                floor, range.Maximum, 0, StepUpPerSecond: 20, StepDownPerSecond: 8, AvoidBands: []));
+            anyExperimental |= output.State == CapabilityAccessState.Experimental;
+        }
+
+        CoolingGraphV1 graph = new(
+            CoolingGraphV1.CurrentSchemaVersion,
+            $"auto.cooling.{token}",
+            $"{name} automatic mode",
+            nodes,
+            graphOutputs);
+        ProfileV2 profile = new(
+            ProfileV2.CurrentSchemaVersion,
+            $"auto.profile.{token}",
+            $"{name} automatic mode",
+            $"Conservative temperature curve with a {ConservativeFloorDutyPercent:0}% duty floor on every output; stale sensors command maximum cooling.",
+            [],
+            new SafetyLimits(),
+            graph.Id,
+            LightingSceneId: null,
+            OsdLayoutId: null,
+            ManualOnlyActionIds: [],
+            AutomationReferences: [],
+            IsBuiltIn: false,
+            IsExperimental: anyExperimental);
+        return new AdaptiveCoolingProfileDraft(graph, profile, [.. temperatureSources.Select(sample => sample.SensorId)]);
+    }
+
+    /// <summary>The deterministic duty floor applied to uncalibrated automatic-mode outputs.</summary>
+    public const double ConservativeFloorDutyPercent = 50;
+
     private static AdaptiveCoolingProfileDraft CreateCore(
         CapabilityDescriptor output,
         double calibratedMinimumDutyPercent,
