@@ -615,6 +615,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public ObservableCollection<SensorDisplay> ImportantSensors { get; } = [];
 
+    public ObservableCollection<SensorDisplay> CoolingSensors { get; } = [];
+
+    public ObservableCollection<SensorDisplay> PerformanceSensors { get; } = [];
+
     public ObservableCollection<ProfileV1> Profiles { get; } = [];
 
     public ObservableCollection<ProfileCardDisplay> ProfileCards { get; } = [];
@@ -3172,6 +3176,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public int RunningConflictCount => _snapshot?.Conflicts.Count(conflict => conflict.IsRunning) ?? 0;
 
     public bool HasImportantSensors => ImportantSensors.Count > 0;
+
+    public bool HasCoolingSensors => CoolingSensors.Count > 0;
+
+    public bool HasPerformanceSensors => PerformanceSensors.Count > 0;
 
     public bool HasCoolingCapabilities => CoolingCapabilities.Count > 0;
 
@@ -7315,6 +7323,18 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             FormatSensorValue(sensor),
             TemperatureSeverity(sensor),
             SensorGlyph(sensor.Unit))));
+        Replace(CoolingSensors, SelectCoolingSensors(_snapshot).Select(sensor => new SensorDisplay(
+            sensor.Name,
+            FindDevice(sensor.DeviceId),
+            FormatSensorValue(sensor),
+            TemperatureSeverity(sensor),
+            SensorGlyph(sensor.Unit))));
+        Replace(PerformanceSensors, SelectPerformanceSensors(_snapshot).Select(sensor => new SensorDisplay(
+            sensor.Name,
+            FindDevice(sensor.DeviceId),
+            FormatSensorValue(sensor),
+            TemperatureSeverity(sensor),
+            SensorGlyph(sensor.Unit))));
 
         _allDevices.Clear();
         _allDevices.AddRange(_snapshot.Devices
@@ -7764,6 +7784,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(WarningCount));
         OnPropertyChanged(nameof(RunningConflictCount));
         OnPropertyChanged(nameof(HasImportantSensors));
+        OnPropertyChanged(nameof(HasCoolingSensors));
+        OnPropertyChanged(nameof(HasPerformanceSensors));
         OnPropertyChanged(nameof(HasCoolingCapabilities));
         OnPropertyChanged(nameof(HasPerformanceCapabilities));
         OnPropertyChanged(nameof(HasCapabilityDecisions));
@@ -8083,6 +8105,98 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             .ThenBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
             .Take(3);
         return temperatures.Concat(fans).Concat(power);
+    }
+
+    /// <summary>
+    /// Live read-only readings for the Simple Cooling page: spinning fans and
+    /// pumps (RPM), their commanded duties (%), and liquid/coolant temperatures.
+    /// </summary>
+    private static IEnumerable<SensorSample> SelectCoolingSensors(HardwareSnapshot snapshot)
+    {
+        List<SensorSample> candidates = GoodSensors(snapshot);
+
+        IEnumerable<SensorSample> speeds = candidates
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "RPM" && sensor.Value > 0)
+            .OrderBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(8);
+        IEnumerable<SensorSample> duties = candidates
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "%"
+                && (sensor.Name.Contains("fan", StringComparison.OrdinalIgnoreCase)
+                    || sensor.Name.Contains("pump", StringComparison.OrdinalIgnoreCase)
+                    || sensor.Name.Contains("control", StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(6);
+        IEnumerable<SensorSample> liquid = candidates
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "°C" && sensor.Value > 1 && sensor.Value < 130
+                && (sensor.Name.Contains("liquid", StringComparison.OrdinalIgnoreCase)
+                    || sensor.Name.Contains("coolant", StringComparison.OrdinalIgnoreCase)
+                    || sensor.Name.Contains("water", StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(2);
+        return liquid.Concat(speeds).Concat(duties);
+    }
+
+    /// <summary>
+    /// Live read-only readings for the Simple Performance page: CPU/GPU
+    /// utilisation, headline clocks, and power draw.
+    /// </summary>
+    private static IEnumerable<SensorSample> SelectPerformanceSensors(HardwareSnapshot snapshot)
+    {
+        Func<SensorSample, bool> cpuOrGpu = FromDeviceKinds(snapshot, DeviceKind.Cpu, DeviceKind.Gpu);
+        List<SensorSample> candidates = [.. GoodSensors(snapshot).Where(cpuOrGpu)];
+
+        IEnumerable<SensorSample> loads = candidates
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "%"
+                && (sensor.Name.Contains("total", StringComparison.OrdinalIgnoreCase)
+                    || sensor.Name.Equals("GPU Core", StringComparison.OrdinalIgnoreCase)
+                    || sensor.Name.Contains("d3d 3d", StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(sensor => SensorNameRank(sensor.Name))
+            .ThenBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(3);
+        IEnumerable<SensorSample> clocks = candidates
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "MHz" && sensor.Value > 0
+                && (sensor.Name.Contains("core", StringComparison.OrdinalIgnoreCase)
+                    || sensor.Name.Contains("memory", StringComparison.OrdinalIgnoreCase))
+                && !sensor.Name.Contains("effective", StringComparison.OrdinalIgnoreCase)
+                && !sensor.Name.Contains('#', StringComparison.Ordinal))
+            .OrderBy(sensor => SensorNameRank(sensor.Name))
+            .ThenBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(4);
+        IEnumerable<SensorSample> power = candidates
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "W" && sensor.Value > 0
+                && (sensor.Name.Contains("package", StringComparison.OrdinalIgnoreCase)
+                    || sensor.Name.Contains("gpu", StringComparison.OrdinalIgnoreCase)
+                    || sensor.Name.Contains("total", StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(sensor => SensorNameRank(sensor.Name))
+            .ThenBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(3);
+        return loads.Concat(clocks).Concat(power);
+    }
+
+    /// <summary>
+    /// Deduplicated finite Good-quality samples from named devices — the shared
+    /// candidate pool for curated cards. The unit is part of the dedupe key: a
+    /// fan tachometer (RPM) and its duty control (%) legitimately share a name.
+    /// </summary>
+    private static List<SensorSample> GoodSensors(HardwareSnapshot snapshot)
+    {
+        HashSet<string> namedDevices = [.. snapshot.Devices
+            .Where(device => !string.IsNullOrWhiteSpace(device.Name))
+            .Select(device => device.Id)];
+        return [.. snapshot.Sensors
+            .Where(sensor => sensor.Quality == SensorQuality.Good && sensor.Value is double value && double.IsFinite(value))
+            .Where(sensor => namedDevices.Contains(sensor.DeviceId))
+            .GroupBy(sensor => (sensor.DeviceId, sensor.Name, NormaliseUnit(sensor.Unit)))
+            .Select(group => group.First())];
+    }
+
+    /// <summary>Sensor filter for devices of the given kinds (e.g. keep storage activity off the Performance card).</summary>
+    private static Func<SensorSample, bool> FromDeviceKinds(HardwareSnapshot snapshot, params DeviceKind[] kinds)
+    {
+        HashSet<string> matching = [.. snapshot.Devices
+            .Where(device => kinds.Contains(device.Kind))
+            .Select(device => device.Id)];
+        return sensor => matching.Contains(sensor.DeviceId);
     }
 
     private static string TemperatureSeverity(SensorSample sensor)
