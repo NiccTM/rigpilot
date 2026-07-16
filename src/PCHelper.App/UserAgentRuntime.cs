@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Collections.Concurrent;
 using System.Security.Principal;
@@ -17,6 +17,9 @@ public sealed class UserAgentRuntime : IAsyncDisposable
     private readonly SemaphoreSlim _effectGate = new(1, 1);
     private readonly IMacroRecorder _macroRecorder;
     private readonly IDesktopSnapshotBackend _desktopSnapshots;
+    private readonly IDesktopVideoRecorder _videoRecorder;
+    private readonly IRtssOsdBridge _rtssOsd;
+    private readonly IFrametimeBenchmarkRecorder _frametimeBenchmark;
     private readonly IMonitorBrightnessBackend _monitorBrightness;
     private readonly IInteractiveFanPreflightLauncher _interactiveFanPreflight;
     private readonly HashSet<string> _gameBarPackageSids;
@@ -35,7 +38,10 @@ public sealed class UserAgentRuntime : IAsyncDisposable
         IEnumerable<System.Security.Principal.SecurityIdentifier>? gameBarPackageSids = null,
         IDesktopSnapshotBackend? desktopSnapshots = null,
         IInteractiveFanPreflightLauncher? interactiveFanPreflight = null,
-        IMonitorBrightnessBackend? monitorBrightness = null)
+        IMonitorBrightnessBackend? monitorBrightness = null,
+        IDesktopVideoRecorder? videoRecorder = null,
+        IRtssOsdBridge? rtssOsdBridge = null,
+        IFrametimeBenchmarkRecorder? frametimeBenchmark = null)
     {
         string resolvedStateRoot = stateRoot is null
             ? Path.Combine(
@@ -46,6 +52,9 @@ public sealed class UserAgentRuntime : IAsyncDisposable
         _store = new SqliteStateStore(Path.Combine(resolvedStateRoot, "state.db"));
         _macroRecorder = macroRecorder ?? new WindowsMacroInputRecorder();
         _desktopSnapshots = desktopSnapshots ?? new WindowsDesktopSnapshotBackend();
+        _videoRecorder = videoRecorder ?? new WindowsDesktopVideoRecorder(() => _desktopSnapshots!.DiscoverTargets());
+        _rtssOsd = rtssOsdBridge ?? new RtssSharedMemoryBridge();
+        _frametimeBenchmark = frametimeBenchmark ?? new FrametimeBenchmarkRecorder(() => _rtssOsd!.ReadFrameStats());
         _monitorBrightness = monitorBrightness ?? new WindowsMonitorBrightnessBackend();
         _interactiveFanPreflight = interactiveFanPreflight ?? new ElevatedInteractiveFanPreflightLauncher();
         _gameBarPackageSids = new HashSet<string>(
@@ -86,7 +95,7 @@ public sealed class UserAgentRuntime : IAsyncDisposable
                     ProtocolConstants.LegacyReadOnlyVersion,
                     typeof(UserAgentRuntime).Assembly.GetName().Version?.ToString() ?? "0.4.0-alpha",
                     _revision,
-                    ["workflows", "effects", "effect-host", "games", "macros", "macro-recording", "scripts", "osd", "osd-presentation", "monitoring-preferences", "monitoring-comparison", "overlay-status", "capture", "desktop-snapshot", "monitor-brightness", "wgc-recording-preflight", "interactive-fan-preflight"])),
+                    ["workflows", "effects", "effect-host", "games", "macros", "macro-recording", "scripts", "osd", "osd-presentation", "monitoring-preferences", "monitoring-comparison", "overlay-status", "capture", "desktop-snapshot", "monitor-brightness", "wgc-recording-preflight", "interactive-fan-preflight", "rtss-osd", "frametime-benchmark"])),
                 IpcCommand.GetWorkflows => await GetAsync<AutomationWorkflowV1>(request, SuiteEntityKind.AutomationWorkflow, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SaveWorkflow => await SaveWorkflowAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.DeleteWorkflow => await DeleteAsync(request, SuiteEntityKind.AutomationWorkflow, cancellationToken).ConfigureAwait(false),
@@ -124,6 +133,16 @@ public sealed class UserAgentRuntime : IAsyncDisposable
                 IpcCommand.SaveCapturePreset => await SaveCapturePresetAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.GetCaptureTargets => Success(request, _desktopSnapshots.DiscoverTargets()),
                 IpcCommand.CaptureDesktopSnapshot => await CaptureDesktopSnapshotAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.StartVideoRecording => await StartVideoRecordingAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.StopVideoRecording => Success(request, await _videoRecorder.StopAsync(cancellationToken).ConfigureAwait(false)),
+                IpcCommand.GetVideoRecordingStatus => Success(request, _videoRecorder.Status),
+                IpcCommand.GetRtssOsdBridgeStatus => Success(request, _rtssOsd.Status),
+                IpcCommand.GetRtssFrameStats => Success(request, _rtssOsd.ReadFrameStats()),
+                IpcCommand.PublishRtssOsdText => PublishRtssOsdText(request),
+                IpcCommand.ReleaseRtssOsd => ReleaseRtssOsd(request),
+                IpcCommand.StartFrametimeBenchmark => StartFrametimeBenchmark(request),
+                IpcCommand.StopFrametimeBenchmark => Success(request, _frametimeBenchmark.StopBenchmark()),
+                IpcCommand.GetFrametimeBenchmarkStatus => Success(request, _frametimeBenchmark.Status),
                 IpcCommand.GetMonitorBrightnesses => Success(request, _monitorBrightness.Discover()),
                 IpcCommand.SetMonitorBrightness => await SetMonitorBrightnessAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.RunInteractiveFanPreflight => await RunInteractiveFanPreflightAsync(request, cancellationToken).ConfigureAwait(false),
@@ -181,6 +200,8 @@ public sealed class UserAgentRuntime : IAsyncDisposable
             }
         }
         await _macroRecorder.DisposeAsync().ConfigureAwait(false);
+        _frametimeBenchmark.Dispose();
+        _rtssOsd.Dispose();
         _macroGate.Dispose();
         _effectGate.Dispose();
         _snapshotGate.Dispose();
@@ -745,6 +766,88 @@ public sealed class UserAgentRuntime : IAsyncDisposable
         {
             _snapshotGate.Release();
         }
+    }
+
+    private async Task<IpcResponse> StartVideoRecordingAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        VideoRecordingStartRequestV1 payload = Payload<VideoRecordingStartRequestV1>(request);
+        if (payload.SchemaVersion != VideoRecordingStartRequestV1.CurrentSchemaVersion
+            || payload.Target is null
+            || string.IsNullOrWhiteSpace(payload.Target.StableId))
+        {
+            return Failure(request, "INVALID_CAPTURE_REQUEST", "The recording target or schema version is invalid.");
+        }
+        if (!payload.ConfirmedVisibleCapture)
+        {
+            return Failure(request, "CAPTURE_CONFIRMATION_REQUIRED", "Video recording requires explicit visible-session confirmation.");
+        }
+        if (string.IsNullOrWhiteSpace(payload.IdempotencyKey))
+        {
+            return Failure(request, "IDEMPOTENCY_KEY_REQUIRED", "A video recording request requires an idempotency key.");
+        }
+
+        try
+        {
+            VideoRecordingStatusV1 status = await _videoRecorder.StartAsync(payload, cancellationToken).ConfigureAwait(false);
+            Interlocked.Increment(ref _revision);
+            return Success(request, status);
+        }
+        catch (InvalidDataException exception)
+        {
+            return Failure(request, "INVALID_CAPTURE_REQUEST", exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Failure(request, "RECORDING_IN_PROGRESS", exception.Message);
+        }
+    }
+
+    private IpcResponse StartFrametimeBenchmark(IpcRequest request)
+    {
+        FrametimeBenchmarkStartRequestV1 payload = Payload<FrametimeBenchmarkStartRequestV1>(request);
+        try
+        {
+            FrametimeBenchmarkStatusV1 status = _frametimeBenchmark.Start(payload);
+            Interlocked.Increment(ref _revision);
+            return Success(request, status);
+        }
+        catch (InvalidDataException exception)
+        {
+            return Failure(request, "INVALID_BENCHMARK_REQUEST", exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Failure(request, "BENCHMARK_IN_PROGRESS", exception.Message);
+        }
+    }
+
+    private IpcResponse PublishRtssOsdText(IpcRequest request)
+    {
+        RtssOsdPublishRequestV1 payload = Payload<RtssOsdPublishRequestV1>(request);
+        if (payload.SchemaVersion != RtssOsdPublishRequestV1.CurrentSchemaVersion
+            || string.IsNullOrWhiteSpace(payload.Text))
+        {
+            return Failure(request, "INVALID_RTSS_OSD_REQUEST", "An RTSS OSD publish request needs the current schema version and a non-empty text line.");
+        }
+        if (!payload.ConfirmedThirdPartyOsdWrite)
+        {
+            return Failure(request, "RTSS_OSD_CONFIRMATION_REQUIRED", "Publishing to the RTSS on-screen display requires explicit confirmation that RigPilot may claim an RTSS OSD slot.");
+        }
+
+        RtssOsdBridgeStatusV1 status = _rtssOsd.Publish(payload.Text);
+        if (!status.Publishing)
+        {
+            return FailureWithPayload(request, "RTSS_OSD_UNAVAILABLE", status.Message, status);
+        }
+        Interlocked.Increment(ref _revision);
+        return Success(request, status);
+    }
+
+    private IpcResponse ReleaseRtssOsd(IpcRequest request)
+    {
+        RtssOsdBridgeStatusV1 status = _rtssOsd.Release();
+        Interlocked.Increment(ref _revision);
+        return Success(request, status);
     }
 
     private async Task<IpcResponse> SetMonitorBrightnessAsync(IpcRequest request, CancellationToken cancellationToken)

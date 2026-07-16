@@ -120,7 +120,22 @@ public enum IpcCommand
     GetUpdateStatus,
     DiscoverControllers,
     DiscoverHidInventory,
-    SetGpuFanControlArmed
+    ReadKrakenTelemetry,
+    ReadRyzenSmuFeasibility,
+    SetGpuFanControlArmed,
+    SetGpuPowerLimitArmed,
+    SetGpuClockOffsetArmed,
+    StartVideoRecording,
+    StopVideoRecording,
+    GetVideoRecordingStatus,
+    GetRtssOsdBridgeStatus,
+    GetRtssFrameStats,
+    PublishRtssOsdText,
+    ReleaseRtssOsd,
+    StartFrametimeBenchmark,
+    StopFrametimeBenchmark,
+    GetFrametimeBenchmarkStatus,
+    SetCpuTuningArmed
 }
 
 public static class ProtocolConstants
@@ -177,12 +192,18 @@ public static class IpcCommandPolicy
         IpcCommand.GetMonitoringComparisonLayout or
         IpcCommand.GetOverlayStatus or
         IpcCommand.GetWgcRecordingPreflight or
+        IpcCommand.GetVideoRecordingStatus or
+        IpcCommand.GetRtssOsdBridgeStatus or
+        IpcCommand.GetRtssFrameStats or
+        IpcCommand.GetFrametimeBenchmarkStatus or
         IpcCommand.GetCapturePresets or
         IpcCommand.GetCaptureTargets or
         IpcCommand.GetMonitorBrightnesses or
         IpcCommand.GetUpdateStatus or
         IpcCommand.DiscoverUpdates or
         IpcCommand.DiscoverControllers or
+        IpcCommand.ReadKrakenTelemetry or
+        IpcCommand.ReadRyzenSmuFeasibility or
         IpcCommand.DiscoverHidInventory or
         IpcCommand.ValidateUpdate or
         IpcCommand.AdapterProbe or
@@ -286,6 +307,45 @@ public sealed record SetGpuFanControlArmedRequest(
 
 public sealed record GpuFanControlStatus(
     bool Available,
+    bool Armed,
+    string DeviceId,
+    string Message);
+
+public sealed record SetGpuPowerLimitArmedRequest(
+    bool Armed,
+    bool ConfirmExperimental,
+    IReadOnlyList<string> ConfirmedDeviceIds);
+
+public sealed record GpuPowerLimitStatus(
+    bool Available,
+    bool Armed,
+    string DeviceId,
+    string Message);
+
+public sealed record SetGpuClockOffsetArmedRequest(
+    bool Armed,
+    bool ConfirmExperimental,
+    IReadOnlyList<string> ConfirmedDeviceIds);
+
+public sealed record GpuClockOffsetStatus(
+    bool Available,
+    bool Armed,
+    string DeviceId,
+    string Message);
+
+public sealed record SetCpuTuningArmedRequest(
+    bool Armed,
+    bool ConfirmExperimental,
+    IReadOnlyList<string> ConfirmedDeviceIds);
+
+/// <summary>
+/// CPU PBO tuning arm status. <see cref="Qualified"/> reflects the CPU-tuning
+/// qualification gate (docs/qualification/cpu-tuning-and-intel-arc.md); arming
+/// is refused while it is false, which is every system today.
+/// </summary>
+public sealed record CpuTuningStatus(
+    bool Available,
+    bool Qualified,
     bool Armed,
     string DeviceId,
     string Message);

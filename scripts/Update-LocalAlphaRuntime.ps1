@@ -66,7 +66,18 @@ if (-not (Test-Path -LiteralPath $restoreScript -PathType Leaf) -or -not (Test-P
 $previousImagePath = Get-PCHelperImagePath
 $restored = $false
 if ($previousImagePath -match '(?i)\\RigPilot\\LocalAlpha\\') {
-    & $restoreScript -ServiceTimeoutSeconds $ServiceTimeoutSeconds
+    # The child script guards its own reg.exe stderr, but under this script's
+    # ErrorActionPreference=Stop a stray native-stderr ErrorRecord crossing the
+    # script boundary still terminates a restore that actually worked. Run the
+    # child with Continue; a real `throw` from the child still propagates, and
+    # the deterministic post-condition below decides success.
+    & {
+        $ErrorActionPreference = "Continue"
+        & $restoreScript -ServiceTimeoutSeconds $ServiceTimeoutSeconds
+    } | Out-Null
+    if ((Get-PCHelperImagePath) -match '(?i)\\RigPilot\\LocalAlpha\\') {
+        throw "Restore did not return the PCHelper service to its original image path."
+    }
     $restored = $true
 }
 

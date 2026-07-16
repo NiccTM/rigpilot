@@ -29,6 +29,15 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private IHardwareAdapter? _gpuFanAdapter;
     private volatile bool _gpuFanArmed;
     private string _gpuFanDeviceId = "nvidia:gpu-0";
+    private NvmlGpuPowerLimitTransport? _gpuPowerTransport;
+    private IHardwareAdapter? _gpuPowerAdapter;
+    private volatile bool _gpuPowerArmed;
+    private NvapiGpuClockOffsetTransport? _gpuClockTransport;
+    private IHardwareAdapter? _gpuClockCoreAdapter;
+    private IHardwareAdapter? _gpuClockMemoryAdapter;
+    private volatile bool _gpuClockArmed;
+    private CpuTuneBootSentinel? _cpuTuneSentinel;
+    private string _cpuTuneRecoveryMessage = "CPU tune journal has not been inspected.";
     private WindowsTakeoverExecutionGate? _takeoverGate;
     private WindowsDriverUpdateExecutor? _updateExecutor;
     private UpdateTransactionCoordinator? _updateCoordinator;
@@ -79,6 +88,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             new TraceableHardwareAdapter(new WindowsPowerAdapter()),
             new TraceableHardwareAdapter(new NvmlTelemetryAdapter()),
             new TraceableHardwareAdapter(new IntelGraphicsControlAdapter()),
+            new TraceableHardwareAdapter(new AmdGraphicsControlAdapter()),
             new TraceableHardwareAdapter(new VendorControlEligibilityAdapter()),
             new TraceableHardwareAdapter(new WindowsPeripheralInventoryAdapter()),
             new TraceableHardwareAdapter(new AdapterHostProxy())
@@ -111,6 +121,72 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 fanTransport.Dispose();
             }
         }
+
+        // Experimental GPU power-limit control: identical disarmed-by-default pattern.
+        // The capability registers ReadOnly and no write can occur until an operator
+        // explicitly arms it with an Experimental acknowledgement for the exact device
+        // (SetGpuPowerLimitArmed). Registered only when NVML reports valid constraints.
+        _gpuPowerArmed = false;
+        if (NvmlGpuPowerLimitTransport.TryCreate(enableWrites: true, out NvmlGpuPowerLimitTransport powerTransport, out _))
+        {
+            GpuPowerLimitBounds? powerBounds = powerTransport.CanWrite
+                ? await powerTransport.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false)
+                : null;
+            if (powerBounds is { IsValid: true })
+            {
+                _gpuPowerTransport = powerTransport;
+                TraceableHardwareAdapter gpuPowerAdapter = new(
+                    new NvidiaGpuPowerLimitAdapter(powerTransport, _gpuFanDeviceId, "0", () => _gpuPowerArmed));
+                _gpuPowerAdapter = gpuPowerAdapter;
+                adapters.Add(gpuPowerAdapter);
+            }
+            else
+            {
+                powerTransport.Dispose();
+            }
+        }
+
+        // Experimental GPU clock offsets (core + memory): identical disarmed-by-default
+        // pattern over NVAPI performance states 2.0. Both capabilities register ReadOnly
+        // and share one arm keystone (SetGpuClockOffsetArmed); no voltage parameter is
+        // ever constructed or submitted. Registered only when the driver reports an
+        // editable delta range for at least the core domain.
+        _gpuClockArmed = false;
+        if (NvapiGpuClockOffsetTransport.TryCreate(0, enableWrites: true, out NvapiGpuClockOffsetTransport clockTransport, out _))
+        {
+            GpuClockOffsetBounds? coreBounds = clockTransport.CanWrite
+                ? await clockTransport.ReadBoundsAsync(GpuClockOffsetDomain.Core, cancellationToken).ConfigureAwait(false)
+                : null;
+            if (coreBounds is { IsValid: true })
+            {
+                _gpuClockTransport = clockTransport;
+                TraceableHardwareAdapter coreAdapter = new(
+                    new NvidiaGpuClockOffsetAdapter(clockTransport, GpuClockOffsetDomain.Core, _gpuFanDeviceId, "0", () => _gpuClockArmed));
+                _gpuClockCoreAdapter = coreAdapter;
+                adapters.Add(coreAdapter);
+
+                GpuClockOffsetBounds? memoryBounds = await clockTransport
+                    .ReadBoundsAsync(GpuClockOffsetDomain.Memory, cancellationToken)
+                    .ConfigureAwait(false);
+                if (memoryBounds is { IsValid: true })
+                {
+                    TraceableHardwareAdapter memoryAdapter = new(
+                        new NvidiaGpuClockOffsetAdapter(clockTransport, GpuClockOffsetDomain.Memory, _gpuFanDeviceId, "0", () => _gpuClockArmed));
+                    _gpuClockMemoryAdapter = memoryAdapter;
+                    adapters.Add(memoryAdapter);
+                }
+            }
+            else
+            {
+                clockTransport.Dispose();
+            }
+        }
+
+        // CPU tuning boot-recovery sentinel (docs/qualification/cpu-tuning-and-intel-arc.md
+        // step 3). No SMU tuning transport exists in production, so recovery can only
+        // observe: a surviving journal entry is reported and retained as evidence.
+        _cpuTuneSentinel = new CpuTuneBootSentinel(Path.Combine(_dataDirectory!, "cpu-tune-journal.json"));
+        _cpuTuneRecoveryMessage = await _cpuTuneSentinel.RecoverAsync(transport: null, cancellationToken).ConfigureAwait(false);
 
         _coordinator = new AdapterCoordinator(adapters);
         _engine = new ProfileTransactionEngine(adapters, _store);
@@ -303,7 +379,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.GetUpdateStatus => await GetUpdateStatusAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.DiscoverControllers => await DiscoverControllersAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.DiscoverHidInventory => await DiscoverHidInventoryAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.ReadKrakenTelemetry => await ReadKrakenTelemetryAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.ReadRyzenSmuFeasibility => await ReadRyzenSmuFeasibilityAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuFanControlArmed => await SetGpuFanControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetGpuPowerLimitArmed => await SetGpuPowerLimitArmedAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetGpuClockOffsetArmed => await SetGpuClockOffsetArmedAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetCpuTuningArmed => SetCpuTuningArmed(request),
                 _ when IsUserAgentCommand(request.Command) => Failure(
                     request,
                     "WRONG_EXECUTION_CONTEXT",
@@ -401,6 +482,49 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             }
 
             _gpuFanTransport.Dispose();
+        }
+
+        if (_gpuPowerTransport is not null)
+        {
+            // Service stop must restore the vendor default power limit. If writes were
+            // never armed no limit was ever changed and the call no-ops via the safety gate.
+            try
+            {
+                GpuPowerLimitBounds? bounds = await _gpuPowerTransport.ReadBoundsAsync("0", CancellationToken.None).ConfigureAwait(false);
+                if (bounds is { IsValid: true } valid)
+                {
+                    await _gpuPowerTransport.SetPowerLimitAsync("0", valid.DefaultMilliwatts, CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            catch (Exception restoreException) when (restoreException is GpuPowerSafetyException or InvalidOperationException)
+            {
+                // Gate closed (writes not armed) or transient driver error: nothing to restore.
+            }
+
+            _gpuPowerTransport.Dispose();
+        }
+
+        if (_gpuClockTransport is not null)
+        {
+            // Service stop must return both domains to stock clocks. If writes were
+            // never armed no offset was ever changed and the call no-ops via the gate.
+            foreach (GpuClockOffsetDomain domain in (GpuClockOffsetDomain[])[GpuClockOffsetDomain.Core, GpuClockOffsetDomain.Memory])
+            {
+                try
+                {
+                    GpuClockOffsetBounds? bounds = await _gpuClockTransport.ReadBoundsAsync(domain, CancellationToken.None).ConfigureAwait(false);
+                    if (bounds is { IsValid: true })
+                    {
+                        await _gpuClockTransport.SetOffsetAsync(domain, GpuClockOffsetBounds.DefaultKiloHertz, CancellationToken.None).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception restoreException) when (restoreException is GpuClockSafetyException or InvalidOperationException)
+                {
+                    // Gate closed (writes not armed) or transient driver error: nothing to restore.
+                }
+            }
+
+            _gpuClockTransport.Dispose();
         }
 
         if (_store is not null)
@@ -2883,6 +3007,232 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 : "GPU fan control is disarmed and read-only."));
     }
 
+    private async Task<IpcResponse> SetGpuPowerLimitArmedAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        EnsureExpectedRevision(request);
+        SetGpuPowerLimitArmedRequest payload = IpcJson.FromElement<SetGpuPowerLimitArmedRequest>(request.Payload)
+            ?? throw new InvalidDataException("SetGpuPowerLimitArmed requires an arming request.");
+
+        if (_gpuPowerTransport is null)
+        {
+            return FailureWithPayload(
+                request,
+                "GPU_POWER_UNAVAILABLE",
+                "No GPU power-limit transport is available on this system.",
+                new GpuPowerLimitStatus(false, false, _gpuFanDeviceId, "GPU power-limit control is unavailable."));
+        }
+
+        if (payload.Armed)
+        {
+            // Arming an Experimental physical write requires an explicit acknowledgement
+            // plus exact-device confirmation, mirroring the GPU-fan arm flow.
+            if (!payload.ConfirmExperimental)
+            {
+                return Failure(request, "EXPERIMENTAL_NOT_CONFIRMED",
+                    "Arming GPU power-limit control requires explicit Experimental confirmation.");
+            }
+
+            if (!payload.ConfirmedDeviceIds.Contains(_gpuFanDeviceId, StringComparer.Ordinal))
+            {
+                return Failure(request, "DEVICE_NOT_CONFIRMED",
+                    $"Arming GPU power-limit control requires exact-device confirmation for '{_gpuFanDeviceId}'.");
+            }
+        }
+
+        if (!payload.Armed)
+        {
+            // Return the limit to the vendor default while still armed, then disarm,
+            // so disarming never strands a non-default power limit.
+            try
+            {
+                GpuPowerLimitBounds? bounds = await _gpuPowerTransport.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false);
+                if (bounds is { IsValid: true } valid)
+                {
+                    await _gpuPowerTransport.SetPowerLimitAsync("0", valid.DefaultMilliwatts, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (Exception restoreException) when (restoreException is GpuPowerSafetyException or InvalidOperationException)
+            {
+                // Nothing to restore (never written) or a transient driver error.
+            }
+        }
+
+        _gpuPowerArmed = payload.Armed;
+        _gpuPowerTransport.SetArmed(payload.Armed);
+        IncrementSuiteRevision();
+
+        // Synchronously refresh just this adapter's capabilities into the cached snapshot
+        // so an ApplyProfileV2 issued immediately after this call sees the new state.
+        if (_gpuPowerAdapter is not null && _coordinator is not null)
+        {
+            try
+            {
+                IReadOnlyList<CapabilityDescriptor> refreshed = await AdapterCoordinator
+                    .CaptureAdapterCapabilitiesAsync(_gpuPowerAdapter, cancellationToken)
+                    .ConfigureAwait(false);
+                await PatchSnapshotCapabilitiesAsync(refreshed, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception patchException) when (patchException is not OperationCanceledException)
+            {
+                // If the targeted re-probe fails, the backgrounded full refresh still
+                // reconciles the snapshot; the armed flag itself is already applied.
+            }
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await RefreshAsync(persistSensors: false, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception refreshException) when (refreshException is not OperationCanceledException)
+            {
+                // A background snapshot refresh failure is non-fatal; the next poll recovers.
+            }
+        }, CancellationToken.None);
+        return Success(request, new GpuPowerLimitStatus(
+            true,
+            payload.Armed,
+            _gpuFanDeviceId,
+            payload.Armed
+                ? "GPU power-limit control is armed. Manual-only writes are permitted for confirmed profiles until disarmed."
+                : "GPU power-limit control is disarmed and read-only; the vendor default limit was restored."));
+    }
+
+    private async Task<IpcResponse> SetGpuClockOffsetArmedAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        EnsureExpectedRevision(request);
+        SetGpuClockOffsetArmedRequest payload = IpcJson.FromElement<SetGpuClockOffsetArmedRequest>(request.Payload)
+            ?? throw new InvalidDataException("SetGpuClockOffsetArmed requires an arming request.");
+
+        if (_gpuClockTransport is null)
+        {
+            return FailureWithPayload(
+                request,
+                "GPU_CLOCK_UNAVAILABLE",
+                "No GPU clock-offset transport is available on this system.",
+                new GpuClockOffsetStatus(false, false, _gpuFanDeviceId, "GPU clock-offset control is unavailable."));
+        }
+
+        if (payload.Armed)
+        {
+            // Arming an Experimental physical write requires an explicit acknowledgement
+            // plus exact-device confirmation, mirroring the GPU fan and power-limit flows.
+            if (!payload.ConfirmExperimental)
+            {
+                return Failure(request, "EXPERIMENTAL_NOT_CONFIRMED",
+                    "Arming GPU clock-offset control requires explicit Experimental confirmation.");
+            }
+
+            if (!payload.ConfirmedDeviceIds.Contains(_gpuFanDeviceId, StringComparer.Ordinal))
+            {
+                return Failure(request, "DEVICE_NOT_CONFIRMED",
+                    $"Arming GPU clock-offset control requires exact-device confirmation for '{_gpuFanDeviceId}'.");
+            }
+        }
+
+        if (!payload.Armed)
+        {
+            // Return both domains to stock clocks (0 kHz offset) while still armed,
+            // then disarm, so disarming never strands a non-default offset.
+            foreach (GpuClockOffsetDomain domain in (GpuClockOffsetDomain[])[GpuClockOffsetDomain.Core, GpuClockOffsetDomain.Memory])
+            {
+                try
+                {
+                    GpuClockOffsetBounds? bounds = await _gpuClockTransport.ReadBoundsAsync(domain, cancellationToken).ConfigureAwait(false);
+                    if (bounds is { IsValid: true })
+                    {
+                        await _gpuClockTransport.SetOffsetAsync(domain, GpuClockOffsetBounds.DefaultKiloHertz, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception restoreException) when (restoreException is GpuClockSafetyException or InvalidOperationException)
+                {
+                    // Nothing to restore (never written) or a transient driver error.
+                }
+            }
+        }
+
+        _gpuClockArmed = payload.Armed;
+        _gpuClockTransport.SetArmed(payload.Armed);
+        IncrementSuiteRevision();
+
+        // Synchronously refresh both clock adapters' capabilities into the cached snapshot
+        // so an ApplyProfileV2 issued immediately after this call sees the new state.
+        if (_coordinator is not null)
+        {
+            foreach (IHardwareAdapter? adapter in (IHardwareAdapter?[])[_gpuClockCoreAdapter, _gpuClockMemoryAdapter])
+            {
+                if (adapter is null)
+                {
+                    continue;
+                }
+                try
+                {
+                    IReadOnlyList<CapabilityDescriptor> refreshed = await AdapterCoordinator
+                        .CaptureAdapterCapabilitiesAsync(adapter, cancellationToken)
+                        .ConfigureAwait(false);
+                    await PatchSnapshotCapabilitiesAsync(refreshed, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception patchException) when (patchException is not OperationCanceledException)
+                {
+                    // If the targeted re-probe fails, the backgrounded full refresh still
+                    // reconciles the snapshot; the armed flag itself is already applied.
+                }
+            }
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await RefreshAsync(persistSensors: false, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception refreshException) when (refreshException is not OperationCanceledException)
+            {
+                // A background snapshot refresh failure is non-fatal; the next poll recovers.
+            }
+        }, CancellationToken.None);
+        return Success(request, new GpuClockOffsetStatus(
+            true,
+            payload.Armed,
+            _gpuFanDeviceId,
+            payload.Armed
+                ? "GPU clock-offset control is armed. Manual-only writes are permitted for confirmed profiles until disarmed."
+                : "GPU clock-offset control is disarmed and read-only; both domains were returned to stock clocks."));
+    }
+
+    private IpcResponse SetCpuTuningArmed(IpcRequest request)
+    {
+        EnsureExpectedRevision(request);
+        SetCpuTuningArmedRequest payload = IpcJson.FromElement<SetCpuTuningArmedRequest>(request.Payload)
+            ?? throw new InvalidDataException("SetCpuTuningArmed requires an arming request.");
+
+        // CPU PBO tuning is behind the full qualification gate
+        // (docs/qualification/cpu-tuning-and-intel-arc.md): no qualification record
+        // exists for any system and no SMU tuning transport is implemented, so arming
+        // is refused regardless of confirmations. Disarming is trivially satisfied.
+        if (payload.Armed)
+        {
+            return FailureWithPayload(
+                request,
+                "CPU_TUNING_QUALIFICATION_REQUIRED",
+                "CPU PBO tuning cannot be armed: the CPU-tuning qualification gate has not been passed on this system and no SMU tuning transport exists. This is a policy gate, not a missing confirmation.",
+                new CpuTuningStatus(
+                    false,
+                    false,
+                    false,
+                    string.Empty,
+                    $"CPU tuning is blocked by the qualification gate. Boot-recovery sentinel: {_cpuTuneRecoveryMessage}"));
+        }
+
+        return Success(request, new CpuTuningStatus(
+            false,
+            false,
+            false,
+            string.Empty,
+            $"CPU PBO tuning is disarmed (it can never be armed on an unqualified system). Boot-recovery sentinel: {_cpuTuneRecoveryMessage}"));
+    }
+
     private async Task<IpcResponse> DiscoverControllersAsync(IpcRequest request, CancellationToken cancellationToken)
     {
         // USB/AIO controller enumeration runs behind a process boundary so a native
@@ -2902,6 +3252,28 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ContainedHidInventory inventory = new(
             static () => new AdapterHostControllerDiscoveryProcess("--discover-hid"));
         HidInventoryResultV1 result = await inventory.DiscoverAsync(cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private async Task<IpcResponse> ReadRyzenSmuFeasibilityAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        // Read-only SMU/PBO qualification evidence behind the crash-isolated process
+        // boundary. The child references no tuning or register-write module function;
+        // this evidence never un-gates a CPU write (CPU/SMU tuning stays Blocked).
+        ContainedRyzenSmuFeasibility feasibility = new(
+            static () => new AdapterHostControllerDiscoveryProcess("--read-ryzen-smu"));
+        RyzenSmuFeasibilityV1 result = await feasibility.ReadAsync(cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private async Task<IpcResponse> ReadKrakenTelemetryAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        // Read-only Kraken X3 liquid-cooler telemetry runs behind the same crash-isolated
+        // process boundary as the HID inventory. The child never writes a HID report —
+        // the firmware streams status unsolicited — so no pump capability is implied.
+        ContainedKrakenTelemetry telemetry = new(
+            static () => new AdapterHostControllerDiscoveryProcess("--read-kraken"));
+        KrakenTelemetryV1 result = await telemetry.ReadAsync(cancellationToken).ConfigureAwait(false);
         return Success(request, result);
     }
 
@@ -3555,6 +3927,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         IpcCommand.GetOverlayStatus or IpcCommand.GetWgcRecordingPreflight or
         IpcCommand.GetCapturePresets or IpcCommand.SaveCapturePreset or
         IpcCommand.GetCaptureTargets or IpcCommand.CaptureDesktopSnapshot or
+        IpcCommand.StartVideoRecording or IpcCommand.StopVideoRecording or
+        IpcCommand.GetVideoRecordingStatus or
+        IpcCommand.GetRtssOsdBridgeStatus or IpcCommand.GetRtssFrameStats or
+        IpcCommand.PublishRtssOsdText or IpcCommand.ReleaseRtssOsd or
+        IpcCommand.StartFrametimeBenchmark or IpcCommand.StopFrametimeBenchmark or
+        IpcCommand.GetFrametimeBenchmarkStatus or
         IpcCommand.GetMonitorBrightnesses or IpcCommand.SetMonitorBrightness or
         IpcCommand.RunInteractiveFanPreflight or
         IpcCommand.DiscoverUpdates;

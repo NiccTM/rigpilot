@@ -33,8 +33,15 @@ internal static class Cli
                 "cooling-reports" => await ServiceCommandAsync<IReadOnlyList<CoolingQualificationReportV1>>(IpcCommand.GetCoolingQualificationReports, json),
                 "discover-controllers" => await ServiceCommandAsync<ControllerDiscoveryResultV1>(IpcCommand.DiscoverControllers, json),
                 "discover-hid" => await DiscoverHidAsync(json),
+                "ryzen-smu-feasibility" => await ReadRyzenSmuFeasibilityAsync(json),
                 "gpu-fan-arm" => await SetGpuFanArmedAsync(args, json, arm: true),
                 "gpu-fan-disarm" => await SetGpuFanArmedAsync(args, json, arm: false),
+                "gpu-power-arm" => await SetGpuPowerArmedAsync(args, json, arm: true),
+                "gpu-power-disarm" => await SetGpuPowerArmedAsync(args, json, arm: false),
+                "gpu-clock-arm" => await SetGpuClockArmedAsync(args, json, arm: true),
+                "gpu-clock-disarm" => await SetGpuClockArmedAsync(args, json, arm: false),
+                "cpu-tuning-arm" => await SetCpuTuningArmedAsync(args, json, arm: true),
+                "cpu-tuning-disarm" => await SetCpuTuningArmedAsync(args, json, arm: false),
                 "trace" => await TraceAsync(json),
                 "profiles-v2" => await ServiceCommandAsync<IReadOnlyList<ProfileV2>>(IpcCommand.GetProfilesV2, json),
                 "games" => await UserCommandAsync<IReadOnlyList<GameEntryV1>>(IpcCommand.GetGames, json),
@@ -46,6 +53,7 @@ internal static class Cli
                 "pack-remove" => await RemoveAdapterPackAsync(args, json),
                 "report" => await ExportReportAsync(args, json),
                 "qualification" => await QualificationAsync(args, json),
+                "qualification-draft" => await QualificationDraftAsync(args, json),
                 "direct-prepare" => await DirectPrepareAsync(args, json),
                 "commission-preflight" => await CommissionPreflightAsync(args, json),
                 "commission-pulse" => await CommissionPulseAsync(args, json),
@@ -82,6 +90,7 @@ internal static class Cli
                 new WindowsPowerAdapter(),
                 new NvmlTelemetryAdapter(),
                 new IntelGraphicsControlAdapter(),
+                new AmdGraphicsControlAdapter(),
                 new VendorControlEligibilityAdapter(),
                 new WindowsPeripheralInventoryAdapter(),
                 new LibreHardwareMonitorAdapter()
@@ -145,6 +154,24 @@ internal static class Cli
         T payload = await SendAsync<T>(command);
         Write(payload, json, value => Console.WriteLine(value));
         return 0;
+    }
+
+    private static async Task<int> ReadRyzenSmuFeasibilityAsync(bool json)
+    {
+        RyzenSmuFeasibilityV1 result = await SendAsync<RyzenSmuFeasibilityV1>(IpcCommand.ReadRyzenSmuFeasibility);
+        Write(result, json, value =>
+        {
+            Console.WriteLine($"Ryzen SMU feasibility: {value.Outcome}. {value.Message}");
+            if (value.Outcome == RyzenSmuFeasibilityOutcome.Succeeded)
+            {
+                Console.WriteLine($"  SMU firmware {value.SmuFirmwareVersion}, PM table {value.PmTableVersion}, codename id {value.CodeNameId}");
+                Console.WriteLine($"  PPT {value.PptValueWatts,7:0.##} / {value.PptLimitWatts,7:0.##} W");
+                Console.WriteLine($"  TDC {value.TdcValueAmperes,7:0.##} / {value.TdcLimitAmperes,7:0.##} A");
+                Console.WriteLine($"  EDC {value.EdcValueAmperes,7:0.##} / {value.EdcLimitAmperes,7:0.##} A");
+                Console.WriteLine($"  THM {value.ThmValueCelsius,7:0.##} / {value.ThmLimitCelsius,7:0.##} °C");
+            }
+        });
+        return result.Outcome == RyzenSmuFeasibilityOutcome.Succeeded ? 0 : 3;
     }
 
     private static async Task<int> DiscoverHidAsync(bool json)
@@ -523,6 +550,58 @@ internal static class Cli
         return status.Available ? 0 : 3;
     }
 
+    private static async Task<int> SetGpuPowerArmedAsync(string[] args, bool json, bool arm)
+    {
+        bool confirmExperimental = HasFlag(args, "--confirm-experimental");
+        string? device = Option(args, "--confirm-device");
+        IReadOnlyList<string> confirmedDevices = device is null ? [] : [device];
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetGpuPowerLimitArmed,
+            new SetGpuPowerLimitArmedRequest(arm, confirmExperimental, confirmedDevices));
+        GpuPowerLimitStatus status = IpcJson.FromElement<GpuPowerLimitStatus>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(status, json, value => Console.WriteLine(
+            $"GPU power limit: available={value.Available} armed={value.Armed} device={value.DeviceId}. {value.Message}"));
+        return status.Available ? 0 : 3;
+    }
+
+    private static async Task<int> SetGpuClockArmedAsync(string[] args, bool json, bool arm)
+    {
+        bool confirmExperimental = HasFlag(args, "--confirm-experimental");
+        string? device = Option(args, "--confirm-device");
+        IReadOnlyList<string> confirmedDevices = device is null ? [] : [device];
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetGpuClockOffsetArmed,
+            new SetGpuClockOffsetArmedRequest(arm, confirmExperimental, confirmedDevices));
+        GpuClockOffsetStatus status = IpcJson.FromElement<GpuClockOffsetStatus>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(status, json, value => Console.WriteLine(
+            $"GPU clock offset: available={value.Available} armed={value.Armed} device={value.DeviceId}. {value.Message}"));
+        return status.Available ? 0 : 3;
+    }
+
+    private static async Task<int> SetCpuTuningArmedAsync(string[] args, bool json, bool arm)
+    {
+        bool confirmExperimental = HasFlag(args, "--confirm-experimental");
+        string? device = Option(args, "--confirm-device");
+        IReadOnlyList<string> confirmedDevices = device is null ? [] : [device];
+        // Unchecked send: arming is refused by the qualification gate on every
+        // system today, and the refusal carries a status payload worth printing.
+        IpcResponse response = await SendUncheckedResponseAsync(
+            ProtocolConstants.ServicePipeName,
+            IpcCommand.SetCpuTuningArmed,
+            new SetCpuTuningArmedRequest(arm, confirmExperimental, confirmedDevices));
+        CpuTuningStatus? status = IpcJson.FromElement<CpuTuningStatus>(response.Payload);
+        if (status is null)
+        {
+            throw new InvalidOperationException($"{response.ErrorCode}: {response.Error}");
+        }
+
+        Write(status, json, value => Console.WriteLine(
+            $"CPU PBO tuning: available={value.Available} qualified={value.Qualified} armed={value.Armed}. {value.Message}"));
+        return response.Success ? 0 : 3;
+    }
+
     private static async Task<int> InstallAdapterPackAsync(string[] args, bool json)
     {
         string file = RequiredOption(args, "--file");
@@ -562,6 +641,7 @@ internal static class Cli
                 new WindowsPowerAdapter(),
                 new NvmlTelemetryAdapter(),
                 new IntelGraphicsControlAdapter(),
+                new AmdGraphicsControlAdapter(),
                 new VendorControlEligibilityAdapter(),
                 new WindowsPeripheralInventoryAdapter(),
                 new LibreHardwareMonitorAdapter()
@@ -615,6 +695,104 @@ internal static class Cli
         QualificationMatrixStatusV1 status = QualificationMatrix.Evaluate(records);
         Write(status, json, PrintQualification);
         return status.CanReleaseV1 ? 0 : 3;
+    }
+
+    /// <summary>
+    /// Produces an UNSIGNED DRAFT qualification record from the real local
+    /// hardware identity plus explicit operator attestations. The builder
+    /// hard-codes SignedProductionBuild=false, so a draft can never satisfy the
+    /// 18-system 1.0 gate; it exists so community contributors can prepare and
+    /// review their evidence before the signed-build pipeline re-captures it.
+    /// </summary>
+    private static async Task<int> QualificationDraftAsync(string[] args, bool json)
+    {
+        string output = Path.GetFullPath(RequiredOption(args, "--output"));
+        bool confirmWitnessed = HasFlag(args, "--confirm-witnessed");
+        QualificationAttestations attestations = new(
+            HasFlag(args, "--attest-no-bsod"),
+            HasFlag(args, "--attest-no-stuck-fan"),
+            HasFlag(args, "--attest-no-unauthorised-write"),
+            HasFlag(args, "--attest-rollback-passed"));
+        if (!confirmWitnessed || !attestations.AllAttested)
+        {
+            Console.Error.WriteLine(
+                "A qualification draft requires --confirm-witnessed plus all four attestations "
+                + "(--attest-no-bsod --attest-no-stuck-fan --attest-no-unauthorised-write --attest-rollback-passed). "
+                + "Each one asserts something you personally observed on this system; a record is never fabricated.");
+            return 3;
+        }
+
+        QualificationSystemIdentity identity = ReadLocalSystemIdentity();
+        HardwareQualificationRecordV1 draft = QualificationRecordDraftBuilder.Build(
+            identity,
+            attestations,
+            DateTimeOffset.UtcNow,
+            Option(args, "--notes"));
+
+        List<HardwareQualificationRecordV1> ledger = [];
+        if (File.Exists(output))
+        {
+            string existing = await File.ReadAllTextAsync(output).ConfigureAwait(false);
+            ledger = JsonSerializer.Deserialize<List<HardwareQualificationRecordV1>>(existing, JsonDefaults.Options)
+                ?? throw new InvalidDataException("The existing ledger file is malformed; refusing to overwrite it.");
+        }
+
+        ledger.Add(draft);
+        await File.WriteAllTextAsync(
+            output,
+            JsonSerializer.Serialize(ledger, LedgerJsonOptions)).ConfigureAwait(false);
+
+        Write(draft, json, value => Console.WriteLine(
+            $"Draft {value.ReportId} for {value.SystemId}: {value.ProcessorFamily} + {value.GraphicsFamily} on a {value.MotherboardVendor} board ({value.PlatformFamily}). "
+            + $"signedProductionBuild={value.SignedProductionBuild}. Appended to {output}."));
+        return 0;
+    }
+
+    private static readonly JsonSerializerOptions LedgerJsonOptions = new(JsonDefaults.Options) { WriteIndented = true };
+
+    private static QualificationSystemIdentity ReadLocalSystemIdentity()
+    {
+        string cpu = FirstWmiValue("Win32_Processor", "Name") ?? string.Empty;
+        string boardVendor = FirstWmiValue("Win32_BaseBoard", "Manufacturer") ?? string.Empty;
+        string boardProduct = FirstWmiValue("Win32_BaseBoard", "Product") ?? string.Empty;
+
+        // Pick the first display adapter that maps to a qualification family so
+        // integrated graphics on a discrete-GPU system do not shadow the result.
+        string gpu = string.Empty;
+        using (System.Management.ManagementObjectSearcher searcher = new("SELECT Name FROM Win32_VideoController"))
+        {
+            foreach (System.Management.ManagementBaseObject row in searcher.Get())
+            {
+                string candidate = row["Name"]?.ToString()?.Trim() ?? string.Empty;
+                if (string.IsNullOrEmpty(gpu))
+                {
+                    gpu = candidate;
+                }
+
+                if (QualificationRecordDraftBuilder.TryClassifyGraphics(candidate) is not null)
+                {
+                    gpu = candidate;
+                    break;
+                }
+            }
+        }
+
+        return new QualificationSystemIdentity(cpu, gpu, boardVendor, boardProduct);
+    }
+
+    private static string? FirstWmiValue(string table, string property)
+    {
+        using System.Management.ManagementObjectSearcher searcher = new($"SELECT {property} FROM {table}");
+        foreach (System.Management.ManagementBaseObject row in searcher.Get())
+        {
+            string? value = row[property]?.ToString()?.Trim();
+            if (!string.IsNullOrEmpty(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1143,9 +1321,20 @@ internal static class Cli
             pchelper-cli discover-controllers [--json]
                                                  Run a contained USB/AIO controller-discovery probe (read-only inventory).
             pchelper-cli discover-hid [--json]   Run a contained, read-only HID peripheral inventory (keyboard/mouse/RGB/AIO classes).
+            pchelper-cli ryzen-smu-feasibility [--json]
+                                                 Read PPT/TDC/THM/EDC limit and actual pairs from the Ryzen SMU PM table via signed PawnIO (read-only PBO qualification evidence; no CPU write).
             pchelper-cli gpu-fan-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU fan control after exact-device acknowledgement.
             pchelper-cli gpu-fan-disarm [--json] Disarm GPU fan control and restore the automatic curve.
+            pchelper-cli gpu-power-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
+                                                 Arm Experimental GPU power-limit control after exact-device acknowledgement.
+            pchelper-cli gpu-power-disarm [--json] Disarm GPU power-limit control and restore the vendor default limit.
+            pchelper-cli gpu-clock-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
+                                                 Arm Experimental GPU core/memory clock-offset control after exact-device acknowledgement.
+            pchelper-cli gpu-clock-disarm [--json] Disarm GPU clock-offset control and return both domains to stock clocks.
+            pchelper-cli cpu-tuning-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
+                                                 Request arming of CPU PBO tuning. Refused by the qualification gate on every system today.
+            pchelper-cli cpu-tuning-disarm [--json] Confirm CPU PBO tuning is disarmed and report the boot-recovery sentinel state.
             pchelper-cli trace [--json]             List bounded, redacted adapter operation diagnostics.
             pchelper-cli profiles-v2 [--json]       List layered hardware/cooling/lighting/OSD profiles.
             pchelper-cli games [--json]             List local games from the signed-in user agent.
@@ -1168,6 +1357,9 @@ internal static class Cli
                                                  Run only a bounded 2-5 second case-fan identity pulse. The alias remains provisional.
             pchelper-cli qualification --ledger FILE [--json]
                                                  Evaluate the 18-system 1.0 evidence gate.
+            pchelper-cli qualification-draft --output FILE --confirm-witnessed --attest-no-bsod --attest-no-stuck-fan
+                --attest-no-unauthorised-write --attest-rollback-passed [--notes TEXT] [--json]
+                                                 Append an UNSIGNED DRAFT qualification record for this exact system. Drafts never satisfy the 1.0 gate.
             """);
         return 0;
     }

@@ -79,7 +79,8 @@ internal static class Program
             ? double.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture)
             : 0;
 
-        using MainViewModel viewModel = new();
+        bool portable = args.Contains("portable", StringComparer.OrdinalIgnoreCase);
+        using MainViewModel viewModel = new() { IsPortableMode = portable };
         try
         {
             // Load data before any WPF control subscribes to the view model. This keeps

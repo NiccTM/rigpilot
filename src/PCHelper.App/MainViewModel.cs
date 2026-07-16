@@ -77,6 +77,18 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly AsyncCommand _showDesktopOsdCommand;
     private readonly AsyncCommand _hideDesktopOsdCommand;
     private readonly AsyncCommand _captureDesktopSnapshotCommand;
+    private readonly AsyncCommand _startVideoRecordingCommand;
+    private readonly AsyncCommand _publishRtssOsdCommand;
+    private readonly AsyncCommand _releaseRtssOsdCommand;
+    private readonly AsyncCommand _readKrakenTelemetryCommand;
+    private readonly AsyncCommand _readRtssFrameStatsCommand;
+    private readonly AsyncCommand _startFrametimeBenchmarkCommand;
+    private readonly AsyncCommand _stopFrametimeBenchmarkCommand;
+    private bool _isFrametimeBenchmarkRunning;
+    private string _frametimeBenchmarkStatus = "No benchmark has run. Start a game monitored by RTSS, then start a benchmark; sampling is passive and injection-free.";
+    private string _rtssFrameStatsStatus = "Frame statistics have not been read. RTSS measures FPS and frame times for running games; RigPilot reads them from shared memory without injecting.";
+    private string _krakenTelemetryStatus = "Liquid-cooler telemetry has not been read. The pass is read-only: the Kraken streams status by itself and RigPilot never writes to it.";
+    private readonly AsyncCommand _stopVideoRecordingCommand;
     private readonly AsyncCommand _refreshMonitorBrightnessCommand;
     private readonly AsyncCommand _scanHidInventoryCommand;
     private readonly AsyncCommand _setMonitorBrightnessCommand;
@@ -195,6 +207,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _macroEditorDelayMillisecondsText = "15";
     private string _macroEditorSummary = "Select a saved macro to review or edit its typed key presses.";
     private string _rtssBridgeStatus = "RTSS discovery has not run.";
+    private string _rtssOsdPublishStatus = "The RigPilot sensor line is not published to RTSS. Publishing writes only an OSD slot RigPilot owns; it never injects into any process.";
+    private bool _isRtssOsdPublishing;
+    private int _rtssOsdRefreshBusy;
     private string _gameBarBridgeStatus = "Game Bar discovery has not run.";
     private string _captureBridgeStatus = "Windows Graphics Capture discovery has not run.";
     private string _desktopOsdStatus = "Desktop OSD is hidden. It uses a local non-activating window, not RTSS or injection.";
@@ -259,6 +274,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private CapturePresetV1? _selectedGameCapturePreset;
     private OsdLayoutV1? _selectedDesktopOsdLayout;
     private CaptureTargetV1? _selectedCaptureTarget;
+    private bool _isVideoRecording;
+    private string _videoRecordingStatus = "No recording has been started. Recording is explicit, bounded to 5 minutes, and saved only to Videos\\RigPilot\\Recordings.";
     private OwnershipOverview? _ownershipOverview;
     private TakeoverPlanV1? _takeoverPreview;
     private TakeoverProcessIdentity? _selectedTakeoverTarget;
@@ -281,6 +298,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _customCoolingCurveHysteresisDownText = "2";
     private string _customCoolingCurveResponseUpSecondsText = "1";
     private string _customCoolingCurveResponseDownSecondsText = "5";
+
+    /// <summary>
+    /// Portable (no-service, read-only) mode: the dashboard never attempts a
+    /// service connection, so it runs from any directory without an installed
+    /// runtime. All hardware data comes from the in-process read-only local
+    /// probe; every service-owned write, profile, automation, and update path
+    /// stays disabled because <see cref="IsServiceOnline"/> can never become
+    /// true. Set once at startup (via --portable) before InitialiseAsync.
+    /// </summary>
+    public bool IsPortableMode { get; init; }
 
     public MainViewModel()
     {
@@ -437,6 +464,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _ => CaptureDesktopSnapshotCoreAsync(),
             _ => CanCaptureDesktopSnapshot,
             ReportError);
+        _startVideoRecordingCommand = new AsyncCommand(
+            _ => StartVideoRecordingCoreAsync(),
+            _ => CanStartVideoRecording,
+            ReportError);
+        _stopVideoRecordingCommand = new AsyncCommand(
+            _ => StopVideoRecordingCoreAsync(),
+            _ => CanStopVideoRecording,
+            ReportError);
+        _publishRtssOsdCommand = new AsyncCommand(
+            _ => PublishRtssOsdCoreAsync(),
+            _ => IsUserAgentOnline && !IsRtssOsdPublishing,
+            ReportError);
+        _releaseRtssOsdCommand = new AsyncCommand(
+            _ => ReleaseRtssOsdCoreAsync(),
+            _ => IsUserAgentOnline && IsRtssOsdPublishing,
+            ReportError);
         _refreshMonitorBrightnessCommand = new AsyncCommand(
             _ => RefreshMonitorBrightnessCoreAsync(showNotice: true),
             _ => IsUserAgentOnline,
@@ -444,6 +487,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _scanHidInventoryCommand = new AsyncCommand(
             _ => ScanHidInventoryCoreAsync(),
             _ => IsServiceOnline,
+            ReportError);
+        _readKrakenTelemetryCommand = new AsyncCommand(
+            _ => ReadKrakenTelemetryCoreAsync(),
+            _ => IsServiceOnline,
+            ReportError);
+        _readRtssFrameStatsCommand = new AsyncCommand(
+            _ => ReadRtssFrameStatsCoreAsync(),
+            _ => IsUserAgentOnline,
+            ReportError);
+        _startFrametimeBenchmarkCommand = new AsyncCommand(
+            _ => StartFrametimeBenchmarkCoreAsync(),
+            _ => IsUserAgentOnline && !IsFrametimeBenchmarkRunning,
+            ReportError);
+        _stopFrametimeBenchmarkCommand = new AsyncCommand(
+            _ => StopFrametimeBenchmarkCoreAsync(),
+            _ => IsUserAgentOnline && IsFrametimeBenchmarkRunning,
             ReportError);
         _setMonitorBrightnessCommand = new AsyncCommand(
             _ => SetMonitorBrightnessCoreAsync(),
@@ -725,6 +784,53 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public ICommand CaptureDesktopSnapshotCommand => _captureDesktopSnapshotCommand;
 
+    public ICommand StartVideoRecordingCommand => _startVideoRecordingCommand;
+
+    public ICommand PublishRtssOsdCommand => _publishRtssOsdCommand;
+
+    public ICommand ReleaseRtssOsdCommand => _releaseRtssOsdCommand;
+
+    public ICommand ReadKrakenTelemetryCommand => _readKrakenTelemetryCommand;
+
+    public ICommand ReadRtssFrameStatsCommand => _readRtssFrameStatsCommand;
+
+    public string RtssFrameStatsStatus
+    {
+        get => _rtssFrameStatsStatus;
+        private set => Set(ref _rtssFrameStatsStatus, value);
+    }
+
+    public ICommand StartFrametimeBenchmarkCommand => _startFrametimeBenchmarkCommand;
+
+    public ICommand StopFrametimeBenchmarkCommand => _stopFrametimeBenchmarkCommand;
+
+    public bool IsFrametimeBenchmarkRunning
+    {
+        get => _isFrametimeBenchmarkRunning;
+        private set
+        {
+            if (Set(ref _isFrametimeBenchmarkRunning, value))
+            {
+                _startFrametimeBenchmarkCommand.RaiseCanExecuteChanged();
+                _stopFrametimeBenchmarkCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public string FrametimeBenchmarkStatus
+    {
+        get => _frametimeBenchmarkStatus;
+        private set => Set(ref _frametimeBenchmarkStatus, value);
+    }
+
+    public string KrakenTelemetryStatus
+    {
+        get => _krakenTelemetryStatus;
+        private set => Set(ref _krakenTelemetryStatus, value);
+    }
+
+    public ICommand StopVideoRecordingCommand => _stopVideoRecordingCommand;
+
     public ICommand RefreshMonitorBrightnessCommand => _refreshMonitorBrightnessCommand;
     public ICommand ScanHidInventoryCommand => _scanHidInventoryCommand;
 
@@ -814,8 +920,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 _testMacroCommand.RaiseCanExecuteChanged();
                 _saveGameBundleCommand.RaiseCanExecuteChanged();
                 _captureDesktopSnapshotCommand.RaiseCanExecuteChanged();
+                _startVideoRecordingCommand.RaiseCanExecuteChanged();
+                _stopVideoRecordingCommand.RaiseCanExecuteChanged();
+                _publishRtssOsdCommand.RaiseCanExecuteChanged();
+                _releaseRtssOsdCommand.RaiseCanExecuteChanged();
+                _readRtssFrameStatsCommand.RaiseCanExecuteChanged();
+                _startFrametimeBenchmarkCommand.RaiseCanExecuteChanged();
+                _stopFrametimeBenchmarkCommand.RaiseCanExecuteChanged();
                 _refreshMonitorBrightnessCommand.RaiseCanExecuteChanged();
                 _scanHidInventoryCommand.RaiseCanExecuteChanged();
+                _readKrakenTelemetryCommand.RaiseCanExecuteChanged();
                 _setMonitorBrightnessCommand.RaiseCanExecuteChanged();
                 _saveOsdPresentationCommand.RaiseCanExecuteChanged();
                 _saveMonitoringPreferencesCommand.RaiseCanExecuteChanged();
@@ -824,9 +938,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 _saveMonitoringComparisonLayoutCommand.RaiseCanExecuteChanged();
                 _runInteractiveFanPreflightCommand.RaiseCanExecuteChanged();
                 OnPropertyChanged(nameof(CanCaptureDesktopSnapshot));
+                OnPropertyChanged(nameof(CanStartVideoRecording));
+                OnPropertyChanged(nameof(CanStopVideoRecording));
                 OnPropertyChanged(nameof(CanSetMonitorBrightness));
                 OnPropertyChanged(nameof(IsSelectedMonitorBrightnessWritable));
-                OnPropertyChanged(nameof(MonitorBrightnessSummary));
                 OnPropertyChanged(nameof(CanSaveOsdPresentation));
                 OnPropertyChanged(nameof(CanSaveMonitoringPreferences));
                 OnPropertyChanged(nameof(CanAddMonitoringComparisonSensor));
@@ -1612,6 +1727,25 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         private set => Set(ref _rtssBridgeStatus, value);
     }
 
+    public string RtssOsdPublishStatus
+    {
+        get => _rtssOsdPublishStatus;
+        private set => Set(ref _rtssOsdPublishStatus, value);
+    }
+
+    public bool IsRtssOsdPublishing
+    {
+        get => _isRtssOsdPublishing;
+        private set
+        {
+            if (Set(ref _isRtssOsdPublishing, value))
+            {
+                _publishRtssOsdCommand.RaiseCanExecuteChanged();
+                _releaseRtssOsdCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
     public string GameBarBridgeStatus
     {
         get => _gameBarBridgeStatus;
@@ -1644,7 +1778,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             if (Set(ref _selectedCaptureTarget, value))
             {
                 OnPropertyChanged(nameof(CanCaptureDesktopSnapshot));
+                OnPropertyChanged(nameof(CanStartVideoRecording));
                 _captureDesktopSnapshotCommand.RaiseCanExecuteChanged();
+                _startVideoRecordingCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -1656,6 +1792,34 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         && !IsDesktopOsdVisible;
 
     public bool CanCaptureDesktopSnapshot => IsUserAgentOnline && SelectedCaptureTarget is not null;
+
+    public bool CanStartVideoRecording => IsUserAgentOnline
+        && SelectedCaptureTarget is not null
+        && IsWgcRecordingReady
+        && !IsVideoRecording;
+
+    public bool CanStopVideoRecording => IsUserAgentOnline && IsVideoRecording;
+
+    public bool IsVideoRecording
+    {
+        get => _isVideoRecording;
+        private set
+        {
+            if (Set(ref _isVideoRecording, value))
+            {
+                OnPropertyChanged(nameof(CanStartVideoRecording));
+                OnPropertyChanged(nameof(CanStopVideoRecording));
+                _startVideoRecordingCommand.RaiseCanExecuteChanged();
+                _stopVideoRecordingCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public string VideoRecordingStatus
+    {
+        get => _videoRecordingStatus;
+        private set => Set(ref _videoRecordingStatus, value);
+    }
 
     public MonitorBrightnessDeviceV1? SelectedMonitorBrightnessDevice
     {
@@ -1710,12 +1874,6 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public bool IsSelectedMonitorBrightnessWritable => IsUserAgentOnline
         && SelectedMonitorBrightnessDevice?.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified;
-
-    public string MonitorBrightnessSummary => MonitorBrightnessDevices.Count == 0
-        ? IsUserAgentOnline
-            ? "Windows did not return any displays for this signed-in session."
-            : "User-agent offline; monitor discovery is not running."
-        : $"{MonitorBrightnessDevices.Count} display(s) detected; {MonitorBrightnessDevices.Count(device => device.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified)} expose a bounded brightness path.";
 
     public string MonitorBrightnessStatus
     {
@@ -3152,6 +3310,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             ? "Auto-tuning engine ready"
             : "No write-eligible controls";
 
+    public string CalibrationAvailabilityTone => CalibrationTargets.Any(target => target.IsAvailable) ? "Safe" : "Warning";
+
+    public string TuneAvailabilityTone => TuneTargets.Any(target => target.IsAvailable) ? "Safe" : "Warning";
+
     public string CalibrationEligibilityReason => GetCalibrationEligibility().Reason;
 
     public string TuneEligibilityReason => GetTuneEligibility().Reason;
@@ -3199,7 +3361,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public async Task InitialiseAsync()
     {
-        BusyMessage = "Connecting to the RigPilot service";
+        BusyMessage = IsPortableMode
+            ? Localization.L10n.Get("Portable_BusyMessage")
+            : "Connecting to the RigPilot service";
         IsBusy = true;
         try
         {
@@ -3355,6 +3519,79 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
               $"{classCount} device class{(classCount == 1 ? string.Empty : "es")}. Read-only inventory; no write capability.";
     }
 
+    private async Task ReadRtssFrameStatsCoreAsync()
+    {
+        IpcResponse response = await _userAgentClient.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetRtssFrameStats),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        RtssFrameStatsV1 stats = IpcJson.FromElement<RtssFrameStatsV1>(response.Payload)
+            ?? throw new InvalidDataException("User agent returned an empty RTSS frame statistics result.");
+        RtssFrameStatsStatus = stats.Applications.Count == 0
+            ? stats.Message
+            : string.Join("   ", stats.Applications.Select(app =>
+                $"{Path.GetFileName(app.ProcessName)}: {app.FramesPerSecond:0.#} FPS ({app.FrameTimeMilliseconds:0.##} ms)"));
+    }
+
+    private async Task StartFrametimeBenchmarkCoreAsync()
+    {
+        IpcResponse response = await _userAgentClient.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.StartFrametimeBenchmark,
+                new FrametimeBenchmarkStartRequestV1(
+                    FrametimeBenchmarkStartRequestV1.CurrentSchemaVersion,
+                    ProcessId: 0,
+                    MaxDurationSeconds: 300)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        ApplyFrametimeBenchmarkStatus(IpcJson.FromElement<FrametimeBenchmarkStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("User agent returned an empty benchmark status."));
+        ShowNotice("Benchmark started. It samples RTSS passively and stops automatically after 5 minutes.", "Info");
+    }
+
+    private async Task StopFrametimeBenchmarkCoreAsync()
+    {
+        IpcResponse response = await _userAgentClient.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.StopFrametimeBenchmark),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        ApplyFrametimeBenchmarkStatus(IpcJson.FromElement<FrametimeBenchmarkStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("User agent returned an empty benchmark status."));
+    }
+
+    private void ApplyFrametimeBenchmarkStatus(FrametimeBenchmarkStatusV1 status)
+    {
+        IsFrametimeBenchmarkRunning = status.State == FrametimeBenchmarkState.Running;
+        FrametimeBenchmarkStatus = status.State switch
+        {
+            FrametimeBenchmarkState.Completed =>
+                $"{status.ProcessName}: avg {status.AverageFps:0.#} FPS, min {status.MinimumFps:0.#}, max {status.MaximumFps:0.#}, " +
+                $"1%-window low {status.OnePercentLowFps:0.#}, 0.1%-window low {status.PointOnePercentLowFps:0.#} " +
+                $"({status.SampleCount} one-second windows over {status.DurationSeconds:0} s).",
+            _ => status.Message
+        };
+    }
+
+    private async Task ReadKrakenTelemetryCoreAsync()
+    {
+        if (!IsServiceOnline)
+        {
+            KrakenTelemetryStatus = "Liquid-cooler telemetry requires the RigPilot service.";
+            return;
+        }
+
+        KrakenTelemetryStatus = "Reading streamed Kraken status…";
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.ReadKrakenTelemetry),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        KrakenTelemetryV1 result = IpcJson.FromElement<KrakenTelemetryV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty Kraken telemetry result.");
+        KrakenTelemetryStatus = result.Outcome == KrakenTelemetryOutcome.Succeeded
+            ? $"{result.ProductName ?? "Kraken"}: liquid {result.LiquidTemperatureCelsius:0.0} °C, pump {result.PumpSpeedRpm} rpm at {result.PumpDutyPercent}% duty. Read-only; no report was written to the cooler."
+            : result.Message;
+    }
+
     public string BuildMonitoringCsv()
     {
         System.Text.StringBuilder output = new();
@@ -3463,6 +3700,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _refreshing = true;
         try
         {
+            if (IsPortableMode)
+            {
+                // Portable mode never touches the service pipe: no connection
+                // attempt, no compatibility probe, no install prompting.
+                IsServiceOnline = false;
+                ServiceStatusText = Localization.L10n.Get("Portable_ServiceStatus");
+                UpdatePlatformStatus = Localization.L10n.Get("Portable_UpdateStatus");
+                bool forcePortableProbe = full || _snapshot is null || DateTimeOffset.UtcNow - _lastLocalProbe >= LocalProbeInterval;
+                await RefreshFromLocalAdaptersAsync(forcePortableProbe);
+                if (_snapshot is not null)
+                {
+                    DataSourceLabel = LocalProbeLabel;
+                }
+                return;
+            }
+
             CancellationToken token = _lifetime.Token;
             await RefreshServiceCompatibilityAsync(token);
             if (!_serviceCompatibility.IsServiceReachable)
@@ -3935,6 +4188,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 GameBarBridgeStatus = "The connected user agent predates Game Bar discovery.";
                 CaptureBridgeStatus = "The connected user agent predates Windows Graphics Capture discovery.";
             }
+            if (userAgentHandshake?.Features.Contains("rtss-osd", StringComparer.OrdinalIgnoreCase) == true)
+            {
+                IpcResponse rtssOsdResponse = await _userAgentClient.SendAsync(
+                    NamedPipeRequestClient.CreateRequest(IpcCommand.GetRtssOsdBridgeStatus),
+                    _lifetime.Token);
+                EnsureSuccess(rtssOsdResponse);
+                RtssOsdBridgeStatusV1 rtssOsd = IpcJson.FromElement<RtssOsdBridgeStatusV1>(rtssOsdResponse.Payload)
+                    ?? throw new InvalidDataException("User agent returned an empty RTSS OSD status.");
+                IsRtssOsdPublishing = rtssOsd.Publishing;
+                RtssOsdPublishStatus = rtssOsd.Message;
+            }
+            else
+            {
+                IsRtssOsdPublishing = false;
+                RtssOsdPublishStatus = "The connected user agent predates the RTSS OSD bridge. Upgrade it to publish RigPilot's sensor line.";
+            }
             if (userAgentHandshake?.Features.Contains("desktop-snapshot", StringComparer.OrdinalIgnoreCase) == true)
             {
                 string? selectedTargetId = SelectedCaptureTarget?.StableId;
@@ -3964,7 +4233,6 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 Replace(MonitorBrightnessDevices, []);
                 SelectedMonitorBrightnessDevice = null;
                 MonitorBrightnessStatus = "The connected user agent predates monitor brightness support.";
-                OnPropertyChanged(nameof(MonitorBrightnessSummary));
                 OnPropertyChanged(nameof(CanSetMonitorBrightness));
                 OnPropertyChanged(nameof(IsSelectedMonitorBrightnessWritable));
             }
@@ -3986,7 +4254,6 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             Replace(MonitorBrightnessDevices, []);
             SelectedMonitorBrightnessDevice = null;
             MonitorBrightnessStatus = "Start or update RigPilot in this signed-in Windows session, then refresh monitors.";
-            OnPropertyChanged(nameof(MonitorBrightnessSummary));
             OnPropertyChanged(nameof(CanSetMonitorBrightness));
             OnPropertyChanged(nameof(IsSelectedMonitorBrightnessWritable));
         }
@@ -4059,7 +4326,6 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(OsdLayoutCount));
         OnPropertyChanged(nameof(CapturePresetCount));
         OnPropertyChanged(nameof(CanCaptureDesktopSnapshot));
-        OnPropertyChanged(nameof(MonitorBrightnessSummary));
         OnPropertyChanged(nameof(CanSetMonitorBrightness));
         OnPropertyChanged(nameof(IsSelectedMonitorBrightnessWritable));
         OnPropertyChanged(nameof(GameBundleSummary));
@@ -4605,11 +4871,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         Replace(AutomationRules, ordered);
     }
 
+    private string LocalProbeLabel => IsPortableMode ? Localization.L10n.Get("Portable_DataSourceLabel") : "Local probe";
+
     private async Task RefreshFromLocalAdaptersAsync(bool force)
     {
         if (!force && _snapshot is not null)
         {
-            DataSourceLabel = "Local probe";
+            DataSourceLabel = LocalProbeLabel;
             OnPropertyChanged(nameof(ServiceStateLabel));
             OnPropertyChanged(nameof(ConnectionTone));
             return;
@@ -4623,13 +4891,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 new WindowsPowerAdapter(),
                 new NvmlTelemetryAdapter(),
                 new IntelGraphicsControlAdapter(),
+                new AmdGraphicsControlAdapter(),
                 new VendorControlEligibilityAdapter(),
                 new WindowsPeripheralInventoryAdapter(),
                 new LibreHardwareMonitorAdapter()
             ]);
             _snapshot = await _localCoordinator.CaptureAsync(_lifetime.Token);
             _lastLocalProbe = DateTimeOffset.UtcNow;
-            DataSourceLabel = "Local probe";
+            DataSourceLabel = LocalProbeLabel;
             if (Profiles.Count == 0)
             {
                 Replace(Profiles, BuiltInProfiles.Create());
@@ -4637,8 +4906,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             }
 
             UpdateDisplays();
-            LastUpdatedText = $"Local probe {DateTimeOffset.Now:HH:mm:ss}";
-            SafetySummary = "The service is unavailable. Monitoring is local and read-only; no hardware writes can be issued.";
+            LastUpdatedText = $"{LocalProbeLabel} {DateTimeOffset.Now:HH:mm:ss}";
+            SafetySummary = IsPortableMode
+                ? Localization.L10n.Get("Portable_SafetySummary")
+                : "The service is unavailable. Monitoring is local and read-only; no hardware writes can be issued.";
             SafetyTone = "Warning";
             OnPropertyChanged(nameof(ServiceStateLabel));
             OnPropertyChanged(nameof(ConnectionTone));
@@ -5633,6 +5904,176 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    private async Task StartVideoRecordingCoreAsync()
+    {
+        CaptureTargetV1 target = SelectedCaptureTarget
+            ?? throw new InvalidOperationException("Select a display or visible window before recording.");
+        IpcResponse response = await _userAgentClient.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.StartVideoRecording,
+                new VideoRecordingStartRequestV1(
+                    VideoRecordingStartRequestV1.CurrentSchemaVersion,
+                    target,
+                    ConfirmedVisibleCapture: true,
+                    IdempotencyKey: Guid.NewGuid().ToString("N"),
+                    MaxDurationSeconds: 300,
+                    CaptureSystemAudio: true)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        VideoRecordingStatusV1 status = IpcJson.FromElement<VideoRecordingStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("User agent returned an empty recording status.");
+        ApplyVideoRecordingStatus(status);
+        ShowNotice("Recording started. Output stays in your Videos\\RigPilot\\Recordings folder and stops automatically after 5 minutes.", "Info");
+    }
+
+    private async Task StopVideoRecordingCoreAsync()
+    {
+        IpcResponse response = await _userAgentClient.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.StopVideoRecording),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        VideoRecordingStatusV1 status = IpcJson.FromElement<VideoRecordingStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("User agent returned an empty recording status.");
+        // Stop is acknowledged asynchronously by the encoder; poll briefly so the user
+        // sees the final file path instead of a transient "Recording" state.
+        for (int attempt = 0; attempt < 10 && status.State == VideoRecordingState.Recording; attempt++)
+        {
+            await Task.Delay(300, _lifetime.Token);
+            IpcResponse poll = await _userAgentClient.SendAsync(
+                NamedPipeRequestClient.CreateRequest(IpcCommand.GetVideoRecordingStatus),
+                _lifetime.Token);
+            EnsureSuccess(poll);
+            status = IpcJson.FromElement<VideoRecordingStatusV1>(poll.Payload) ?? status;
+        }
+
+        ApplyVideoRecordingStatus(status);
+        if (status.State == VideoRecordingState.Completed && status.OutputPath is string path)
+        {
+            ShowNotice($"Recording saved as {Path.GetFileName(path)} in your Videos\\RigPilot\\Recordings folder.", "Success");
+        }
+    }
+
+    private async Task PublishRtssOsdCoreAsync()
+    {
+        string line = BuildRtssOsdLine()
+            ?? throw new InvalidOperationException("Live sensor data is required before publishing a sensor line to RTSS.");
+        IpcResponse response = await _userAgentClient.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.PublishRtssOsdText,
+                new RtssOsdPublishRequestV1(
+                    RtssOsdPublishRequestV1.CurrentSchemaVersion,
+                    line,
+                    ConfirmedThirdPartyOsdWrite: true),
+                idempotencyKey: Guid.NewGuid().ToString("N")),
+            _lifetime.Token);
+        RtssOsdBridgeStatusV1 status = IpcJson.FromElement<RtssOsdBridgeStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("User agent returned an empty RTSS OSD status.");
+        IsRtssOsdPublishing = response.Success && status.Publishing;
+        RtssOsdPublishStatus = status.Message;
+        if (!response.Success)
+        {
+            throw new InvalidOperationException(status.Message);
+        }
+        ShowNotice("RigPilot's sensor line is now published to the RTSS on-screen display. It refreshes with live sensors and uses only RigPilot's own OSD slot.", "Success");
+    }
+
+    private async Task ReleaseRtssOsdCoreAsync()
+    {
+        IpcResponse response = await _userAgentClient.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.ReleaseRtssOsd, idempotencyKey: Guid.NewGuid().ToString("N")),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        RtssOsdBridgeStatusV1 status = IpcJson.FromElement<RtssOsdBridgeStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("User agent returned an empty RTSS OSD status.");
+        IsRtssOsdPublishing = status.Publishing;
+        RtssOsdPublishStatus = status.Message;
+        ShowNotice("RigPilot's RTSS OSD slot is released.", "Info");
+    }
+
+    /// <summary>
+    /// Builds the single OSD text line published to RTSS from the same sensor
+    /// selection the desktop OSD uses, so both overlays always agree.
+    /// </summary>
+    private string? BuildRtssOsdLine()
+    {
+        if (_snapshot is null || _snapshot.Sensors.Count == 0)
+        {
+            return null;
+        }
+        OsdLayoutV1 layout = ResolveDesktopOsdLayout();
+        Dictionary<string, SensorSample> samples = _snapshot.Sensors
+            .Where(sample => sample.Value is double value && double.IsFinite(value))
+            .GroupBy(sample => sample.SensorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        List<string> parts = [];
+        foreach (OsdWidgetV1 widget in layout.Widgets)
+        {
+            if (samples.TryGetValue(widget.SensorId, out SensorSample? sample) && sample.Value is double value)
+            {
+                parts.Add($"{widget.Label} {value:0.#}{sample.Unit}");
+            }
+        }
+        return parts.Count == 0 ? null : $"RigPilot: {string.Join("  ", parts)}";
+    }
+
+    private void RefreshRtssOsdPublish()
+    {
+        if (!IsRtssOsdPublishing || BuildRtssOsdLine() is not string line)
+        {
+            return;
+        }
+        if (Interlocked.CompareExchange(ref _rtssOsdRefreshBusy, 1, 0) != 0)
+        {
+            return;
+        }
+        _ = RefreshRtssOsdPublishAsync(line);
+    }
+
+    private async Task RefreshRtssOsdPublishAsync(string line)
+    {
+        try
+        {
+            IpcResponse response = await _userAgentClient.SendAsync(
+                NamedPipeRequestClient.CreateRequest(
+                    IpcCommand.PublishRtssOsdText,
+                    new RtssOsdPublishRequestV1(
+                        RtssOsdPublishRequestV1.CurrentSchemaVersion,
+                        line,
+                        ConfirmedThirdPartyOsdWrite: true),
+                    idempotencyKey: Guid.NewGuid().ToString("N")),
+                _lifetime.Token);
+            RtssOsdBridgeStatusV1? status = IpcJson.FromElement<RtssOsdBridgeStatusV1>(response.Payload);
+            if (status is not null)
+            {
+                IsRtssOsdPublishing = response.Success && status.Publishing;
+                RtssOsdPublishStatus = status.Message;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // A vanished RTSS instance stops publishing without surfacing an error
+            // dialog; the card message explains how to resume.
+            IsRtssOsdPublishing = false;
+            RtssOsdPublishStatus = $"RTSS OSD publishing stopped safely: {exception.Message}";
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _rtssOsdRefreshBusy, 0);
+        }
+    }
+
+    private void ApplyVideoRecordingStatus(VideoRecordingStatusV1 status)
+    {
+        IsVideoRecording = status.State == VideoRecordingState.Recording;
+        VideoRecordingStatus = status.State switch
+        {
+            VideoRecordingState.Recording => $"Recording {status.Target?.DisplayName}: {status.DurationSeconds:0} s elapsed. {status.Message}",
+            VideoRecordingState.Completed => $"Saved {Path.GetFileName(status.OutputPath ?? string.Empty)} ({Math.Max(1, status.BytesWritten / 1024):N0} KB, {status.DurationSeconds:0} s).",
+            VideoRecordingState.Failed => status.Message,
+            _ => status.Message
+        };
+    }
+
     private async Task RefreshMonitorBrightnessCoreAsync(bool showNotice)
     {
         string? selectedId = SelectedMonitorBrightnessDevice?.Id;
@@ -5652,8 +6093,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             ? "Windows did not return any displays for this signed-in session."
             : controllable == 0
                 ? "Displays were recognized, but none expose a verified writable DDC/CI or Windows-panel brightness range."
-                : $"Detected {MonitorBrightnessDevices.Count} display(s); {controllable} expose a bounded DDC/CI or Windows-panel brightness path.";
-        OnPropertyChanged(nameof(MonitorBrightnessSummary));
+                : $"Detected {MonitorBrightnessDevices.Count} display{(MonitorBrightnessDevices.Count == 1 ? "" : "s")}; {controllable} expose{(controllable == 1 ? "s" : "")} a bounded DDC/CI or Windows-panel brightness path.";
         OnPropertyChanged(nameof(CanSetMonitorBrightness));
         OnPropertyChanged(nameof(IsSelectedMonitorBrightnessWritable));
         _setMonitorBrightnessCommand.RaiseCanExecuteChanged();
@@ -6834,6 +7274,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         UpdateSafetySummary();
 
         RefreshDesktopOsd();
+        RefreshRtssOsdPublish();
         NotifySnapshotProperties();
     }
 
@@ -7249,6 +7690,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(HasTuneTargets));
         OnPropertyChanged(nameof(CalibrationAvailabilityLabel));
         OnPropertyChanged(nameof(TuneAvailabilityLabel));
+        OnPropertyChanged(nameof(CalibrationAvailabilityTone));
+        OnPropertyChanged(nameof(TuneAvailabilityTone));
         OnPropertyChanged(nameof(CanWrite));
         OnPropertyChanged(nameof(WriteStateLabel));
         OnPropertyChanged(nameof(ServiceVersion));

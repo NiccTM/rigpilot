@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="Portable_ServiceStatus" xml:space="preserve">
+    <value>Portabler Modus: RigPilot läuft ohne den Dienst. Hardwaredaten sind schreibgeschützt; Profile, Automatisierung und alle Hardware-Schreibvorgänge sind nicht verfügbar.</value>
+  </data>
+  <data name="Portable_SafetySummary" xml:space="preserve">
+    <value>Der portable Modus ist konstruktionsbedingt schreibgeschützt: Die Überwachung läuft in diesem Prozess und es existiert kein Hardware-Schreibpfad.</value>
+  </data>
+  <data name="Portable_UpdateStatus" xml:space="preserve">
+    <value>Treiber-Updates sind im portablen Modus nicht verfügbar.</value>
+  </data>
+  <data name="Portable_DataSourceLabel" xml:space="preserve">
+    <value>Portabel (schreibgeschützt)</value>
+  </data>
+  <data name="Portable_BusyMessage" xml:space="preserve">
+    <value>Portabler schreibgeschützter Messlauf wird gestartet</value>
+  </data>
+</root>

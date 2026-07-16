@@ -14,6 +14,12 @@
           "SkiaSharp.Views.WPF": "3.119.0"
         }
       },
+      "ScreenRecorderLib": {
+        "type": "Direct",
+        "requested": "[6.6.0, )",
+        "resolved": "6.6.0",
+        "contentHash": "u4//jvO39tRXRNqg6/1Ky+KWPmxGdBsJOfp0A1tz6jnJosozzUSYPM0eu3LzeHwZYXeBMJBhVTRLJJBM6CVNng=="
+      },
       "System.Management": {
         "type": "Direct",
         "requested": "[10.0.9, )",

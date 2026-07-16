@@ -669,6 +669,11 @@
           "SkiaSharp.Views.WPF": "3.119.0"
         }
       },
+      "ScreenRecorderLib": {
+        "type": "Transitive",
+        "resolved": "6.6.0",
+        "contentHash": "u4//jvO39tRXRNqg6/1Ky+KWPmxGdBsJOfp0A1tz6jnJosozzUSYPM0eu3LzeHwZYXeBMJBhVTRLJJBM6CVNng=="
+      },
       "SkiaSharp": {
         "type": "Transitive",
         "resolved": "3.119.0",
@@ -847,6 +852,7 @@
           "PCHelper.Core": "[0.4.0-alpha, )",
           "PCHelper.Ipc": "[0.4.0-alpha, )",
           "ScottPlot.WPF": "[5.1.59, )",
+          "ScreenRecorderLib": "[6.6.0, )",
           "System.Management": "[10.0.9, )"
         }
       },

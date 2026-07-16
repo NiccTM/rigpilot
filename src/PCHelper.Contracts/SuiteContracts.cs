@@ -1149,6 +1149,150 @@ public sealed record CaptureSnapshotResultV1(
     public const int CurrentSchemaVersion = 1;
 }
 
+/// <summary>
+/// Explicit, same-user video recording request. Recording starts only after a
+/// visible-session confirmation, targets only a currently discovered display or
+/// window, is duration-bounded, and writes only below the user's Videos\RigPilot
+/// directory. It never runs through the service.
+/// </summary>
+public sealed record VideoRecordingStartRequestV1(
+    int SchemaVersion,
+    CaptureTargetV1 Target,
+    bool ConfirmedVisibleCapture,
+    string IdempotencyKey,
+    int MaxDurationSeconds,
+    bool CaptureSystemAudio)
+{
+    public const int CurrentSchemaVersion = 1;
+    public const int MinimumDurationSeconds = 5;
+    public const int MaximumDurationSeconds = 600;
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<VideoRecordingState>))]
+public enum VideoRecordingState
+{
+    Idle,
+    Recording,
+    Completed,
+    Failed
+}
+
+/// <summary>
+/// Metadata only. Recorded video stays in the signed-in user's Videos\RigPilot
+/// directory and is never written to service state or compatibility reports.
+/// </summary>
+public sealed record VideoRecordingStatusV1(
+    int SchemaVersion,
+    VideoRecordingState State,
+    CaptureTargetV1? Target,
+    string? OutputPath,
+    DateTimeOffset? StartedAt,
+    double DurationSeconds,
+    long BytesWritten,
+    string Message)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
+/// <summary>
+/// A request to publish (or refresh) RigPilot's own text line in the RTSS
+/// on-screen display through the documented RTSS shared-memory contract. The
+/// bridge writes only an OSD slot RigPilot owns (claimed by writing RigPilot's
+/// owner name into an empty slot, the mechanism the RTSS SDK defines for
+/// third-party clients); it never touches another application's slot, never
+/// injects into any process, and refuses to write unless the mapped memory
+/// carries the expected signature, a supported v2 ABI version, and
+/// self-consistent bounds.
+/// </summary>
+public sealed record RtssOsdPublishRequestV1(
+    int SchemaVersion,
+    string Text,
+    bool ConfirmedThirdPartyOsdWrite)
+{
+    public const int CurrentSchemaVersion = 1;
+    public const int MaximumTextLength = 255;
+}
+
+public sealed record RtssOsdBridgeStatusV1(
+    int SchemaVersion,
+    bool SharedMemoryDetected,
+    bool AbiValidated,
+    string? AbiVersion,
+    bool Publishing,
+    int SlotIndex,
+    string Message)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
+public sealed record RtssAppFrameStatsV1(
+    int ProcessId,
+    string ProcessName,
+    double FramesPerSecond,
+    double FrameTimeMilliseconds);
+
+public sealed record RtssFrameStatsV1(
+    int SchemaVersion,
+    bool SharedMemoryDetected,
+    IReadOnlyList<RtssAppFrameStatsV1> Applications,
+    string Message)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
+/// <summary>
+/// Starts an RTSS-sampled frame-rate benchmark for one application. Sampling is
+/// entirely passive: RigPilot reads the frame counters RTSS already publishes in
+/// shared memory (no injection, no OSD write). ProcessId 0 selects the
+/// application RTSS reports with the highest frame rate at each sample.
+/// </summary>
+public sealed record FrametimeBenchmarkStartRequestV1(
+    int SchemaVersion,
+    int ProcessId,
+    int MaxDurationSeconds)
+{
+    public const int CurrentSchemaVersion = 1;
+    public const int MinimumDurationSeconds = 10;
+    public const int MaximumDurationSeconds = 3600;
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<FrametimeBenchmarkState>))]
+public enum FrametimeBenchmarkState
+{
+    Idle,
+    Running,
+    Completed,
+    Failed
+}
+
+/// <summary>
+/// Benchmark results computed from RTSS's ~one-second measurement windows. The
+/// "low" figures are therefore the means of the worst 1% / 0.1% of one-second
+/// windows — comparable across RigPilot runs, but deliberately not labelled as
+/// per-frame 1% lows, which need per-frame data RigPilot does not collect.
+/// </summary>
+public sealed record FrametimeBenchmarkStatusV1(
+    int SchemaVersion,
+    FrametimeBenchmarkState State,
+    string? ProcessName,
+    DateTimeOffset? StartedAt,
+    double DurationSeconds,
+    int SampleCount,
+    double? AverageFps,
+    double? MinimumFps,
+    double? MaximumFps,
+    double? OnePercentLowFps,
+    double? PointOnePercentLowFps,
+    double? AverageFrameTimeMilliseconds,
+    string Message)
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public static FrametimeBenchmarkStatusV1 Idle(string message) => new(
+        CurrentSchemaVersion, FrametimeBenchmarkState.Idle, null, null, 0, 0,
+        null, null, null, null, null, null, message);
+}
+
 public sealed record CaptureMetricsV1(
     long FramesEncoded,
     long FramesDropped,
