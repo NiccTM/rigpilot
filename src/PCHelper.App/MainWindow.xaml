@@ -173,9 +173,9 @@
                   <TextBlock Text="{Binding ServiceStateLabel}" Style="{StaticResource MutedStyle}" Margin="6,0,0,0" />
                 </StackPanel>
               </Grid>
-              <TextBlock Text="{Binding ServiceStatusText}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,7,0,0" MaxHeight="50" />
+              <TextBlock Text="{Binding ServiceStatusText}" ToolTip="{Binding ServiceStatusText}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,7,0,0" />
               <TextBlock Text="{Binding ServiceCompatibilityLabel}" FontWeight="SemiBold" Margin="0,8,0,0" />
-              <TextBlock Text="{Binding ServiceCompatibilityMessage}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,3,0,0" MaxHeight="58" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Runtime.Compatibility" />
+              <TextBlock Text="{Binding ServiceCompatibilityMessage}" ToolTip="{Binding ServiceCompatibilityMessage}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,3,0,0" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Runtime.Compatibility" />
               <Border Background="{StaticResource BorderBrush}" Height="1" Margin="0,10,0,8" />
               <Grid>
                 <TextBlock Text="Source" Style="{StaticResource SubtleStyle}" />
@@ -826,8 +826,8 @@
                           <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                          <TextBlock Text="{Binding Name}" FontSize="17" FontWeight="SemiBold" />
-                          <TextBlock Text="{Binding Objective}" Style="{StaticResource SubtleStyle}" Margin="0,2,0,0" />
+                          <TextBlock Text="{Binding Name}" ToolTip="{Binding Name}" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap" MaxHeight="46" />
+                          <TextBlock Text="{Binding Objective}" ToolTip="{Binding Objective}" Style="{StaticResource SubtleStyle}" Margin="0,2,0,0" />
                         </StackPanel>
                         <Border Grid.Column="2" CornerRadius="12" Padding="8,3" Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" VerticalAlignment="Top">
                           <TextBlock Text="{Binding StatusLabel}" Style="{StaticResource BadgeTextStyle}" />
@@ -938,7 +938,18 @@
                 <Border Style="{StaticResource CardStyle}" Padding="18">
                   <StackPanel>
                     <TextBlock Text="Cooling status" Style="{StaticResource CardTitleStyle}" />
-                    <TextBlock Text="{Binding CalibrationAvailabilityLabel}" Foreground="{StaticResource WarningBrush}" FontWeight="SemiBold" Margin="0,7,0,4" />
+                    <TextBlock Text="{Binding CalibrationAvailabilityLabel}" FontWeight="SemiBold" Margin="0,7,0,4">
+                      <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                          <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding CalibrationAvailabilityTone}" Value="Safe">
+                              <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </TextBlock.Style>
+                    </TextBlock>
                     <TextBlock Text="{Binding CoolingCapabilities.Count, StringFormat={}{0} cooling controls detected}" Style="{StaticResource SubtleStyle}" />
                     <TextBlock Text="Simple mode keeps fan commissioning, calibration, curves, imports, and controller evidence out of the way. Firmware/default control remains the safe fallback." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,10,0,0" />
                   </StackPanel>
@@ -1281,7 +1292,18 @@
                 <Border Style="{StaticResource CardStyle}" Padding="18">
                   <StackPanel>
                     <TextBlock Text="Performance status" Style="{StaticResource CardTitleStyle}" />
-                    <TextBlock Text="{Binding TuneAvailabilityLabel}" Foreground="{StaticResource WarningBrush}" FontWeight="SemiBold" Margin="0,7,0,4" />
+                    <TextBlock Text="{Binding TuneAvailabilityLabel}" FontWeight="SemiBold" Margin="0,7,0,4">
+                      <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                          <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding TuneAvailabilityTone}" Value="Safe">
+                              <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </TextBlock.Style>
+                    </TextBlock>
                     <TextBlock Text="{Binding PerformanceCapabilities.Count, StringFormat={}{0} hardware controls assessed}" Style="{StaticResource SubtleStyle}" />
                     <TextBlock Text="Daily profile changes stay on the Profiles page. Tuning targets, bounds, screening, and qualification work remain in Advanced Lab." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,10,0,0" />
                   </StackPanel>
@@ -1772,7 +1794,7 @@
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
                   <TextBlock Text="Local desktop OSD" Style="{StaticResource CardTitleStyle}" />
-                  <TextBlock Text="Shows selected live sensors in a transparent, non-activating window. It does not inject into a game and never writes RTSS shared memory." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,5,0,11" />
+                  <TextBlock Text="Shows selected live sensors in a transparent, non-activating window without injecting into any game. Optionally, the same sensor line can be published into a running RTSS on-screen display through RTSS's documented shared-memory contract, using only an OSD slot RigPilot owns." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,5,0,11" />
                   <TextBlock Text="LAYOUT" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
                   <ComboBox ItemsSource="{Binding OsdLayouts}" SelectedItem="{Binding SelectedDesktopOsdLayout}" automation:AutomationProperties.Name="Desktop OSD layout" automation:AutomationProperties.AutomationId="Games.DesktopOsdLayout">
                     <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
@@ -1789,6 +1811,20 @@
                     <Button Content="Show OSD" Command="{Binding ShowDesktopOsdCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0" automation:AutomationProperties.Name="Show local desktop OSD" automation:AutomationProperties.AutomationId="Games.ShowDesktopOsd" />
                     <Button Content="Hide OSD" Command="{Binding HideDesktopOsdCommand}" Style="{StaticResource GhostButtonStyle}" automation:AutomationProperties.Name="Hide local desktop OSD" automation:AutomationProperties.AutomationId="Games.HideDesktopOsd" />
                   </WrapPanel>
+                  <TextBlock Text="RTSS IN-GAME OSD" Style="{StaticResource EyebrowStyle}" Margin="0,14,0,5" />
+                  <TextBlock Text="{Binding RtssOsdPublishStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,10" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Games.RtssOsdPublishStatus" />
+                  <WrapPanel>
+                    <Button Content="Publish sensor line" Command="{Binding PublishRtssOsdCommand}" Margin="0,0,8,0" automation:AutomationProperties.Name="Publish RigPilot sensor line to RTSS OSD" automation:AutomationProperties.AutomationId="Games.PublishRtssOsd" />
+                    <Button Content="Stop publishing" Command="{Binding ReleaseRtssOsdCommand}" Style="{StaticResource GhostButtonStyle}" automation:AutomationProperties.Name="Stop publishing to RTSS OSD" automation:AutomationProperties.AutomationId="Games.ReleaseRtssOsd" />
+                    <Button Content="Read frame stats" Command="{Binding ReadRtssFrameStatsCommand}" Style="{StaticResource GhostButtonStyle}" Margin="8,0,0,0" automation:AutomationProperties.Name="Read RTSS frame statistics" automation:AutomationProperties.AutomationId="Games.ReadRtssFrameStats" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding RtssFrameStatsStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,9,0,0" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Games.RtssFrameStatsStatus" />
+                  <TextBlock Text="FRAME-RATE BENCHMARK" Style="{StaticResource EyebrowStyle}" Margin="0,14,0,5" />
+                  <TextBlock Text="{Binding FrametimeBenchmarkStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,10" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Games.FrametimeBenchmarkStatus" />
+                  <WrapPanel>
+                    <Button Content="Start benchmark" Command="{Binding StartFrametimeBenchmarkCommand}" Margin="0,0,8,0" automation:AutomationProperties.Name="Start frame-rate benchmark" automation:AutomationProperties.AutomationId="Games.StartFrametimeBenchmark" />
+                    <Button Content="Stop benchmark" Command="{Binding StopFrametimeBenchmarkCommand}" Style="{StaticResource GhostButtonStyle}" automation:AutomationProperties.Name="Stop frame-rate benchmark" automation:AutomationProperties.AutomationId="Games.StopFrametimeBenchmark" />
+                  </WrapPanel>
                 </StackPanel>
               </Border>
               <Border Style="{StaticResource CardStyle}">
@@ -1803,7 +1839,12 @@
                   <Button Content="Save PNG snapshot" Command="{Binding CaptureDesktopSnapshotCommand}" Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" automation:AutomationProperties.Name="Save explicit desktop PNG snapshot" automation:AutomationProperties.AutomationId="Games.CaptureSnapshot" />
                   <Separator />
                   <TextBlock Text="Windows Graphics Capture video" Style="{StaticResource CardTitleStyle}" />
-                  <TextBlock Text="{Binding WgcRecordingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0" />
+                  <TextBlock Text="{Binding WgcRecordingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,9" />
+                  <TextBlock Text="{Binding VideoRecordingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,10" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Games.VideoRecordingStatus" />
+                  <WrapPanel>
+                    <Button Content="Start recording" Command="{Binding StartVideoRecordingCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0" automation:AutomationProperties.Name="Start bounded video recording of the selected target" automation:AutomationProperties.AutomationId="Games.StartVideoRecording" />
+                    <Button Content="Stop recording" Command="{Binding StopVideoRecordingCommand}" automation:AutomationProperties.Name="Stop the current video recording" automation:AutomationProperties.AutomationId="Games.StopVideoRecording" />
+                  </WrapPanel>
                 </StackPanel>
               </Border>
             </local:AdaptiveUniformGrid>
@@ -1866,6 +1907,17 @@
                   <Button Grid.Column="1" Content="Scan peripherals" Command="{Binding ScanHidInventoryCommand}" Margin="12,0,0,0" VerticalAlignment="Top" automation:AutomationProperties.Name="Scan connected peripherals" automation:AutomationProperties.AutomationId="Devices.ScanHid" />
                 </Grid>
                 <TextBlock Text="{Binding HidInventoryStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,12,0,2" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Devices.HidInventoryStatus" />
+                <Grid Margin="0,10,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock Text="LIQUID COOLER TELEMETRY" Style="{StaticResource EyebrowStyle}" />
+                    <TextBlock Text="{Binding KrakenTelemetryStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Devices.KrakenTelemetryStatus" />
+                  </StackPanel>
+                  <Button Grid.Column="1" Content="Read cooler status" Command="{Binding ReadKrakenTelemetryCommand}" Margin="12,0,0,0" VerticalAlignment="Top" automation:AutomationProperties.Name="Read Kraken liquid cooler telemetry" automation:AutomationProperties.AutomationId="Devices.ReadKrakenTelemetry" />
+                </Grid>
                 <ItemsControl ItemsSource="{Binding HidDevices}" Margin="0,6,0,0" automation:AutomationProperties.Name="Connected peripherals list" automation:AutomationProperties.AutomationId="Devices.HidInventory">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
@@ -1902,8 +1954,7 @@
                   </StackPanel>
                   <Button Grid.Column="1" Content="Refresh monitors" Command="{Binding RefreshMonitorBrightnessCommand}" Margin="12,0,0,0" VerticalAlignment="Top" automation:AutomationProperties.Name="Refresh detected monitors" automation:AutomationProperties.AutomationId="Devices.RefreshMonitorBrightness" />
                 </Grid>
-                <TextBlock Text="{Binding MonitorBrightnessSummary}" Style="{StaticResource SubtleStyle}" Margin="0,12,0,0" />
-                <TextBlock Text="{Binding MonitorBrightnessStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,4,0,12" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Devices.MonitorBrightnessStatus" />
+                <TextBlock Text="{Binding MonitorBrightnessStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,12,0,12" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Devices.MonitorBrightnessStatus" />
                 <Grid IsEnabled="{Binding IsUserAgentOnline}">
                   <Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="110" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                   <StackPanel Margin="0,0,10,0">
@@ -2068,7 +2119,7 @@
             <local:AdaptiveUniformGrid MaximumColumns="4" MinimumColumns="2" MinimumItemWidth="230">
               <Border Style="{StaticResource CardStyle}" Padding="17"><StackPanel><TextBlock Text="WARNINGS" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding WarningCount}" Style="{StaticResource MetricValueStyle}" Margin="0,7,0,2" /><TextBlock Text="Require review" Style="{StaticResource SubtleStyle}" /></StackPanel></Border>
               <Border Style="{StaticResource CardStyle}" Padding="17"><StackPanel><TextBlock Text="CONFLICTS" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding RunningConflictCount}" Style="{StaticResource MetricValueStyle}" Margin="0,7,0,2" /><TextBlock Text="Competing writers" Style="{StaticResource SubtleStyle}" /></StackPanel></Border>
-              <Border Style="{StaticResource CardStyle}" Padding="17"><StackPanel><TextBlock Text="SERVICE" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding ServiceVersion}" FontSize="22" FontWeight="SemiBold" Margin="0,10,0,3" /><TextBlock Text="{Binding ServiceUptimeText, StringFormat=Uptime {0}}" Style="{StaticResource SubtleStyle}" /></StackPanel></Border>
+              <Border Style="{StaticResource CardStyle}" Padding="17"><StackPanel><TextBlock Text="SERVICE" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding ServiceVersion}" ToolTip="{Binding ServiceVersion}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,10,0,3" /><TextBlock Text="{Binding ServiceUptimeText, StringFormat=Uptime {0}}" Style="{StaticResource SubtleStyle}" /></StackPanel></Border>
               <Border Style="{StaticResource CardStyle}" Padding="17"><StackPanel><TextBlock Text="REVISION" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding StateRevisionText}" Style="{StaticResource MetricValueStyle}" Margin="0,7,0,2" /><TextBlock Text="Transactional state" Style="{StaticResource SubtleStyle}" /></StackPanel></Border>
               <Border Style="{StaticResource CardStyle}" Padding="17"><StackPanel><TextBlock Text="DRIVER UPDATES" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding PendingUpdateCount}" Style="{StaticResource MetricValueStyle}" Margin="0,7,0,2" /><TextBlock Text="Pending or recovery-required" Style="{StaticResource SubtleStyle}" /></StackPanel></Border>
               <Border Style="{StaticResource CardStyle}" Padding="17"><StackPanel><TextBlock Text="ADAPTER TRACE" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding AdapterTraceCount}" Style="{StaticResource MetricValueStyle}" Margin="0,7,0,2" /><TextBlock Text="Bounded local operations" Style="{StaticResource SubtleStyle}" /></StackPanel></Border>

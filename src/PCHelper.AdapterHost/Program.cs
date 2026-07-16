@@ -31,6 +31,25 @@ if (args.Contains("--discover-controllers", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--read-ryzen-smu", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable read-only Ryzen SMU feasibility child. Only read-class module
+    // functions are referenced; a native PawnIO fault is contained by the parent.
+    RyzenSmuFeasibilityV1 smu = RyzenSmuFeasibilityReader.Read();
+    Console.WriteLine(JsonSerializer.Serialize(smu, JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--read-kraken", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable read-only Kraken X3 telemetry child. The firmware streams status
+    // reports unsolicited, so this path performs no HID writes; a native fault is
+    // contained by the parent exactly like the HID inventory child.
+    KrakenTelemetryV1 kraken = KrakenX3TelemetryReader.Read();
+    Console.WriteLine(JsonSerializer.Serialize(kraken, JsonDefaults.Options));
+    return;
+}
+
 if (args.Contains("--discover-hid", StringComparer.OrdinalIgnoreCase))
 {
     // Disposable read-only HID inventory child. Native HidSharp enumeration runs here so a

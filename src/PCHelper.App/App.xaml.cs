@@ -65,7 +65,16 @@ public partial class App : System.Windows.Application, IDisposable
             Timeout.Infinite,
             executeOnlyOnce: false);
 
-        _viewModel = new MainViewModel();
+        // Optional explicit UI language, e.g. "--culture de". Without it the OS
+        // language applies; missing translations fall back to English per key.
+        int cultureIndex = Array.FindIndex(e.Args, argument => argument.Equals("--culture", StringComparison.OrdinalIgnoreCase));
+        if (cultureIndex >= 0 && cultureIndex + 1 < e.Args.Length)
+        {
+            Localization.L10n.ApplyCulture(e.Args[cultureIndex + 1]);
+        }
+
+        bool portable = e.Args.Contains("--portable", StringComparer.OrdinalIgnoreCase);
+        _viewModel = new MainViewModel { IsPortableMode = portable };
         _window = new MainWindow(_viewModel);
         MainWindow = _window;
         CreateTrayIcon();
@@ -73,6 +82,15 @@ public partial class App : System.Windows.Application, IDisposable
         if (e.Args.Contains("--tray", StringComparer.OrdinalIgnoreCase))
         {
             _window.Hide();
+        }
+
+        if (portable)
+        {
+            // Portable mode hosts no pipe server and starts no user-agent
+            // features: nothing listens, nothing writes hardware, and the
+            // process leaves no machine configuration behind.
+            await _viewModel.InitialiseAsync();
+            return;
         }
 
         try

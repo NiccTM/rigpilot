@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "community.example.mypack",
+  "name": "My example adapter pack",
+  "version": "0.1.0",
+  "publisher": "Your Name",
+  "publisherKeyId": "your-key-id",
+  "licence": "GPL-3.0-only",
+  "minimumProtocolVersion": 2,
+  "maximumProtocolVersion": 2,
+  "entryPoint": "payload/README-entrypoint.txt",
+  "supportedHardwareIds": ["usb:vid_0000&pid_0000"],
+  "permissions": "Telemetry",
+  "payloadHashes": {}
+}

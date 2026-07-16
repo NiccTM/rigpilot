@@ -9,9 +9,9 @@ using Windows.Management.Deployment;
 namespace PCHelper.App;
 
 /// <summary>
-/// Read-only external-overlay/capture discovery. The RTSS ABI is not written
-/// until an audited exact-version bridge exists; this probe prevents the UI
-/// from treating a running RTSS instance as permission to inject or mutate it.
+/// Read-only external-overlay/capture discovery. This probe never writes; RTSS
+/// OSD publishing lives in <see cref="RtssSharedMemoryBridge"/>, runs only on
+/// explicit request, and validates the v2 ABI before touching the mapping.
 /// </summary>
 public static class OverlayBridgeProbe
 {
@@ -26,9 +26,10 @@ public static class OverlayBridgeProbe
     }
 
     /// <summary>
-    /// A side-effect-free capability check for the future WGC recorder. Frame
-    /// acquisition is available only after explicit system-picker consent; an
-    /// encoder and audio pipeline are intentionally not claimed here.
+    /// A side-effect-free capability check for the WGC recorder. The encoder path is
+    /// ScreenRecorderLib (Windows Graphics Capture frames into Media Foundation
+    /// H.264, optional system-loopback audio). Recording still starts only after an
+    /// explicit in-app visible-session confirmation for a discovered target.
     /// </summary>
     public static WgcRecordingPreflightV1 ProbeRecordingPreflight()
     {
@@ -36,10 +37,10 @@ public static class OverlayBridgeProbe
         return new WgcRecordingPreflightV1(
             WgcRecordingPreflightV1.CurrentSchemaVersion,
             supported,
-            SystemPickerRequired: true,
-            EncoderConfigured: false,
+            SystemPickerRequired: false,
+            EncoderConfigured: supported,
             supported
-                ? "Windows Graphics Capture can acquire consented frames. RigPilot still requires a reviewed Media Foundation encoder and audio pipeline before video recording is enabled."
+                ? "Bounded local video recording is available: Windows Graphics Capture frames are encoded by Media Foundation H.264 after an explicit visible-session confirmation. Output stays in the user's Videos\\RigPilot directory."
                 : message);
     }
 
@@ -77,7 +78,7 @@ public static class OverlayBridgeProbe
                 mapAvailable,
                 executable,
                 mapAvailable
-                    ? "RTSS shared memory is visible. RigPilot can validate OSD frames, but direct RTSS writes remain disabled until the installed ABI is audited."
+                    ? "RTSS shared memory is visible. RigPilot can read frame statistics and, only on explicit request, publish its own sensor line to an OSD slot it owns after validating the v2 ABI signature and bounds."
                     : process is not null
                         ? "RTSS is running but its shared-memory endpoint was not found. Start RTSS normally and keep its ownership settings intact."
                         : "RTSS is not running. RigPilot does not bundle or launch RTSS.");
