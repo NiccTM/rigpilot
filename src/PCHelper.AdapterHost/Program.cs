@@ -50,6 +50,19 @@ if (args.Contains("--read-kraken", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--set-kraken-rgb", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable Kraken X3 lighting child: writes one fixed-colour (or off)
+    // lighting report to the sync channel. Lighting only — the pump/cooling
+    // registers are untouched — and a native fault is contained by the parent.
+    int argumentIndex = Array.FindIndex(args, argument => string.Equals(argument, "--set-kraken-rgb", StringComparison.OrdinalIgnoreCase));
+    string value = argumentIndex >= 0 && argumentIndex + 1 < args.Length ? args[argumentIndex + 1] : string.Empty;
+    bool off = string.Equals(value, "off", StringComparison.OrdinalIgnoreCase);
+    KrakenLightingResultV1 lighting = KrakenX3LightingWriter.Write(off ? string.Empty : value, off);
+    Console.WriteLine(JsonSerializer.Serialize(lighting, JsonDefaults.Options));
+    return;
+}
+
 if (args.Contains("--discover-hid", StringComparer.OrdinalIgnoreCase))
 {
     // Disposable read-only HID inventory child. Native HidSharp enumeration runs here so a

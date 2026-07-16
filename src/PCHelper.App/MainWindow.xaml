@@ -944,11 +944,37 @@
                   <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource WarningBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
                 <StackPanel Grid.Column="1" Margin="0,0,18,0">
-                  <TextBlock Text="Evidence-gated cooling control" FontWeight="SemiBold" FontSize="15" />
-                  <TextBlock Text="Bounded adapters can run Experimental calibration after two explicit acknowledgements. Competing writers and controllers without reset semantics remain blocked." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  <TextBlock Text="Safe cooling control" FontWeight="SemiBold" FontSize="15" />
+                  <TextBlock Text="Every fan write is bounds-clamped and read-back verified; pump and CPU-fan protections always hold. Competing writers and controllers without reset semantics remain blocked." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                 </StackPanel>
-                <Border Grid.Column="2" CornerRadius="12" Padding="9,4" Background="{StaticResource WarningSoftBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" VerticalAlignment="Top">
-                  <TextBlock Text="EVIDENCE GATED" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource WarningBrush}" />
+                <Border Grid.Column="2" CornerRadius="12" Padding="9,4" VerticalAlignment="Top">
+                  <Border.Style>
+                    <Style TargetType="Border">
+                      <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
+                      <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}" />
+                      <Setter Property="BorderThickness" Value="1" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
+                          <Setter Property="Background" Value="{StaticResource SafeSoftBrush}" />
+                          <Setter Property="BorderBrush" Value="{StaticResource SafeBrush}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                  <TextBlock Style="{StaticResource BadgeTextStyle}">
+                    <TextBlock.Resources>
+                      <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeTextStyle}">
+                        <Setter Property="Text" Value="TURN ON HARDWARE CONTROL" />
+                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
+                            <Setter Property="Text" Value="CONTROLS LIVE" />
+                            <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Resources>
+                  </TextBlock>
                 </Border>
               </Grid>
             </Border>
@@ -991,6 +1017,10 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <WrapPanel Margin="0,14,0,0">
+                  <Button Content="Automatic mode (CPU/GPU curve)" Command="{Binding EnableCaseFansAutoModeCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                          ToolTip="Binds every writable fan output to the maximum of CPU and GPU temperature through the service graph engine: 50% safety floor, full speed at 85 °C, stale sensors command maximum cooling. Pump and CPU-fan protections always hold."
+                          automation:AutomationProperties.Name="Enable automatic temperature curve for case fans"
+                          automation:AutomationProperties.AutomationId="Cooling.EnableCaseFansAutoMode" />
                   <Button Content="Set up fan curves &amp; calibration" Command="{Binding ToggleAdvancedLabCommand}" Margin="0,0,8,8"
                           ToolTip="Opens the Advanced Lab curve studio on this page: adaptive curve creation, custom curve points with hysteresis, and the bounded 0-100% calibration wizard."
                           automation:AutomationProperties.Name="Open fan curve and calibration studio">
@@ -1387,11 +1417,37 @@
                   <TextBlock Text="&#xE945;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
                 <StackPanel Grid.Column="1" Margin="0,0,18,0">
-                  <TextBlock Text="Evidence-gated performance controls" FontWeight="SemiBold" FontSize="15" />
-                  <TextBlock Text="The tuning engine accepts only bounded numeric controls with read-back and reset. Experimental adapters require two acknowledgements; missing vendor endpoints remain absent." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  <TextBlock Text="Safe performance control" FontWeight="SemiBold" FontSize="15" />
+                  <TextBlock Text="Every apply is transactional: bounds-clamped, read-back verified, rolled back on failure. The tuning engine accepts only bounded numeric controls with read-back and reset." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                 </StackPanel>
-                <Border Grid.Column="2" CornerRadius="12" Padding="9,4" Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" VerticalAlignment="Top">
-                  <TextBlock Text="EVIDENCE GATED" Style="{StaticResource BadgeTextStyle}" />
+                <Border Grid.Column="2" CornerRadius="12" Padding="9,4" VerticalAlignment="Top">
+                  <Border.Style>
+                    <Style TargetType="Border">
+                      <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
+                      <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}" />
+                      <Setter Property="BorderThickness" Value="1" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
+                          <Setter Property="Background" Value="{StaticResource SafeSoftBrush}" />
+                          <Setter Property="BorderBrush" Value="{StaticResource SafeBrush}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                  <TextBlock Style="{StaticResource BadgeTextStyle}">
+                    <TextBlock.Resources>
+                      <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeTextStyle}">
+                        <Setter Property="Text" Value="TURN ON HARDWARE CONTROL" />
+                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
+                            <Setter Property="Text" Value="CONTROLS LIVE" />
+                            <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Resources>
+                  </TextBlock>
                 </Border>
               </Grid>
             </Border>
@@ -1507,6 +1563,10 @@
                   <Button Content="Auto OC (10-minute screen)" Command="{Binding StartGpuAutoOcCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
                           ToolTip="Bounded automatic core-clock search with thermal/WHEA/display-reset aborts, rollback, and a boot sentinel. Result is labelled 'Passed 10-minute screening', never 'stable'."
                           automation:AutomationProperties.Name="Start GPU auto overclock screening" />
+                  <Button Content="Automatic fan curve" Command="{Binding EnableGpuFanAutoModeCommand}" Margin="0,0,8,8"
+                          ToolTip="Binds the armed GPU fan to GPU temperature through the service graph engine: 50% safety floor, full speed at 85 °C, stale sensors command maximum cooling."
+                          automation:AutomationProperties.Name="Enable automatic GPU fan temperature curve"
+                          automation:AutomationProperties.AutomationId="Performance.EnableGpuFanAutoMode" />
                   <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Margin="0,0,8,8" />
                 </WrapPanel>
                 <Grid Margin="0,2,0,0">
@@ -1643,7 +1703,19 @@
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                     <StackPanel Margin="0,0,6,0">
-                      <TextBlock Text="COLOUR (#RRGGBB)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
+                      <TextBlock Text="COLOURWAY" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
+                      <ComboBox ItemsSource="{Binding Colourways}" SelectedItem="{Binding SelectedColourway}"
+                                automation:AutomationProperties.Name="Lighting colourway preset" automation:AutomationProperties.AutomationId="Lighting.Colourway">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate>
+                            <StackPanel>
+                              <TextBlock Text="{Binding Name}" />
+                              <TextBlock Text="{Binding Description}" Style="{StaticResource SubtleStyle}" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                          </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                      <TextBlock Text="COLOUR (#RRGGBB)" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,5" />
                       <Grid>
                         <Grid.ColumnDefinitions>
                           <ColumnDefinition Width="*" />
@@ -1653,15 +1725,25 @@
                         <Border Grid.Column="1" Width="28" Height="28" Margin="8,0,0,0" CornerRadius="6" VerticalAlignment="Center"
                                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                                 Background="{Binding OpenRgbColour, Converter={StaticResource HexColourToBrush}}"
-                                ToolTip="Preview of the colour that will be applied"
+                                ToolTip="Preview of the colour used by the Static colourway"
                                 automation:AutomationProperties.Name="Colour preview swatch" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColourPreview" />
                       </Grid>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="BRIGHTNESS (%)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" /><TextBox Text="{Binding OpenRgbBrightnessText, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="OpenRGB brightness percentage" automation:AutomationProperties.AutomationId="Lighting.OpenRgbBrightness" /></StackPanel>
                   </Grid>
                   <WrapPanel Margin="0,14,0,0">
-                    <Button Content="Apply static colour" Command="{Binding ApplyOpenRgbCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" />
+                    <Button Content="Apply colourway" Command="{Binding ApplyOpenRgbCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" />
                     <Button Content="Turn lighting off" Command="{Binding TurnOffOpenRgbCommand}" Margin="0,0,8,8" />
+                  </WrapPanel>
+                  <Separator Margin="0,4" />
+                  <TextBlock Text="NATIVE KRAKEN LIGHTING (RIGPILOT ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="{Binding KrakenLightingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingStatus" />
+                  <WrapPanel>
+                    <Button Content="Apply to Kraken" Command="{Binding ApplyKrakenLightingCommand}" Margin="0,0,8,8"
+                            ToolTip="Writes the static colour to the Kraken's ring and logo through RigPilot's own contained HID adapter (liquidctl-derived protocol). Lighting only; there is no firmware read-back, so confirm visually."
+                            automation:AutomationProperties.Name="Apply static colour to Kraken via native adapter" automation:AutomationProperties.AutomationId="Lighting.ApplyKrakenLighting" />
+                    <Button Content="Kraken lighting off" Command="{Binding ApplyKrakenLightingCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn Kraken lighting off via native adapter" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingOff" />
                   </WrapPanel>
                 </StackPanel>
               </Border>
@@ -2177,8 +2259,8 @@
                 </Grid>
                 <TextBlock Text="{Binding MonitorBrightnessStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,12,0,12" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Devices.MonitorBrightnessStatus" />
                 <Grid IsEnabled="{Binding IsUserAgentOnline}">
-                  <Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="110" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                  <StackPanel Margin="0,0,10,0">
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="1.2*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                  <StackPanel Margin="0,0,14,0">
                     <TextBlock Text="DISPLAY" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
                     <ComboBox ItemsSource="{Binding MonitorBrightnessDevices}" SelectedItem="{Binding SelectedMonitorBrightnessDevice}" automation:AutomationProperties.Name="Monitor brightness display" automation:AutomationProperties.AutomationId="Devices.MonitorBrightnessDevice">
                       <ComboBox.ItemTemplate>
@@ -2192,9 +2274,16 @@
                       </ComboBox.ItemTemplate>
                     </ComboBox>
                   </StackPanel>
-                  <StackPanel Grid.Column="1" Margin="0,0,10,0">
-                    <TextBlock Text="BRIGHTNESS (%)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
-                    <TextBox Text="{Binding MonitorBrightnessPercentText, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsSelectedMonitorBrightnessWritable}" HorizontalContentAlignment="Center" automation:AutomationProperties.Name="Monitor brightness percent" automation:AutomationProperties.AutomationId="Devices.MonitorBrightnessPercent" />
+                  <StackPanel Grid.Column="1" Margin="0,0,14,0" VerticalAlignment="Bottom">
+                    <Grid Margin="0,0,0,5">
+                      <TextBlock Text="BRIGHTNESS" Style="{StaticResource EyebrowStyle}" />
+                      <TextBlock Text="{Binding MonitorBrightnessPercentValue, StringFormat={}{0:0} %}" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                    </Grid>
+                    <Slider Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+                            Value="{Binding MonitorBrightnessPercentValue, UpdateSourceTrigger=PropertyChanged}"
+                            IsEnabled="{Binding IsSelectedMonitorBrightnessWritable}"
+                            VerticalAlignment="Center" MinHeight="28"
+                            automation:AutomationProperties.Name="Monitor brightness percent" automation:AutomationProperties.AutomationId="Devices.MonitorBrightnessPercent" />
                   </StackPanel>
                   <Button Grid.Column="2" Content="Apply brightness" Command="{Binding SetMonitorBrightnessCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Bottom" automation:AutomationProperties.Name="Apply selected monitor brightness" automation:AutomationProperties.AutomationId="Devices.ApplyMonitorBrightness" />
                 </Grid>

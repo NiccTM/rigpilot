@@ -324,6 +324,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _ => StartGpuAutoOcAsync(),
             _ => IsServiceOnline && HardwareControlEnabled && !HasActiveOperation,
             ReportError);
+        _enableGpuFanAutoModeCommand = new AsyncCommand(
+            _ => StartAutomaticCoolingAsync(gpuFans: true),
+            _ => IsServiceOnline && HardwareControlEnabled,
+            ReportError);
+        _enableCaseFansAutoModeCommand = new AsyncCommand(
+            _ => StartAutomaticCoolingAsync(gpuFans: false),
+            _ => IsServiceOnline && HardwareControlEnabled,
+            ReportError);
         _applyProfileCommand = new AsyncCommand(
             parameter => ApplyProfileCardAsync((ProfileCardDisplay)parameter!),
             parameter => CanUseServiceWrites
@@ -1889,6 +1897,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>Slider-friendly view of <see cref="MonitorBrightnessPercentText"/>; whole percent, clamped 0–100.</summary>
+    public double MonitorBrightnessPercentValue
+    {
+        get => int.TryParse(MonitorBrightnessPercentText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int percent)
+            ? Math.Clamp(percent, 0, 100)
+            : 50;
+        set => MonitorBrightnessPercentText = ((int)Math.Round(Math.Clamp(value, 0, 100))).ToString(CultureInfo.InvariantCulture);
+    }
+
     public string MonitorBrightnessPercentText
     {
         get => _monitorBrightnessPercentText;
@@ -1896,6 +1913,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             if (Set(ref _monitorBrightnessPercentText, value))
             {
+                OnPropertyChanged(nameof(MonitorBrightnessPercentValue));
                 OnPropertyChanged(nameof(CanSetMonitorBrightness));
                 _setMonitorBrightnessCommand.RaiseCanExecuteChanged();
             }
@@ -2155,6 +2173,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _hardwareControlArmedThisConnection = false;
             _applyGpuControlCommand.RaiseCanExecuteChanged();
             _startGpuAutoOcCommand.RaiseCanExecuteChanged();
+            _enableGpuFanAutoModeCommand.RaiseCanExecuteChanged();
+            _enableCaseFansAutoModeCommand.RaiseCanExecuteChanged();
             _ = ApplyHardwareControlSafelyAsync(value);
         }
     }
@@ -2236,6 +2256,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private readonly AsyncCommand _applyGpuControlCommand;
     private readonly AsyncCommand _startGpuAutoOcCommand;
+    private readonly AsyncCommand _enableGpuFanAutoModeCommand;
+    private readonly AsyncCommand _enableCaseFansAutoModeCommand;
 
     public System.Windows.Input.ICommand ApplyGpuControlCommand => _applyGpuControlCommand;
 
@@ -2338,6 +2360,91 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    public ICommand EnableGpuFanAutoModeCommand => _enableGpuFanAutoModeCommand;
+
+    public ICommand EnableCaseFansAutoModeCommand => _enableCaseFansAutoModeCommand;
+
+    /// <summary>
+    /// One-click automatic cooling mode: builds and applies a conservative
+    /// temperature→duty graph (50% safety floor, full maximum for emergency
+    /// headroom) through the service graph engine, which keeps read-back
+    /// verification and the stale-sensor → maximum-cooling protection. GPU mode
+    /// binds the armed GPU fan to GPU temperature; case-fan mode binds every
+    /// writable motherboard fan output to the maximum of CPU and GPU
+    /// temperature. Pump and CPU-fan role protections are enforced service-side.
+    /// </summary>
+    public async Task StartAutomaticCoolingAsync(bool gpuFans)
+    {
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+        if (_snapshot is null)
+        {
+            return;
+        }
+
+        CapabilityDescriptor[] outputs = gpuFans
+            ? [.. _snapshot.Capabilities.Where(capability =>
+                capability.Id.StartsWith("gpufan.duty:", StringComparison.Ordinal)
+                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
+                && capability.Range is NumericRange)]
+            : [.. _snapshot.Capabilities.Where(capability =>
+                capability.Id.StartsWith("lhm.control:", StringComparison.Ordinal)
+                && capability.Domain == ControlDomain.Cooling
+                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
+                && capability.Range is NumericRange
+                && !capability.Id.Contains("/gpu-nvidia/", StringComparison.Ordinal))];
+        if (outputs.Length == 0)
+        {
+            ShowNotice(gpuFans
+                ? "No armed GPU fan control is available. Turn on Hardware control and refresh."
+                : "No writable motherboard fan outputs are available.", "Warning");
+            return;
+        }
+
+        AdaptiveCoolingProfileDraft draft;
+        try
+        {
+            draft = AdaptiveCoolingProfileFactory.CreateAutomaticMode(
+                outputs,
+                gpuFans ? "GPU fan" : "Case fans",
+                _snapshot.Sensors,
+                preferGpuSourceOnly: gpuFans);
+        }
+        catch (InvalidOperationException exception)
+        {
+            ShowNotice(exception.Message, "Warning");
+            return;
+        }
+
+        IpcResponse saveResponse = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.SaveCoolingGraph, draft.Graph, _status?.StateRevision, Guid.NewGuid().ToString("N")),
+            _lifetime.Token);
+        EnsureSuccess(saveResponse);
+        UpdateStateRevision(saveResponse);
+
+        IpcResponse applyResponse = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.ApplyProfileV2,
+                new ApplyProfileV2Request(
+                    draft.Profile,
+                    ProfileActivationSource.Manual,
+                    ConfirmExperimental: true,
+                    [.. outputs.Select(capability => capability.DeviceId).Distinct(StringComparer.Ordinal)],
+                    ConfirmManualVoltage: false),
+                _status?.StateRevision,
+                Guid.NewGuid().ToString("N")),
+            _lifetime.Token);
+        EnsureSuccess(applyResponse);
+        ShowNotice(
+            $"{draft.Profile.Name} is active: {outputs.Length} output(s) follow the temperature curve with a {AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent:0}% floor. Stale sensors command maximum cooling.",
+            "Success");
+        await RefreshAsync(full: true, userInitiated: false);
+    }
+
     public async Task ApplyGpuControlAsync(GpuControlSlider slider)
     {
         ArgumentNullException.ThrowIfNull(slider);
@@ -2426,11 +2533,19 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private static bool ReadPersistedHardwareControlPreference()
     {
+        // Owner policy amendment (2026-07-16): Hardware control defaults ON
+        // when no preference has been persisted yet; an explicit opt-out is
+        // remembered. Arming still records the Experimental + exact-device
+        // confirmations on every connect, and unchecking restores defaults.
         try
         {
-            return System.IO.File.Exists(ControlPreferencesPath)
-                && System.Text.Json.JsonSerializer.Deserialize<ControlPreferences>(
-                    System.IO.File.ReadAllText(ControlPreferencesPath))?.HardwareControlEnabled == true;
+            if (!System.IO.File.Exists(ControlPreferencesPath))
+            {
+                return true;
+            }
+
+            return System.Text.Json.JsonSerializer.Deserialize<ControlPreferences>(
+                System.IO.File.ReadAllText(ControlPreferencesPath))?.HardwareControlEnabled == true;
         }
         catch (Exception exception) when (exception is System.IO.IOException or System.Text.Json.JsonException or UnauthorizedAccessException)
         {
@@ -2505,6 +2620,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged(nameof(WriteStateLabel));
             _applyGpuControlCommand.RaiseCanExecuteChanged();
             _startGpuAutoOcCommand.RaiseCanExecuteChanged();
+            _enableGpuFanAutoModeCommand.RaiseCanExecuteChanged();
+            _enableCaseFansAutoModeCommand.RaiseCanExecuteChanged();
             _applyProfileCommand.RaiseCanExecuteChanged();
             _resetVerifiedCommand.RaiseCanExecuteChanged();
             _startCalibrationCommand.RaiseCanExecuteChanged();
@@ -3339,6 +3456,62 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             }
         }
     }
+
+    public ICommand ApplyKrakenLightingCommand => _applyKrakenLightingCommand ??= new AsyncCommand(
+        parameter => ApplyKrakenLightingAsync(turnOff: string.Equals(parameter as string, "off", StringComparison.Ordinal)),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    private AsyncCommand? _applyKrakenLightingCommand;
+
+    public string KrakenLightingStatus
+    {
+        get => _krakenLightingStatus;
+        private set => Set(ref _krakenLightingStatus, value);
+    }
+
+    private string _krakenLightingStatus = "RigPilot's own Kraken X3 adapter writes a fixed ring+logo colour directly over HID — no OpenRGB needed. Lighting only; the pump is untouched. Requires Hardware control.";
+
+    /// <summary>
+    /// Native (non-OpenRGB) Kraken X3 lighting write through the service and
+    /// the crash-contained Adapter Host child. Uses the static colour field;
+    /// lighting has no firmware read-back, so success reports the write as
+    /// issued and asks for visual confirmation.
+    /// </summary>
+    public async Task ApplyKrakenLightingAsync(bool turnOff)
+    {
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.SetKrakenLighting,
+                new KrakenLightingRequestV1(
+                    KrakenLightingRequestV1.CurrentSchemaVersion,
+                    OpenRgbColour,
+                    turnOff,
+                    ConfirmExperimental: true,
+                    KrakenLightingRequestV1.ExactDeviceId)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        KrakenLightingResultV1 result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload)
+            ?? throw new InvalidDataException("The service returned an empty Kraken lighting result.");
+        KrakenLightingStatus = result.Message;
+        ShowNotice(result.Message, result.Outcome == KrakenLightingOutcome.WriteIssued ? "Success" : "Warning");
+    }
+
+    public static IReadOnlyList<LightingColourways.Colourway> Colourways => LightingColourways.All;
+
+    public LightingColourways.Colourway? SelectedColourway
+    {
+        get => _selectedColourway;
+        set => Set(ref _selectedColourway, value);
+    }
+
+    private LightingColourways.Colourway? _selectedColourway = LightingColourways.All[0];
 
     public string OpenRgbBrightnessText
     {
@@ -7617,10 +7790,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             OpenRgbSdkClient client = new();
-            OpenRgbConnectionResult result = await client.SetStaticColourAsync(
-                colour,
-                brightness,
-                _lifetime.Token);
+            OpenRgbConnectionResult result = turnOff || SelectedColourway is null or { Id: "static" }
+                ? await client.SetStaticColourAsync(colour, brightness, _lifetime.Token)
+                : await client.SetColourwayAsync(SelectedColourway.Id, colour, brightness, _lifetime.Token);
             SetOpenRgbControllers(result.Controllers);
             OpenRgbConnected = true;
             OpenRgbStatus = turnOff

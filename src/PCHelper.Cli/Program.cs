@@ -34,6 +34,7 @@ internal static class Cli
                 "discover-controllers" => await ServiceCommandAsync<ControllerDiscoveryResultV1>(IpcCommand.DiscoverControllers, json),
                 "discover-hid" => await DiscoverHidAsync(json),
                 "ryzen-smu-feasibility" => await ReadRyzenSmuFeasibilityAsync(json),
+                "kraken-rgb" => await SetKrakenLightingAsync(args, json),
                 "gpu-fan-arm" => await SetGpuFanArmedAsync(args, json, arm: true),
                 "gpu-fan-disarm" => await SetGpuFanArmedAsync(args, json, arm: false),
                 "gpu-power-arm" => await SetGpuPowerArmedAsync(args, json, arm: true),
@@ -533,6 +534,24 @@ internal static class Cli
             $"{(value.Valid ? "Valid" : "Rejected")} adapter pack {value.Manifest?.Id ?? "unknown"} {value.Manifest?.Version ?? string.Empty}: "
             + $"signature={value.SignatureValid}, errors={value.Errors.Count}, warnings={value.Warnings.Count}"));
         return inspection.Valid ? 0 : 3;
+    }
+
+    private static async Task<int> SetKrakenLightingAsync(string[] args, bool json)
+    {
+        bool off = HasFlag(args, "--off");
+        string colour = Option(args, "--colour") ?? string.Empty;
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetKrakenLighting,
+            new KrakenLightingRequestV1(
+                KrakenLightingRequestV1.CurrentSchemaVersion,
+                colour,
+                off,
+                HasFlag(args, "--confirm-experimental"),
+                Option(args, "--confirm-device")));
+        KrakenLightingResultV1 result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(result, json, value => Console.WriteLine($"Kraken lighting: {value.Outcome}. {value.Message}"));
+        return result.Outcome == KrakenLightingOutcome.WriteIssued ? 0 : 3;
     }
 
     private static async Task<int> SetGpuFanArmedAsync(string[] args, bool json, bool arm)
@@ -1323,6 +1342,8 @@ internal static class Cli
             pchelper-cli discover-hid [--json]   Run a contained, read-only HID peripheral inventory (keyboard/mouse/RGB/AIO classes).
             pchelper-cli ryzen-smu-feasibility [--json]
                                                  Read PPT/TDC/THM/EDC limit and actual pairs from the Ryzen SMU PM table via signed PawnIO (read-only PBO qualification evidence; no CPU write).
+            pchelper-cli kraken-rgb (--colour RRGGBB | --off) --confirm-experimental --confirm-device nzxt:kraken-x3 [--json]
+                                                 Write a fixed colour (or off) to the Kraken X3 ring+logo via RigPilot's native adapter. Lighting only; no read-back, confirm visually.
             pchelper-cli gpu-fan-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU fan control after exact-device acknowledgement.
             pchelper-cli gpu-fan-disarm [--json] Disarm GPU fan control and restore the automatic curve.
