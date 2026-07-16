@@ -341,8 +341,8 @@
                   automation:AutomationProperties.Name="Refresh hardware state"
                   automation:AutomationProperties.AutomationId="Header.Refresh">
             <StackPanel Orientation="Horizontal">
-              <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" Foreground="#07101B" Margin="0,0,8,0" />
-              <TextBlock Text="Refresh" Foreground="#07101B" FontWeight="SemiBold" />
+              <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" Foreground="#FFFFFF" Margin="0,0,8,0" />
+              <TextBlock Text="Refresh" Foreground="#FFFFFF" FontWeight="SemiBold" />
             </StackPanel>
           </Button>
         </StackPanel>
