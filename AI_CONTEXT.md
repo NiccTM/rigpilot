@@ -564,6 +564,13 @@ Version 1.0 is blocked by any unresolved BSOD, stuck fan, failed reset, unauthor
 - **Localization bulk slice 1:** the nine navigation titles extracted to `Nav_*` keys (`{loc:Loc}` in MainWindow.xaml) with German satellite translations; covered by a test asserting neutral+German resolution and no missing keys.
 - Validation: Debug build 0 warnings/0 errors; full suite **542 tests (309 core + 233 integration)** passed; all nine pages rendered to `artifacts\ui-snapshots-open-source-line` and the Games & tools render was visually reviewed (the offline user-agent banner is expected in the isolated render host). The deployed service remains beta7; none of this pass's code is deployed.
 
+## Verification snapshot: 2026-07-16 (Simple-mode UI polish)
+
+- Live-render review of all nine pages found the Simple-mode Cooling and Performance pages mostly empty (two status sentences and dead space) while 450 live sensors existed. Both pages gained a curated **read-only live-readings card** using a new shared `SensorRowTemplate` resource (the Overview "Important sensors" row template, extracted rather than duplicated): Cooling shows fan/pump tachometers, commanded duties, and liquid temperatures (`Cooling.LiveReadings`); Performance shows CPU/GPU utilisation, headline clocks, and power draw (`Performance.LiveReadings`). Card copy states explicitly that nothing on the page writes hardware.
+- Two data-correctness fixes came out of render review: the curated-pool dedupe now keys on unit as well as device+name (a fan tachometer in RPM and its duty control in % legitimately share a name — previously the RPM rows vanished), and the Performance card filters to CPU/GPU devices (a storage "Total Activity 0 %" sensor had leaked in).
+- The Lighting static-colour field gained a live **colour preview swatch** (`Lighting.OpenRgbColourPreview`) via a new fail-safe `HexColourToBrushConverter` (unparsable text renders transparent, never throws).
+- Validation: build 0 warnings/0 errors; full suite 542 tests passed; all nine pages re-rendered to `artifacts\ui-snapshots-polish2` and the Cooling, Performance, and Lighting renders were visually reviewed (live Nuvoton RPM + duty rows, CPU/GPU-only performance rows, and the #4EA1FF swatch confirmed). Presentation-only change: no IPC, capability, safety, or persistence path was touched.
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.

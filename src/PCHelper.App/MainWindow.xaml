@@ -96,6 +96,39 @@
       </Border>
     </DataTemplate>
 
+    <local:HexColourToBrushConverter x:Key="HexColourToBrush" />
+    <DataTemplate x:Key="SensorRowTemplate">
+      <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="30" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="1.1*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <Border Width="25" Height="25" CornerRadius="6" Background="{StaticResource SurfaceRaisedBrush}">
+            <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="12" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="7,0,10,0" />
+          <TextBlock Grid.Column="2" Text="{Binding Device}" Style="{StaticResource MutedStyle}" VerticalAlignment="Center" Margin="0,0,12,0" />
+          <TextBlock Grid.Column="3" Text="{Binding DisplayValue}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Severity}" Value="Warm">
+                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                  </DataTrigger>
+                  <DataTrigger Binding="{Binding Severity}" Value="Hot">
+                    <Setter Property="Foreground" Value="{StaticResource CriticalBrush}" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+        </Grid>
+      </Border>
+    </DataTemplate>
     <DataTemplate x:Key="DiagnosticTemplate">
       <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,13">
         <Grid>
@@ -541,42 +574,7 @@
                       <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
                     </Border>
                   </Grid>
-                  <ItemsControl ItemsSource="{Binding ImportantSensors}">
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate>
-                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
-                          <Grid>
-                            <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="30" />
-                              <ColumnDefinition Width="*" />
-                              <ColumnDefinition Width="1.1*" />
-                              <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <Border Width="25" Height="25" CornerRadius="6" Background="{StaticResource SurfaceRaisedBrush}">
-                              <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="12" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Border>
-                            <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="7,0,10,0" />
-                            <TextBlock Grid.Column="2" Text="{Binding Device}" Style="{StaticResource MutedStyle}" VerticalAlignment="Center" Margin="0,0,12,0" />
-                            <TextBlock Grid.Column="3" Text="{Binding DisplayValue}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center">
-                              <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                  <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-                                  <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Severity}" Value="Warm">
-                                      <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding Severity}" Value="Hot">
-                                      <Setter Property="Foreground" Value="{StaticResource CriticalBrush}" />
-                                    </DataTrigger>
-                                  </Style.Triggers>
-                                </Style>
-                              </TextBlock.Style>
-                            </TextBlock>
-                          </Grid>
-                        </Border>
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
+                  <ItemsControl ItemsSource="{Binding ImportantSensors}" ItemTemplate="{StaticResource SensorRowTemplate}" />
                   <Border Margin="0,10,0,0">
                     <Border.Style>
                       <Style TargetType="Border" BasedOn="{StaticResource EmptyStateStyle}">
@@ -935,6 +933,38 @@
             </Border>
 
             <Grid x:Name="SimpleCoolingStatus" Style="{StaticResource SimpleOnlyPanelStyle}">
+             <StackPanel>
+              <Border Style="{StaticResource CardStyle}" Padding="20" Margin="0,12,0,0">
+                <StackPanel>
+                  <Grid Margin="0,0,0,8">
+                    <StackPanel>
+                      <TextBlock Text="Fans, pumps, and liquid" Style="{StaticResource CardTitleStyle}" />
+                      <TextBlock Text="Read-only live readings; nothing on this page writes hardware" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
+                    </StackPanel>
+                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
+                      <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
+                    </Border>
+                  </Grid>
+                  <ItemsControl ItemsSource="{Binding CoolingSensors}" ItemTemplate="{StaticResource SensorRowTemplate}" automation:AutomationProperties.Name="Live fan, pump, and liquid readings" automation:AutomationProperties.AutomationId="Cooling.LiveReadings" />
+                  <Border Margin="0,10,0,0">
+                    <Border.Style>
+                      <Style TargetType="Border" BasedOn="{StaticResource EmptyStateStyle}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding HasCoolingSensors}" Value="False">
+                            <Setter Property="Visibility" Value="Visible" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
+                    <StackPanel HorizontalAlignment="Center">
+                      <TextBlock Text="&#xE9CA;" FontFamily="{StaticResource IconFont}" FontSize="22" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" />
+                      <TextBlock Text="No fan or pump readings yet" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,0" />
+                      <TextBlock Text="Refresh after hardware discovery completes." Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </Border>
               <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="330" Margin="0,12,0,0">
                 <Border Style="{StaticResource CardStyle}" Padding="18">
                   <StackPanel>
@@ -962,6 +992,7 @@
                   </StackPanel>
                 </Border>
               </local:AdaptiveUniformGrid>
+             </StackPanel>
             </Grid>
 
             <Grid x:Name="AdvancedCoolingWorkspace" Style="{StaticResource AdvancedOnlyPanelStyle}">
@@ -1289,6 +1320,38 @@
             </Border>
 
             <Grid x:Name="SimplePerformanceStatus" Style="{StaticResource SimpleOnlyPanelStyle}">
+             <StackPanel>
+              <Border Style="{StaticResource CardStyle}" Padding="20" Margin="0,12,0,0">
+                <StackPanel>
+                  <Grid Margin="0,0,0,8">
+                    <StackPanel>
+                      <TextBlock Text="Utilisation, clocks, and power" Style="{StaticResource CardTitleStyle}" />
+                      <TextBlock Text="Read-only live readings; nothing on this page writes hardware" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
+                    </StackPanel>
+                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
+                      <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
+                    </Border>
+                  </Grid>
+                  <ItemsControl ItemsSource="{Binding PerformanceSensors}" ItemTemplate="{StaticResource SensorRowTemplate}" automation:AutomationProperties.Name="Live utilisation, clock, and power readings" automation:AutomationProperties.AutomationId="Performance.LiveReadings" />
+                  <Border Margin="0,10,0,0">
+                    <Border.Style>
+                      <Style TargetType="Border" BasedOn="{StaticResource EmptyStateStyle}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding HasPerformanceSensors}" Value="False">
+                            <Setter Property="Visibility" Value="Visible" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
+                    <StackPanel HorizontalAlignment="Center">
+                      <TextBlock Text="&#xE945;" FontFamily="{StaticResource IconFont}" FontSize="22" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" />
+                      <TextBlock Text="No utilisation or clock readings yet" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,0" />
+                      <TextBlock Text="Refresh after hardware discovery completes." Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </Border>
               <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="330" Margin="0,12,0,0">
                 <Border Style="{StaticResource CardStyle}" Padding="18">
                   <StackPanel>
@@ -1316,6 +1379,7 @@
                   </StackPanel>
                 </Border>
               </local:AdaptiveUniformGrid>
+             </StackPanel>
             </Grid>
 
             <Grid x:Name="AdvancedPerformanceWorkspace" Style="{StaticResource AdvancedOnlyPanelStyle}">
@@ -1442,7 +1506,21 @@
                   <TextBlock Text="The bridge negotiates protocol support, enumerates exact controllers, enters custom mode, then updates every reported LED." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,14" />
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <StackPanel Margin="0,0,6,0"><TextBlock Text="COLOUR (#RRGGBB)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" /><TextBox Text="{Binding OpenRgbColour, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="OpenRGB colour hexadecimal value" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColour" /></StackPanel>
+                    <StackPanel Margin="0,0,6,0">
+                      <TextBlock Text="COLOUR (#RRGGBB)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding OpenRgbColour, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="OpenRGB colour hexadecimal value" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColour" />
+                        <Border Grid.Column="1" Width="28" Height="28" Margin="8,0,0,0" CornerRadius="6" VerticalAlignment="Center"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                Background="{Binding OpenRgbColour, Converter={StaticResource HexColourToBrush}}"
+                                ToolTip="Preview of the colour that will be applied"
+                                automation:AutomationProperties.Name="Colour preview swatch" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColourPreview" />
+                      </Grid>
+                    </StackPanel>
                     <StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="BRIGHTNESS (%)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" /><TextBox Text="{Binding OpenRgbBrightnessText, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="OpenRGB brightness percentage" automation:AutomationProperties.AutomationId="Lighting.OpenRgbBrightness" /></StackPanel>
                   </Grid>
                   <WrapPanel Margin="0,14,0,0">
