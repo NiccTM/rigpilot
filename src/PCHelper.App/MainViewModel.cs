@@ -86,6 +86,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly AsyncCommand _stopFrametimeBenchmarkCommand;
     private bool _isFrametimeBenchmarkRunning;
     private string _frametimeBenchmarkStatus = "No benchmark has run. Start a game monitored by RTSS, then start a benchmark; sampling is passive and injection-free.";
+    private readonly AsyncCommand _startPresentMonBenchmarkCommand;
+    private readonly AsyncCommand _stopPresentMonBenchmarkCommand;
+    private bool _isPresentMonBenchmarkRunning;
+    private string _presentMonBenchmarkStatus = "No per-frame benchmark has run. Requires the separately-installed Intel PresentMon console; capture is passive ETW reading, injection-free.";
     private string _rtssFrameStatsStatus = "Frame statistics have not been read. RTSS measures FPS and frame times for running games; RigPilot reads them from shared memory without injecting.";
     private string _krakenTelemetryStatus = "Liquid-cooler telemetry has not been read. The pass is read-only: the Kraken streams status by itself and RigPilot never writes to it.";
     private readonly AsyncCommand _stopVideoRecordingCommand;
@@ -504,6 +508,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _ => StopFrametimeBenchmarkCoreAsync(),
             _ => IsUserAgentOnline && IsFrametimeBenchmarkRunning,
             ReportError);
+        _startPresentMonBenchmarkCommand = new AsyncCommand(
+            _ => StartPresentMonBenchmarkCoreAsync(),
+            _ => IsUserAgentOnline && !IsPresentMonBenchmarkRunning,
+            ReportError);
+        _stopPresentMonBenchmarkCommand = new AsyncCommand(
+            _ => StopPresentMonBenchmarkCoreAsync(),
+            _ => IsUserAgentOnline && IsPresentMonBenchmarkRunning,
+            ReportError);
         _setMonitorBrightnessCommand = new AsyncCommand(
             _ => SetMonitorBrightnessCoreAsync(),
             _ => CanSetMonitorBrightness,
@@ -823,6 +835,29 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         private set => Set(ref _frametimeBenchmarkStatus, value);
     }
 
+    public ICommand StartPresentMonBenchmarkCommand => _startPresentMonBenchmarkCommand;
+
+    public ICommand StopPresentMonBenchmarkCommand => _stopPresentMonBenchmarkCommand;
+
+    public bool IsPresentMonBenchmarkRunning
+    {
+        get => _isPresentMonBenchmarkRunning;
+        private set
+        {
+            if (Set(ref _isPresentMonBenchmarkRunning, value))
+            {
+                _startPresentMonBenchmarkCommand.RaiseCanExecuteChanged();
+                _stopPresentMonBenchmarkCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public string PresentMonBenchmarkStatus
+    {
+        get => _presentMonBenchmarkStatus;
+        private set => Set(ref _presentMonBenchmarkStatus, value);
+    }
+
     public string KrakenTelemetryStatus
     {
         get => _krakenTelemetryStatus;
@@ -927,6 +962,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 _readRtssFrameStatsCommand.RaiseCanExecuteChanged();
                 _startFrametimeBenchmarkCommand.RaiseCanExecuteChanged();
                 _stopFrametimeBenchmarkCommand.RaiseCanExecuteChanged();
+                _startPresentMonBenchmarkCommand.RaiseCanExecuteChanged();
+                _stopPresentMonBenchmarkCommand.RaiseCanExecuteChanged();
                 _refreshMonitorBrightnessCommand.RaiseCanExecuteChanged();
                 _scanHidInventoryCommand.RaiseCanExecuteChanged();
                 _readKrakenTelemetryCommand.RaiseCanExecuteChanged();
@@ -3572,6 +3609,49 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         };
     }
 
+    private async Task StartPresentMonBenchmarkCoreAsync()
+    {
+        IpcResponse response = await _userAgentClient.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.StartPresentMonBenchmark,
+                new FrametimeBenchmarkStartRequestV1(
+                    FrametimeBenchmarkStartRequestV1.CurrentSchemaVersion,
+                    ProcessId: 0,
+                    MaxDurationSeconds: 300)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        FrametimeBenchmarkStatusV1 status = IpcJson.FromElement<FrametimeBenchmarkStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("User agent returned an empty benchmark status.");
+        ApplyPresentMonBenchmarkStatus(status);
+        if (status.State == FrametimeBenchmarkState.Running)
+        {
+            ShowNotice("Per-frame benchmark started via Intel PresentMon. It stops automatically after 5 minutes.", "Info");
+        }
+    }
+
+    private async Task StopPresentMonBenchmarkCoreAsync()
+    {
+        IpcResponse response = await _userAgentClient.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.StopPresentMonBenchmark),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        ApplyPresentMonBenchmarkStatus(IpcJson.FromElement<FrametimeBenchmarkStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("User agent returned an empty benchmark status."));
+    }
+
+    private void ApplyPresentMonBenchmarkStatus(FrametimeBenchmarkStatusV1 status)
+    {
+        IsPresentMonBenchmarkRunning = status.State == FrametimeBenchmarkState.Running;
+        PresentMonBenchmarkStatus = status.State switch
+        {
+            FrametimeBenchmarkState.Completed =>
+                $"{status.ProcessName}: avg {status.AverageFps:0.#} FPS, min {status.MinimumFps:0.#}, max {status.MaximumFps:0.#}, " +
+                $"per-frame 1% low {status.OnePercentLowFps:0.#}, 0.1% low {status.PointOnePercentLowFps:0.#} " +
+                $"({status.SampleCount} frames over {status.DurationSeconds:0} s).",
+            _ => status.Message
+        };
+    }
+
     private async Task ReadKrakenTelemetryCoreAsync()
     {
         if (!IsServiceOnline)
@@ -4285,6 +4365,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         Add(GameStoreKind.Epic, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Epic", "EpicGamesLauncher", "Data", "Manifests"));
         Add(GameStoreKind.Gog, @"C:\GOG Games");
         Add(GameStoreKind.MicrosoftXbox, @"C:\XboxGames");
+        // Battle.net has no per-game manifest store; the scanner walks for NGDP
+        // marker files with a bounded, access-safe search.
+        Add(GameStoreKind.BattleNet, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Battle.net games"));
+        Add(GameStoreKind.BattleNet, Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86));
         if (roots.Count == 0)
         {
             ShowNotice("No supported local game-library roots were found.", "Info");

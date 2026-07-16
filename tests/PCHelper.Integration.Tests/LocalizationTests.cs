@@ -36,6 +36,26 @@ public sealed class LocalizationTests : IDisposable
     }
 
     [Fact]
+    public void NavigationTitlesResolveInNeutralEnglishAndGerman()
+    {
+        string[] keys =
+        [
+            "Nav_Overview", "Nav_Profiles", "Nav_Cooling", "Nav_Performance", "Nav_Lighting",
+            "Nav_Automation", "Nav_GamesTools", "Nav_Devices", "Nav_Diagnostics",
+        ];
+
+        foreach (string key in keys)
+        {
+            Assert.DoesNotContain('[', L10n.Get(key)); // every key extracted, none missing
+        }
+        Assert.Equal("Games & tools", L10n.Get("Nav_GamesTools"));
+
+        L10n.CultureOverride = CultureInfo.GetCultureInfo("de-DE");
+        Assert.Equal("Übersicht", L10n.Get("Nav_Overview"));
+        Assert.Equal("Spiele & Tools", L10n.Get("Nav_GamesTools"));
+    }
+
+    [Fact]
     public void ApplyCultureSetsTheOverrideAndIgnoresUnknownNames()
     {
         L10n.ApplyCulture("de");

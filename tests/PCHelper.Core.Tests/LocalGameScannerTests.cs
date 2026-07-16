@@ -52,6 +52,45 @@ public sealed class LocalGameScannerTests
     }
 
     [Fact]
+    public void ScansBattleNetGameDirectoriesByTheirNgdpMarkers()
+    {
+        using TemporaryDirectory temporary = new();
+        string root = Path.Combine(temporary.Path, "BattleNetGames");
+        string game = Path.Combine(root, "Test Warcraft");
+        string launcher = Path.Combine(root, "Battle.net");
+        string plainFolder = Path.Combine(root, "NotAGame");
+        Directory.CreateDirectory(game);
+        Directory.CreateDirectory(launcher);
+        Directory.CreateDirectory(plainFolder);
+        File.WriteAllText(Path.Combine(game, ".build.info"), "Branch!STRING:0|Build Key!HEX:16");
+        File.WriteAllBytes(Path.Combine(game, "TestWarcraft.exe"), new byte[256]);
+        File.WriteAllText(Path.Combine(launcher, ".build.info"), "launcher marker must be skipped");
+        File.WriteAllBytes(Path.Combine(plainFolder, "tool.exe"), new byte[64]);
+
+        GameScanResult result = LocalGameScanner.Scan([new GameScanRoot(GameStoreKind.BattleNet, root)]);
+
+        GameEntryV1 entry = Assert.Single(result.Games);
+        Assert.StartsWith("battlenet.", entry.Id, StringComparison.Ordinal);
+        Assert.Equal("Test Warcraft", entry.Name);
+        Assert.EndsWith("TestWarcraft.exe", entry.ExecutablePath, StringComparison.Ordinal);
+        Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
+    public void WarnsWhenABattleNetGameDirectoryHasNoExecutable()
+    {
+        using TemporaryDirectory temporary = new();
+        string game = Path.Combine(temporary.Path, "Empty Game");
+        Directory.CreateDirectory(game);
+        File.WriteAllText(Path.Combine(game, ".flavor.info"), "Product Flavor!STRING:0");
+
+        GameScanResult result = LocalGameScanner.Scan([new GameScanRoot(GameStoreKind.BattleNet, temporary.Path)]);
+
+        Assert.Empty(result.Games);
+        Assert.Contains(result.Warnings, warning => warning.Contains("no local executable", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void RejectsManifestExecutablePathEscape()
     {
         using TemporaryDirectory temporary = new();

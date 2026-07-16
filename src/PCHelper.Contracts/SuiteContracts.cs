@@ -332,7 +332,8 @@ public enum GameStoreKind
     Epic,
     Gog,
     MicrosoftXbox,
-    Standalone
+    Standalone,
+    BattleNet
 }
 
 public sealed record AdapterPackManifestV1(

@@ -135,7 +135,10 @@ public enum IpcCommand
     StartFrametimeBenchmark,
     StopFrametimeBenchmark,
     GetFrametimeBenchmarkStatus,
-    SetCpuTuningArmed
+    SetCpuTuningArmed,
+    StartPresentMonBenchmark,
+    StopPresentMonBenchmark,
+    GetPresentMonBenchmarkStatus
 }
 
 public static class ProtocolConstants
@@ -196,6 +199,7 @@ public static class IpcCommandPolicy
         IpcCommand.GetRtssOsdBridgeStatus or
         IpcCommand.GetRtssFrameStats or
         IpcCommand.GetFrametimeBenchmarkStatus or
+        IpcCommand.GetPresentMonBenchmarkStatus or
         IpcCommand.GetCapturePresets or
         IpcCommand.GetCaptureTargets or
         IpcCommand.GetMonitorBrightnesses or

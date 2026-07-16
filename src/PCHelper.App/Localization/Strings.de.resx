@@ -27,4 +27,31 @@
   <data name="Portable_BusyMessage" xml:space="preserve">
     <value>Portabler schreibgeschützter Messlauf wird gestartet</value>
   </data>
+  <data name="Nav_Overview" xml:space="preserve">
+    <value>Übersicht</value>
+  </data>
+  <data name="Nav_Profiles" xml:space="preserve">
+    <value>Profile</value>
+  </data>
+  <data name="Nav_Cooling" xml:space="preserve">
+    <value>Kühlung</value>
+  </data>
+  <data name="Nav_Performance" xml:space="preserve">
+    <value>Leistung</value>
+  </data>
+  <data name="Nav_Lighting" xml:space="preserve">
+    <value>Beleuchtung</value>
+  </data>
+  <data name="Nav_Automation" xml:space="preserve">
+    <value>Automatisierung</value>
+  </data>
+  <data name="Nav_GamesTools" xml:space="preserve">
+    <value>Spiele &amp; Tools</value>
+  </data>
+  <data name="Nav_Devices" xml:space="preserve">
+    <value>Geräte</value>
+  </data>
+  <data name="Nav_Diagnostics" xml:space="preserve">
+    <value>Diagnose</value>
+  </data>
 </root>

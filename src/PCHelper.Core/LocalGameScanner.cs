@@ -44,6 +44,9 @@ public static partial class LocalGameScanner
                     case GameStoreKind.Standalone:
                         ScanStandalone(path, games);
                         break;
+                    case GameStoreKind.BattleNet:
+                        ScanBattleNet(path, games, warnings);
+                        break;
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or System.Xml.XmlException or InvalidDataException)
@@ -159,6 +162,66 @@ public static partial class LocalGameScanner
             if (File.Exists(executable))
             {
                 games.Add(Create($"xbox.{StableId(executable)}", name, executable, null, FindArtwork(Path.GetDirectoryName(manifest)!)));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Battle.net installs have no per-game JSON/XML manifest; each installed
+    /// game directory carries an NGDP marker file (`.build.info` and/or
+    /// `.flavor.info`). The walk is access-safe (a denied subdirectory is
+    /// skipped, not fatal), depth- and count-bounded, and skips the launcher's
+    /// own directory.
+    /// </summary>
+    private static void ScanBattleNet(string root, List<GameEntryV1> games, List<string> warnings)
+    {
+        foreach (string directory in EnumerateDirectoriesSafely(root, maximumDepth: 3, maximumDirectories: 5_000))
+        {
+            if (Path.GetFileName(directory).Equals("Battle.net", StringComparison.OrdinalIgnoreCase)
+                || (!File.Exists(Path.Combine(directory, ".build.info")) && !File.Exists(Path.Combine(directory, ".flavor.info"))))
+            {
+                continue;
+            }
+
+            string name = Path.GetFileName(directory);
+            string? executable = FindGameExecutable(directory);
+            if (executable is null)
+            {
+                warnings.Add($"Battle.net game '{name}' has no local executable candidate.");
+                continue;
+            }
+            games.Add(Create($"battlenet.{StableId(directory)}", name, executable, null, FindArtwork(directory)));
+        }
+    }
+
+    /// <summary>Breadth-first directory walk that treats an inaccessible subdirectory as skippable rather than fatal.</summary>
+    private static IEnumerable<string> EnumerateDirectoriesSafely(string root, int maximumDepth, int maximumDirectories)
+    {
+        Queue<(string Path, int Depth)> pending = new([(root, 0)]);
+        int visited = 0;
+        while (pending.Count > 0 && visited < maximumDirectories)
+        {
+            (string current, int depth) = pending.Dequeue();
+            visited++;
+            yield return current;
+            if (depth >= maximumDepth)
+            {
+                continue;
+            }
+
+            string[] children;
+            try
+            {
+                children = Directory.GetDirectories(current);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            foreach (string child in children)
+            {
+                pending.Enqueue((child, depth + 1));
             }
         }
     }
