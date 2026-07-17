@@ -165,6 +165,64 @@ public sealed class NamedPipeRequestTests
     }
 
     [Fact]
+    public async Task SlowResponseWithinTheOperationTimeoutStillSucceeds()
+    {
+        // Regression: a transactional apply can take longer than the short
+        // connect timeout. The response here arrives after 700 ms, well past a
+        // 250 ms connect timeout but inside the 10 s operation timeout, and must
+        // still succeed — connect and operation timeouts are independent now.
+        string pipeName = $"pchelper.tests.{Guid.NewGuid():N}";
+        using CancellationTokenSource shutdown = new(TimeSpan.FromSeconds(15));
+        NamedPipeRequestServer server = new(pipeName, async (request, cancellationToken) =>
+        {
+            await Task.Delay(700, cancellationToken);
+            return new IpcResponse(
+                ProtocolConstants.Version, request.RequestId, true, 5, null, null, IpcJson.ToElement("ok"));
+        });
+        Task serverTask = server.RunAsync(shutdown.Token);
+        NamedPipeRequestClient client = new(
+            pipeName,
+            connectTimeout: TimeSpan.FromMilliseconds(250),
+            operationTimeout: TimeSpan.FromSeconds(10));
+
+        IpcResponse response = await client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetServiceStatus),
+            CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(5, response.StateRevision);
+        shutdown.Cancel();
+        await serverTask;
+    }
+
+    [Fact]
+    public async Task OperationTimeoutSurfacesAClearTimeoutException()
+    {
+        // A server that never responds must produce an actionable TimeoutException,
+        // not a bare "operation was canceled" from the internal cancellation.
+        string pipeName = $"pchelper.tests.{Guid.NewGuid():N}";
+        using CancellationTokenSource shutdown = new(TimeSpan.FromSeconds(15));
+        NamedPipeRequestServer server = new(pipeName, async (request, cancellationToken) =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+            return new IpcResponse(ProtocolConstants.Version, request.RequestId, true, 0, null, null, null);
+        });
+        Task serverTask = server.RunAsync(shutdown.Token);
+        NamedPipeRequestClient client = new(
+            pipeName,
+            connectTimeout: TimeSpan.FromSeconds(2),
+            operationTimeout: TimeSpan.FromMilliseconds(300));
+
+        TimeoutException exception = await Assert.ThrowsAsync<TimeoutException>(() => client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetServiceStatus),
+            CancellationToken.None));
+
+        Assert.Contains("did not respond", exception.Message, StringComparison.Ordinal);
+        shutdown.Cancel();
+        try { await serverTask; } catch (OperationCanceledException) { }
+    }
+
+    [Fact]
     public async Task DisconnectedClientDoesNotFaultServer()
     {
         string pipeName = $"pchelper.tests.{Guid.NewGuid():N}";

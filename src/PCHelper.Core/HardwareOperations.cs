@@ -914,6 +914,94 @@ public static class TuneCandidateGenerator
     }
 }
 
+/// <summary>
+/// Pure helpers for the refined GPU Auto-OC search: locate the stability edge
+/// precisely between the last stable and first failing coarse candidate, then
+/// back off by a safety margin so the shipped result carries headroom instead
+/// of sitting on the edge. This is how a careful overclocker (and OC Scanner)
+/// works: climb until it breaks, find the exact break point, then step back.
+/// No voltage is involved at any layer — only clock-offset values move.
+/// </summary>
+public static class GpuAutoOcSearch
+{
+    /// <summary>
+    /// Evenly-spaced values strictly between the last stable value and the
+    /// first failing one, ordered from stable toward failing so the caller can
+    /// climb and stop at the first that fails. Empty when count &lt; 1 or the
+    /// two bounds are equal.
+    /// </summary>
+    public static IReadOnlyList<double> FineCandidates(double lastStable, double firstFail, int count)
+    {
+        if (count < 1 || Math.Abs(firstFail - lastStable) <= double.Epsilon)
+        {
+            return [];
+        }
+
+        List<double> candidates = [];
+        for (int index = 1; index <= count; index++)
+        {
+            double fraction = (double)index / (count + 1);
+            candidates.Add(lastStable + ((firstFail - lastStable) * fraction));
+        }
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// Backs the best stable value off by <paramref name="margin"/> toward the
+    /// safe side of the search: downward when maximizing (a lower clock is
+    /// safer), upward when minimizing. Clamped to the search range.
+    /// </summary>
+    public static double ApplyMargin(double best, double margin, TuneDirection direction, double minimum, double maximum)
+    {
+        double backedOff = direction == TuneDirection.Maximize ? best - Math.Abs(margin) : best + Math.Abs(margin);
+        return Math.Clamp(backedOff, minimum, maximum);
+    }
+
+    /// <summary>Snaps a value onto the control's step grid, clamped to the range.</summary>
+    public static double SnapToStep(double value, double minimum, double maximum, double step)
+    {
+        if (step <= 0 || !double.IsFinite(step))
+        {
+            return Math.Clamp(value, minimum, maximum);
+        }
+
+        double snapped = minimum + (Math.Round((value - minimum) / step) * step);
+        return Math.Clamp(snapped, minimum, maximum);
+    }
+
+    /// <summary>
+    /// Refinement candidates sit right at the stability edge, so they earn a
+    /// longer screen than the fast coarse climb — doubled, capped at the 5-minute
+    /// per-candidate limit. A zero coarse time (fast tests) stays zero.
+    /// </summary>
+    public static TimeSpan RefinementScreeningTime(TimeSpan coarseCandidateTime)
+    {
+        if (coarseCandidateTime <= TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        TimeSpan doubled = coarseCandidateTime * 2;
+        TimeSpan cap = TimeSpan.FromMinutes(5);
+        return doubled > cap ? cap : doubled;
+    }
+
+    /// <summary>
+    /// True when a passing candidate's peak temperature has reached within the
+    /// thermal-headroom band of the ceiling — the practical thermal edge, where
+    /// climbing further would trade away cooling headroom. Ignored when headroom
+    /// is zero or no peak temperature was recorded.
+    /// </summary>
+    public static bool ReachedThermalHeadroom(double? peakTemperatureCelsius, double ceilingCelsius, double headroomCelsius)
+    {
+        return headroomCelsius > 0
+            && peakTemperatureCelsius is double peak
+            && double.IsFinite(peak)
+            && peak >= ceilingCelsius - headroomCelsius;
+    }
+}
+
 public static class HardwareTuneEngine
 {
     public static async Task<TuneResult> RunAsync(
@@ -962,37 +1050,47 @@ public static class HardwareTuneEngine
                 throw new InvalidOperationException("The current control value is outside the requested bounds in the selected tuning direction.");
             }
 
+            // Effective search range for the refinement and safety-margin math.
+            // The fine snap uses the DRIVER step (the hardware's finest valid
+            // grid), not the coarse plan step, so refined candidates can land
+            // between the coarse ones instead of snapping back onto them.
+            double effectiveMin = Math.Max(capability.Range!.Minimum, bounds.Minimum);
+            double effectiveMax = Math.Min(capability.Range!.Maximum, bounds.Maximum);
+            double effectiveStep = capability.Range!.Step;
+
             List<TuneCandidateResult> results = [];
             double? selected = null;
+            double? firstFailingValue = null;
+            bool stoppedForThermalHeadroom = false;
             for (int index = 0; index < candidates.Length; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 double candidate = candidates[index];
                 reportProgress?.Invoke(
-                    5 + (55d * index / Math.Max(1, candidates.Length)),
+                    5 + (45d * index / Math.Max(1, candidates.Length)),
                     $"Testing candidate {candidate:0.###} {capability.Unit}".TrimEnd());
-                PreparedAction prepared = WithNumericValue(original, candidate);
-                await adapter.ApplyAsync(prepared, cancellationToken).ConfigureAwait(false);
-                ActionVerification verification = await adapter.VerifyAsync(prepared, cancellationToken).ConfigureAwait(false);
-                if (!verification.Success)
+                CandidateOutcome outcome = await TestCandidateAsync(
+                    adapter, monitor, original, capability, request.Plan, candidate, candidateTime, cancellationToken).ConfigureAwait(false);
+                results.Add(outcome.Result);
+                if (!outcome.Passed)
                 {
-                    TuneScreeningResult failedReadBack = new(false, verification.Message, null, null, null);
-                    results.Add(new TuneCandidateResult(candidate, false, verification.Message, failedReadBack));
-                    break;
-                }
-
-                TuneScreeningResult screening = await monitor.ScreenAsync(
-                    capability,
-                    request.Plan,
-                    candidateTime,
-                    cancellationToken).ConfigureAwait(false);
-                results.Add(new TuneCandidateResult(candidate, screening.Passed, screening.Message, screening));
-                if (!screening.Passed)
-                {
+                    firstFailingValue = candidate;
                     break;
                 }
 
                 selected = candidate;
+
+                // Thermal-headroom stop: this candidate is stable but already
+                // near the temperature ceiling, so keep it and stop climbing —
+                // going higher would trade away cooling headroom, not add it.
+                if (GpuAutoOcSearch.ReachedThermalHeadroom(
+                    outcome.Result.Screening.MaximumTemperatureCelsius,
+                    request.Plan.TemperatureCeilingCelsius,
+                    request.ThermalHeadroomCelsius))
+                {
+                    stoppedForThermalHeadroom = true;
+                    break;
+                }
             }
 
             if (selected is null)
@@ -1006,14 +1104,72 @@ public static class HardwareTuneEngine
                     null);
             }
 
+            // Refinement: bisect the gap between the last stable candidate and
+            // the first failing one to locate the true stability edge, so the
+            // coarse step size no longer caps how close to the limit we get.
+            // Skipped when the climb already stopped for thermal headroom.
+            if (request.RefinementCandidates > 0 && !stoppedForThermalHeadroom && firstFailingValue is double firstFail)
+            {
+                IReadOnlyList<double> fine = GpuAutoOcSearch.FineCandidates(
+                    selected.Value, firstFail, request.RefinementCandidates);
+                TimeSpan refinementTime = GpuAutoOcSearch.RefinementScreeningTime(candidateTime);
+                for (int index = 0; index < fine.Count; index++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    double candidate = GpuAutoOcSearch.SnapToStep(fine[index], effectiveMin, effectiveMax, effectiveStep);
+                    if (candidate <= selected.Value + 1e-6 && request.Direction == TuneDirection.Maximize)
+                    {
+                        continue; // snapped back onto an already-passed value
+                    }
+
+                    reportProgress?.Invoke(
+                        50 + (10d * index / Math.Max(1, fine.Count)),
+                        $"Refining near the stability edge: {candidate:0.###} {capability.Unit}".TrimEnd());
+                    CandidateOutcome outcome = await TestCandidateAsync(
+                        adapter, monitor, original, capability, request.Plan, candidate, refinementTime, cancellationToken).ConfigureAwait(false);
+                    results.Add(outcome.Result);
+                    if (!outcome.Passed)
+                    {
+                        break;
+                    }
+
+                    selected = candidate;
+                    if (GpuAutoOcSearch.ReachedThermalHeadroom(
+                        outcome.Result.Screening.MaximumTemperatureCelsius,
+                        request.Plan.TemperatureCeilingCelsius,
+                        request.ThermalHeadroomCelsius))
+                    {
+                        break;
+                    }
+                }
+            }
+
+            // Safety margin: back off from the edge so the shipped result has
+            // headroom. The final long screening then runs on the backed-off value.
+            double shipValue = selected.Value;
+            string marginNote = string.Empty;
+            if (request.SafetyMargin > 0)
+            {
+                double backedOff = GpuAutoOcSearch.SnapToStep(
+                    GpuAutoOcSearch.ApplyMargin(selected.Value, request.SafetyMargin, request.Direction, effectiveMin, effectiveMax),
+                    effectiveMin,
+                    effectiveMax,
+                    effectiveStep);
+                if (Math.Abs(backedOff - selected.Value) > 1e-6)
+                {
+                    marginNote = $" A {Math.Abs(selected.Value - backedOff):0.#} {capability.Unit} stability margin was applied below the observed limit of {selected.Value:0.#} {capability.Unit}.".Replace("  ", " ");
+                    shipValue = backedOff;
+                }
+            }
+
             reportProgress?.Invoke(65, $"Running final {request.Plan.ScreeningDuration.TotalMinutes:0.#}-minute screening.");
-            PreparedAction finalCandidate = WithNumericValue(original, selected.Value);
+            PreparedAction finalCandidate = WithNumericValue(original, shipValue);
             await adapter.ApplyAsync(finalCandidate, cancellationToken).ConfigureAwait(false);
             ActionVerification finalVerification = await adapter.VerifyAsync(finalCandidate, cancellationToken).ConfigureAwait(false);
             if (!finalVerification.Success)
             {
                 TuneScreeningResult failedReadBack = new(false, finalVerification.Message, null, null, null);
-                results.Add(new TuneCandidateResult(selected.Value, false, finalVerification.Message, failedReadBack));
+                results.Add(new TuneCandidateResult(shipValue, false, finalVerification.Message, failedReadBack));
                 operationSucceeded = true;
                 return new TuneResult(capability.Id, "Final read-back failed", null, results, null);
             }
@@ -1023,26 +1179,56 @@ public static class HardwareTuneEngine
                 request.Plan,
                 request.Plan.ScreeningDuration,
                 cancellationToken).ConfigureAwait(false);
-            results.Add(new TuneCandidateResult(selected.Value, finalScreening.Passed, finalScreening.Message, finalScreening));
+            results.Add(new TuneCandidateResult(shipValue, finalScreening.Passed, finalScreening.Message, finalScreening));
             if (!finalScreening.Passed)
             {
                 operationSucceeded = true;
                 return new TuneResult(capability.Id, "Final screening rejected the candidate", null, results, null);
             }
 
-            ProfileV1 generated = CreateGeneratedProfile(request, capability, selected.Value);
+            ProfileV1 generated = CreateGeneratedProfile(request, capability, shipValue, marginNote);
             string label = request.Plan.ScreeningDuration >= TimeSpan.FromMinutes(10)
                 ? "Passed 10-minute screening"
                 : "Passed test screening";
             reportProgress?.Invoke(95, "Restoring the prior control state and saving the generated profile.");
             operationSucceeded = true;
-            return new TuneResult(capability.Id, label, selected, results, generated);
+            return new TuneResult(capability.Id, label, shipValue, results, generated);
         }
         finally
         {
             await RestoreOriginalAsync(capability, original, adapter, operationSucceeded).ConfigureAwait(false);
             reportProgress?.Invoke(100, "Tuning finished; the prior control state was restored.");
         }
+    }
+
+    private readonly record struct CandidateOutcome(bool Passed, TuneCandidateResult Result);
+
+    /// <summary>
+    /// Applies one candidate, verifies read-back, and screens it for the
+    /// per-candidate duration. A read-back failure counts as a failing
+    /// candidate (never crashes the search).
+    /// </summary>
+    private static async Task<CandidateOutcome> TestCandidateAsync(
+        IHardwareAdapter adapter,
+        ITuneScreeningMonitor monitor,
+        PreparedAction original,
+        CapabilityDescriptor capability,
+        TunePlan plan,
+        double candidate,
+        TimeSpan candidateTime,
+        CancellationToken cancellationToken)
+    {
+        PreparedAction prepared = WithNumericValue(original, candidate);
+        await adapter.ApplyAsync(prepared, cancellationToken).ConfigureAwait(false);
+        ActionVerification verification = await adapter.VerifyAsync(prepared, cancellationToken).ConfigureAwait(false);
+        if (!verification.Success)
+        {
+            TuneScreeningResult failedReadBack = new(false, verification.Message, null, null, null);
+            return new CandidateOutcome(false, new TuneCandidateResult(candidate, false, verification.Message, failedReadBack));
+        }
+
+        TuneScreeningResult screening = await monitor.ScreenAsync(capability, plan, candidateTime, cancellationToken).ConfigureAwait(false);
+        return new CandidateOutcome(screening.Passed, new TuneCandidateResult(candidate, screening.Passed, screening.Message, screening));
     }
 
     private static ProfileAction CreateTuneAction(CapabilityDescriptor capability, double value, string planId) => new(
@@ -1061,7 +1247,8 @@ public static class HardwareTuneEngine
     private static ProfileV1 CreateGeneratedProfile(
         StartTuneRequest request,
         CapabilityDescriptor capability,
-        double value)
+        double value,
+        string marginNote = "")
     {
         string id = $"tuned-{request.Plan.Objective.ToString().ToLowerInvariant()}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
         bool experimental = capability.State == CapabilityAccessState.Experimental
@@ -1070,7 +1257,7 @@ public static class HardwareTuneEngine
             ProfileV1.CurrentSchemaVersion,
             id,
             $"Tuned {request.Plan.Objective}",
-            $"Generated for {capability.Name}. Passed 10-minute screening; provisional evidence only.",
+            $"Generated for {capability.Name}. Passed 10-minute screening; provisional evidence only.{marginNote}",
             [CreateTuneAction(capability, value, request.Plan.Id)],
             new SafetyLimits(),
             [],

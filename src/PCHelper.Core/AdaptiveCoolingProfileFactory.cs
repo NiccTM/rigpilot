@@ -4,6 +4,87 @@ using PCHelper.Contracts;
 namespace PCHelper.Core;
 
 /// <summary>
+/// The temperature→duty shape and responsiveness for one automatic-mode curve,
+/// derived purely from the mode and the output's floor/maximum so it works for
+/// any bounded control. All modes share the two non-negotiable safety anchors:
+/// they start at the output's floor and they reach the controller maximum by
+/// their critical temperature (emergency headroom). Silent stays quiet longer
+/// and only reaches full speed near critical; Cooling ramps early and steeply.
+/// </summary>
+public static class CoolingCurveShape
+{
+    public sealed record Shape(
+        IReadOnlyList<CurvePoint> Points,
+        IReadOnlyDictionary<string, double> Tuning,
+        double StepUpPerSecond,
+        double StepDownPerSecond);
+
+    /// <summary>
+    /// Builds the curve for <paramref name="mode"/> between the output's
+    /// <paramref name="floor"/> and <paramref name="maximum"/>. Duties are
+    /// placed proportionally across the floor→max span so the shape holds for
+    /// any floor. The final point always reaches the maximum.
+    /// </summary>
+    public static Shape For(CoolingCurveMode mode, double floor, double maximum)
+    {
+        if (maximum <= floor)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximum), "The output maximum must be above its floor.");
+        }
+
+        double span = maximum - floor;
+        double At(double fraction) => Math.Clamp(floor + (span * fraction), floor, maximum);
+
+        return mode switch
+        {
+            // Quiet-biased: flat quiet zone, gentle ramp, full speed only near critical.
+            CoolingCurveMode.Silent => new Shape(
+                [
+                    new CurvePoint(45, floor),
+                    new CurvePoint(65, At(0.25)),
+                    new CurvePoint(80, At(0.60)),
+                    new CurvePoint(88, maximum)
+                ],
+                Tuning(hysteresisUp: 2, hysteresisDown: 4, responseUp: 3, responseDown: 8),
+                StepUpPerSecond: 10,
+                StepDownPerSecond: 4),
+
+            // Temperature-biased: ramps early and steeply, full speed sooner.
+            CoolingCurveMode.Cooling => new Shape(
+                [
+                    new CurvePoint(35, floor),
+                    new CurvePoint(50, At(0.45)),
+                    new CurvePoint(65, At(0.80)),
+                    new CurvePoint(78, maximum)
+                ],
+                Tuning(hysteresisUp: 1, hysteresisDown: 1, responseUp: 1, responseDown: 3),
+                StepUpPerSecond: 30,
+                StepDownPerSecond: 12),
+
+            // Balanced default.
+            _ => new Shape(
+                [
+                    new CurvePoint(40, floor),
+                    new CurvePoint(60, At(0.35)),
+                    new CurvePoint(75, At(0.70)),
+                    new CurvePoint(85, maximum)
+                ],
+                Tuning(hysteresisUp: 1, hysteresisDown: 2, responseUp: 1, responseDown: 5),
+                StepUpPerSecond: 20,
+                StepDownPerSecond: 8),
+        };
+    }
+
+    private static Dictionary<string, double> Tuning(double hysteresisUp, double hysteresisDown, double responseUp, double responseDown) => new()
+    {
+        ["hysteresisUp"] = hysteresisUp,
+        ["hysteresisDown"] = hysteresisDown,
+        ["responseUpSeconds"] = responseUp,
+        ["responseDownSeconds"] = responseDown,
+    };
+}
+
+/// <summary>
 /// Creates the conservative first curve after one exact output has completed
 /// commissioning. It intentionally does not create a zero-RPM point: even a
 /// stop-qualified fan should require an explicit user edit before fan stop is
@@ -62,7 +143,8 @@ public static class AdaptiveCoolingProfileFactory
         IReadOnlyList<CapabilityDescriptor> outputs,
         string name,
         IReadOnlyList<SensorSample> samples,
-        bool preferGpuSourceOnly = false)
+        bool preferGpuSourceOnly = false,
+        CoolingCurveMode mode = CoolingCurveMode.Balanced)
     {
         ArgumentNullException.ThrowIfNull(outputs);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -126,40 +208,28 @@ public static class AdaptiveCoolingProfileFactory
             }
 
             string curveNodeId = $"auto-curve-{graphOutputs.Count + 1}";
-            double quietDuty = Math.Max(floor, Math.Min(range.Maximum, 55));
-            double loadDuty = Math.Max(floor, Math.Min(range.Maximum, 75));
+            CoolingCurveShape.Shape shape = CoolingCurveShape.For(mode, floor, range.Maximum);
             nodes.Add(new CoolingGraphNodeV1(
-                curveNodeId, $"{output.Name} automatic curve", CoolingNodeKind.Graph, [mixedSource], null,
-                [
-                    new CurvePoint(40, floor),
-                    new CurvePoint(60, quietDuty),
-                    new CurvePoint(75, loadDuty),
-                    new CurvePoint(85, range.Maximum)
-                ],
-                new Dictionary<string, double>
-                {
-                    ["hysteresisUp"] = 1,
-                    ["hysteresisDown"] = 2,
-                    ["responseUpSeconds"] = 1,
-                    ["responseDownSeconds"] = 5
-                }));
+                curveNodeId, $"{output.Name} {mode.ToString().ToLowerInvariant()} curve", CoolingNodeKind.Graph, [mixedSource], null,
+                [.. shape.Points],
+                new Dictionary<string, double>(shape.Tuning)));
             graphOutputs.Add(new CoolingGraphOutputV1(
                 output.Id, curveNodeId, FanOutputMode.DutyPercent,
-                floor, range.Maximum, 0, StepUpPerSecond: 20, StepDownPerSecond: 8, AvoidBands: []));
+                floor, range.Maximum, 0, shape.StepUpPerSecond, shape.StepDownPerSecond, AvoidBands: []));
             anyExperimental |= output.State == CapabilityAccessState.Experimental;
         }
 
         CoolingGraphV1 graph = new(
             CoolingGraphV1.CurrentSchemaVersion,
             $"auto.cooling.{token}",
-            $"{name} automatic mode",
+            $"{name} {mode.ToString().ToLowerInvariant()} mode",
             nodes,
             graphOutputs);
         ProfileV2 profile = new(
             ProfileV2.CurrentSchemaVersion,
             $"auto.profile.{token}",
-            $"{name} automatic mode",
-            $"Conservative temperature curve with a {ConservativeFloorDutyPercent:0}% duty floor on every output; stale sensors command maximum cooling.",
+            $"{name} {mode.ToString().ToLowerInvariant()} mode",
+            $"{mode} temperature curve with a {ConservativeFloorDutyPercent:0}% duty floor on every uncalibrated output; stale sensors command maximum cooling.",
             [],
             new SafetyLimits(),
             graph.Id,

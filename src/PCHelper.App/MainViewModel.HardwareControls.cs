@@ -46,6 +46,7 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            OnPropertyChanged(nameof(HardwareControlBadge));
             PersistHardwareControlPreference(value);
             _hardwareControlArmedThisConnection = false;
             _applyGpuControlCommand.RaiseCanExecuteChanged();
@@ -55,6 +56,9 @@ public sealed partial class MainViewModel
             _ = ApplyHardwareControlSafelyAsync(value);
         }
     }
+
+    /// <summary>User-facing badge for the GPU controls card (On/Off, not True/False).</summary>
+    public string HardwareControlBadge => HardwareControlEnabled ? "Hardware control: On" : "Hardware control: Off";
 
     private async Task ApplyHardwareControlSafelyAsync(bool enable)
     {
@@ -245,14 +249,54 @@ public sealed partial class MainViewModel
 
     /// <summary>
     /// One-click automatic cooling mode: builds and applies a conservative
-    /// temperatureâ†’duty graph (50% safety floor, full maximum for emergency
+    /// temperature→duty graph (50% safety floor, full maximum for emergency
     /// headroom) through the service graph engine, which keeps read-back
-    /// verification and the stale-sensor â†’ maximum-cooling protection. GPU mode
+    /// verification and the stale-sensor → maximum-cooling protection. GPU mode
     /// binds the armed GPU fan to GPU temperature; case-fan mode binds every
     /// writable motherboard fan output to the maximum of CPU and GPU
     /// temperature. Pump and CPU-fan role protections are enforced service-side.
     /// </summary>
-    public async Task StartAutomaticCoolingAsync(bool gpuFans)
+    /// <summary>Maps a command parameter ("silent"/"balanced"/"cooling") to the curve mode, defaulting to Balanced.</summary>
+    private static CoolingCurveMode ParseCoolingCurveMode(object? parameter) =>
+        Enum.TryParse(parameter as string, ignoreCase: true, out CoolingCurveMode mode) ? mode : CoolingCurveMode.Balanced;
+
+    /// <summary>
+    /// Explains why an automatic fan mode has no usable output: a competing
+    /// controller holding the fans (the common case — RigPilot blocks only
+    /// overlapping controls and never fights another writer) names the blocker
+    /// and points at Close blockers; a genuinely absent control says so.
+    /// </summary>
+    private string DescribeUnavailableFanOutputs(IReadOnlyList<CapabilityDescriptor> candidates, bool gpuFans)
+    {
+        string label = gpuFans ? "GPU fan control" : "motherboard fan control";
+        string? owner = DescribeConflictOwners(candidates);
+        if (owner is not null)
+        {
+            return $"{label} is blocked by {owner}. Close the competing app — Diagnostics has a \"Close blockers\" button — or stop it, then refresh.";
+        }
+
+        if (!HardwareControlEnabled)
+        {
+            return $"No armed {label} is available. Turn on Hardware control in the header, then refresh.";
+        }
+
+        return gpuFans
+            ? "No GPU fan control was reported on this system. Refresh after the GPU is detected."
+            : "No writable motherboard fan outputs were reported on this system.";
+    }
+
+    /// <summary>The distinct competing-writer names across any Blocked capabilities, or null when none is blocked.</summary>
+    private static string? DescribeConflictOwners(IReadOnlyList<CapabilityDescriptor> candidates)
+    {
+        string[] owners = [.. candidates
+            .Where(capability => capability.State == CapabilityAccessState.Blocked
+                && !string.IsNullOrWhiteSpace(capability.ConflictOwner))
+            .SelectMany(capability => capability.ConflictOwner!.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+        return owners.Length == 0 ? null : string.Join(", ", owners);
+    }
+
+    public async Task StartAutomaticCoolingAsync(bool gpuFans, CoolingCurveMode mode = CoolingCurveMode.Balanced)
     {
         if (!HardwareControlEnabled)
         {
@@ -264,22 +308,19 @@ public sealed partial class MainViewModel
             return;
         }
 
-        CapabilityDescriptor[] outputs = gpuFans
-            ? [.. _snapshot.Capabilities.Where(capability =>
-                capability.Id.StartsWith("gpufan.duty:", StringComparison.Ordinal)
-                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
-                && capability.Range is NumericRange)]
-            : [.. _snapshot.Capabilities.Where(capability =>
-                capability.Id.StartsWith("lhm.control:", StringComparison.Ordinal)
+        bool IsFanOutput(CapabilityDescriptor capability) => gpuFans
+            ? capability.Id.StartsWith("gpufan.duty:", StringComparison.Ordinal) && capability.Range is NumericRange
+            : capability.Id.StartsWith("lhm.control:", StringComparison.Ordinal)
                 && capability.Domain == ControlDomain.Cooling
-                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
                 && capability.Range is NumericRange
-                && !capability.Id.Contains("/gpu-nvidia/", StringComparison.Ordinal))];
+                && !capability.Id.Contains("/gpu-nvidia/", StringComparison.Ordinal);
+
+        CapabilityDescriptor[] candidates = [.. _snapshot.Capabilities.Where(IsFanOutput)];
+        CapabilityDescriptor[] outputs = [.. candidates.Where(capability =>
+            capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified)];
         if (outputs.Length == 0)
         {
-            ShowNotice(gpuFans
-                ? "No armed GPU fan control is available. Turn on Hardware control and refresh."
-                : "No writable motherboard fan outputs are available.", "Warning");
+            ShowNotice(DescribeUnavailableFanOutputs(candidates, gpuFans), "Warning");
             return;
         }
 
@@ -290,7 +331,8 @@ public sealed partial class MainViewModel
                 outputs,
                 gpuFans ? "GPU fan" : "Case fans",
                 _snapshot.Sensors,
-                preferGpuSourceOnly: gpuFans);
+                preferGpuSourceOnly: gpuFans,
+                mode: mode);
         }
         catch (InvalidOperationException exception)
         {
@@ -319,7 +361,7 @@ public sealed partial class MainViewModel
             _lifetime.Token);
         EnsureSuccess(applyResponse);
         ShowNotice(
-            $"{draft.Profile.Name} is active: {outputs.Length} output(s) follow the temperature curve with a {AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent:0}% floor. Stale sensors command maximum cooling.",
+            $"{draft.Profile.Name} is active: {outputs.Length} output(s) follow the {mode} temperature curve with a {AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent:0}% floor. Stale sensors command maximum cooling.",
             "Success");
         await RefreshAsync(full: true, userInitiated: false);
     }
@@ -422,7 +464,7 @@ public sealed partial class MainViewModel
     // --- NZXT Kraken pump control ---------------------------------------------
 
     private double _krakenPumpDutyTarget = 100;
-    private string _krakenPumpStatus = "Pump duty 60â€“100%. The write is read back from the cooler's own status stream; the pump is never slowed below the floor or stopped.";
+    private string _krakenPumpStatus = "Pump duty 60–100%. The write is read back from the cooler's own status stream; the pump is never slowed below the floor or stopped.";
 
     public double KrakenPumpDutyTarget
     {
@@ -465,13 +507,46 @@ public sealed partial class MainViewModel
         });
     }
 
+    // Refined Auto-OC tuning parameters. The coarse scan climbs in ~12 steps;
+    // the refinement then bisects the gap to the first failing step to find the
+    // stability edge, and the safety margin backs the shipped offset off from
+    // that edge so it runs with headroom rather than on the cliff. Memory uses
+    // a larger margin because GDDR6X clock error scales in bigger increments.
+    private const int AutoOcRefinementCandidates = 5;
+    private const double AutoOcCoreSafetyMarginMhz = 15;
+    private const double AutoOcMemorySafetyMarginMhz = 100;
+    // Stop climbing once a stable candidate is within this many degrees of the
+    // 83 °C ceiling, so the shipped overclock keeps real thermal headroom.
+    private const double AutoOcThermalHeadroomCelsius = 4;
+
+    public System.Windows.Input.ICommand StartGpuMemoryAutoOcCommand => _startGpuMemoryAutoOcCommand ??= new AsyncCommand(
+        _ => StartGpuMemoryAutoOcAsync(),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    private AsyncCommand? _startGpuMemoryAutoOcCommand;
+
     /// <summary>
-    /// One-click GPU auto-OC: targets the armed core clock offset with the
-    /// existing bounded tuning engine (Performance objective, 83 Â°C ceiling,
-    /// 10-minute screening, WHEA/thermal/display-reset aborts, rollback, boot
-    /// sentinel). The Hardware-control switch supplies the acknowledgements.
+    /// One-click GPU core auto-OC: climbs the armed core clock offset, refines
+    /// the stability edge between the last stable step and the first failing
+    /// one, then backs off a small safety margin — the way a careful
+    /// overclocker works. Uses the existing bounded engine (Performance
+    /// objective, 83 °C ceiling, 10-minute final screening, WHEA/thermal/
+    /// display-reset aborts, rollback, boot sentinel). No voltage is touched.
+    /// The Hardware-control switch supplies the acknowledgements.
     /// </summary>
-    public async Task StartGpuAutoOcAsync()
+    public Task StartGpuAutoOcAsync() =>
+        StartGpuClockAutoOcAsync("gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz);
+
+    /// <summary>
+    /// One-click GPU memory auto-OC: the same refined climb/edge-find/back-off
+    /// search applied to the armed memory clock offset. GDDR6X memory tuning is
+    /// often the larger real-world gain on this class of card. Same safety gates.
+    /// </summary>
+    public Task StartGpuMemoryAutoOcAsync() =>
+        StartGpuClockAutoOcAsync("gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz);
+
+    private async Task StartGpuClockAutoOcAsync(string capabilityPrefix, string label, double safetyMarginMhz)
     {
         if (!HardwareControlEnabled)
         {
@@ -480,10 +555,18 @@ public sealed partial class MainViewModel
         }
 
         OperationTargetDisplay? target = TuneTargets.FirstOrDefault(
-            item => item.Descriptor.Id.StartsWith("gpuclock.core:", StringComparison.Ordinal));
+            item => item.Descriptor.Id.StartsWith(capabilityPrefix, StringComparison.Ordinal));
         if (target is null)
         {
-            ShowNotice("The GPU core clock target is not available on this system.", "Warning");
+            // The tuning target list only carries armable controls; if the
+            // capability exists but is blocked by a competing writer, say so.
+            CapabilityDescriptor? blocked = _snapshot?.Capabilities.FirstOrDefault(capability =>
+                capability.Id.StartsWith(capabilityPrefix, StringComparison.Ordinal)
+                && capability.State == CapabilityAccessState.Blocked);
+            string owner = blocked?.ConflictOwner is { Length: > 0 } conflict ? conflict : string.Empty;
+            ShowNotice(owner.Length > 0
+                ? $"{label} tuning is blocked by {owner}. Close the competing app (Diagnostics has a \"Close blockers\" button) or stop it, then refresh."
+                : $"The {label} target is not available on this system.", "Warning");
             return;
         }
 
@@ -492,7 +575,7 @@ public sealed partial class MainViewModel
         TuneTemperatureCeilingText = "83";
         AdvancedWritesAcknowledged = true;
         TuneDeviceAcknowledged = true;
-        await StartTuneCoreAsync();
+        await StartTuneCoreAsync(AutoOcRefinementCandidates, safetyMarginMhz, AutoOcThermalHeadroomCelsius);
     }
 
     private async Task EnsureHardwareControlArmedAsync()

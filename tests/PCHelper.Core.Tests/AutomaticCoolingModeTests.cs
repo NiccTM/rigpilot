@@ -54,6 +54,29 @@ public sealed class AutomaticCoolingModeTests
     }
 
     [Fact]
+    public void ModeChangesTheCurveShapeWhileKeepingTheFloorAndMaximum()
+    {
+        CapabilityDescriptor fan = Output("lhm.control:/lpc/x/0/control/0", "Fan #1", minimum: 0, maximum: 100);
+
+        AdaptiveCoolingProfileDraft silent = AdaptiveCoolingProfileFactory.CreateAutomaticMode(
+            [fan], "Case fans", Samples(), mode: CoolingCurveMode.Silent);
+        AdaptiveCoolingProfileDraft cooling = AdaptiveCoolingProfileFactory.CreateAutomaticMode(
+            [fan], "Case fans", Samples(), mode: CoolingCurveMode.Cooling);
+
+        CurvePoint[] silentPoints = [.. silent.Graph.Nodes.First(node => node.Kind == CoolingNodeKind.Graph).Points];
+        CurvePoint[] coolingPoints = [.. cooling.Graph.Nodes.First(node => node.Kind == CoolingNodeKind.Graph).Points];
+
+        // Both still floor at 50% and top out at the controller maximum.
+        Assert.Equal(AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent, silentPoints[0].Output);
+        Assert.Equal(100, silentPoints[^1].Output);
+        Assert.Equal(100, coolingPoints[^1].Output);
+        // Cooling reaches full speed at a lower temperature than Silent.
+        Assert.True(coolingPoints[^1].Input < silentPoints[^1].Input);
+        // The stable graph id is shared so switching modes replaces, not duplicates.
+        Assert.Equal(silent.Graph.Id, cooling.Graph.Id);
+    }
+
+    [Fact]
     public void AutomaticModeRefusesOutputsWithNoRangeAboveTheFloor()
     {
         CapabilityDescriptor cramped = Output("lhm.control:/lpc/x/0/control/1", "Fan #2", minimum: 0, maximum: 45);

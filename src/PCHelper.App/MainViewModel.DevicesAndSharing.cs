@@ -46,7 +46,7 @@ public sealed partial class MainViewModel
             return;
         }
 
-        StorageHealthStatus = "Reading the Windows Storage providerâ€¦";
+        StorageHealthStatus = "Reading the Windows Storage provider…";
         IpcResponse response = await _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(IpcCommand.GetStorageHealth),
             _lifetime.Token);

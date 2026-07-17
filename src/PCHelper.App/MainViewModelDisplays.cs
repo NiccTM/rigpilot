@@ -32,14 +32,14 @@ public sealed record OperationTargetDisplay(
         string? rpmSensorId)
     {
         string range = capability.Range is NumericRange numeric
-            ? $"{numeric.Minimum:0.##}â€“{numeric.Maximum:0.##} {capability.Unit}".TrimEnd()
+            ? $"{numeric.Minimum:0.##}–{numeric.Maximum:0.##} {capability.Unit}".TrimEnd()
             : "No numeric range";
         bool available = capability.State is CapabilityAccessState.Verified or CapabilityAccessState.Experimental
             && capability.CanResetToDefault
             && capability.Range is not null;
         return new OperationTargetDisplay(
             capability,
-            $"{capability.Name} Â· {deviceName}",
+            $"{capability.Name} · {deviceName}",
             SplitWords(capability.State.ToString()),
             range,
             capability.Reason,
@@ -63,7 +63,7 @@ public sealed record AutomationRuleDisplay(
     public static AutomationRuleDisplay From(AutomationRuleV1 rule) => new(
         rule,
         rule.Name,
-        $"{SplitWords(rule.TriggerKind.ToString())} Â· {rule.TriggerValue}",
+        $"{SplitWords(rule.TriggerKind.ToString())} · {rule.TriggerValue}",
         rule.ProfileId,
         rule.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture),
         rule.Enabled ? "Enabled" : "Disabled");
@@ -103,7 +103,7 @@ public sealed record ProfileCardDisplay(
                 ? "Calibrated cooling graph; apply manually"
                 : "No hardware writes in this build"
             : manualOnlyCount > 0
-                ? $"{profile.Actions.Count} typed action{(profile.Actions.Count == 1 ? string.Empty : "s")} Â· {manualOnlyCount} Manual Only"
+                ? $"{profile.Actions.Count} typed action{(profile.Actions.Count == 1 ? string.Empty : "s")} · {manualOnlyCount} Manual Only"
             : $"{profile.Actions.Count} typed action{(profile.Actions.Count == 1 ? string.Empty : "s")}";
         return new ProfileCardDisplay(
             profile,
@@ -138,7 +138,7 @@ public sealed record DeviceDisplay(
         device.Properties.TryGetValue("boardPartnerLabel", out string? boardPartnerLabel);
         string details = string.IsNullOrWhiteSpace(compatibilityLabel)
             ? $"{manufacturer} \u00B7 {model}"
-            : $"{manufacturer} \u00B7 {model} Â· {compatibilityLabel}";
+            : $"{manufacturer} \u00B7 {model} · {compatibilityLabel}";
         if (!string.IsNullOrWhiteSpace(boardPartnerLabel))
         {
             details = string.Concat(details, " \u00B7 ", boardPartnerLabel);
@@ -453,7 +453,7 @@ public sealed record SensorTrendDisplay(
             ? $"{latest:0.##} {trend.Unit}".TrimEnd()
             : "Unavailable",
         trend.Minimum is double minimum && trend.Maximum is double maximum
-            ? $"{minimum:0.##}â€“{maximum:0.##} {trend.Unit}".TrimEnd()
+            ? $"{minimum:0.##}–{maximum:0.##} {trend.Unit}".TrimEnd()
             : "No range",
         trend.Sparkline,
         false);

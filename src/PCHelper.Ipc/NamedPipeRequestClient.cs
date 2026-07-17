@@ -7,11 +7,22 @@ public sealed class NamedPipeRequestClient
 {
     private readonly string _pipeName;
     private readonly TimeSpan _connectTimeout;
+    private readonly TimeSpan _operationTimeout;
 
-    public NamedPipeRequestClient(string pipeName, TimeSpan? connectTimeout = null)
+    /// <summary>
+    /// <paramref name="connectTimeout"/> bounds only reaching the service (kept
+    /// short so a down service fails fast). <paramref name="operationTimeout"/>
+    /// bounds the request/response once connected, and defaults generously
+    /// because a transactional hardware apply — prepare, apply, read-back
+    /// verify, and the service serialising rapid back-to-back writes on the
+    /// same channel — can take several seconds. Sharing one short timeout for
+    /// both used to spuriously time out those applies client-side.
+    /// </summary>
+    public NamedPipeRequestClient(string pipeName, TimeSpan? connectTimeout = null, TimeSpan? operationTimeout = null)
     {
         _pipeName = pipeName;
         _connectTimeout = connectTimeout ?? TimeSpan.FromSeconds(2);
+        _operationTimeout = operationTimeout ?? TimeSpan.FromSeconds(30);
     }
 
     public async Task<IpcResponse> SendAsync(IpcRequest request, CancellationToken cancellationToken)
@@ -28,11 +39,32 @@ public sealed class NamedPipeRequestClient
             // Host pipes do not impersonate; they remain token-authenticated
             // and fail closed in the server identity-mode policy.
             System.Security.Principal.TokenImpersonationLevel.Impersonation);
-        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(_connectTimeout);
-        await client.ConnectAsync(timeout.Token).ConfigureAwait(false);
-        await PipeFraming.WriteAsync(client, request, timeout.Token).ConfigureAwait(false);
-        return await PipeFraming.ReadAsync<IpcResponse>(client, timeout.Token).ConfigureAwait(false);
+        try
+        {
+            using (CancellationTokenSource connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                connectTimeout.CancelAfter(_connectTimeout);
+                await client.ConnectAsync(connectTimeout.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"The RigPilot service did not accept a connection within {_connectTimeout.TotalSeconds:0} s. It may be starting up or stopped.");
+        }
+
+        try
+        {
+            using CancellationTokenSource operationTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            operationTimeout.CancelAfter(_operationTimeout);
+            await PipeFraming.WriteAsync(client, request, operationTimeout.Token).ConfigureAwait(false);
+            return await PipeFraming.ReadAsync<IpcResponse>(client, operationTimeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"The RigPilot service did not respond within {_operationTimeout.TotalSeconds:0} s. It may be busy with another hardware operation — try again in a moment.");
+        }
     }
 
     public static IpcRequest CreateRequest<T>(

@@ -21,6 +21,7 @@
     <ProjectReference Include="..\PCHelper.AutomationHost\PCHelper.AutomationHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="ScottPlot.WPF" Version="5.1.59" />
     <PackageReference Include="ScreenRecorderLib" Version="6.6.0" ExcludeAssets="build" />
     <PackageReference Include="System.Management" Version="10.0.9" />

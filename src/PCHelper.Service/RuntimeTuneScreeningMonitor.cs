@@ -189,7 +189,7 @@ internal sealed class RuntimeTuneScreeningMonitor(
 
     private static bool IsTemperature(string unit) =>
         string.Equals(unit, "°C", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(unit, "Â°C", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(unit, "°C", StringComparison.OrdinalIgnoreCase)
         || string.Equals(unit, "Celsius", StringComparison.OrdinalIgnoreCase);
 }
 

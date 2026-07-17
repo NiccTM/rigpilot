@@ -109,6 +109,17 @@ public enum TuningObjective
     Performance
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<CoolingCurveMode>))]
+public enum CoolingCurveMode
+{
+    /// <summary>Quiet-biased: stays near the floor longer, reaches full speed only near critical.</summary>
+    Silent,
+    /// <summary>The default balance of noise and temperature.</summary>
+    Balanced,
+    /// <summary>Temperature-biased: ramps early and steeply, reaches full speed at a lower temperature.</summary>
+    Cooling
+}
+
 [JsonConverter(typeof(JsonStringEnumConverter<HardwareOperationKind>))]
 public enum HardwareOperationKind
 {
@@ -332,7 +343,19 @@ public sealed record StartTuneRequest(
     bool ConfirmExperimental,
     bool ConfirmDevice,
     TimeSpan? CandidateScreeningTime = null,
-    int MaximumCandidates = 12);
+    int MaximumCandidates = 12,
+    // Auto-OC refinement: after the coarse scan finds the last stable candidate
+    // and the first failing one, screen this many evenly-spaced values in that
+    // gap to locate the stability edge precisely. 0 keeps the plain coarse scan.
+    int RefinementCandidates = 0,
+    // Back off this many units (the capability's unit) from the best stable
+    // value before the final long screening, so the shipped result carries
+    // headroom instead of sitting on the edge of stability. 0 = no margin.
+    double SafetyMargin = 0,
+    // Stop climbing once a passing candidate's peak temperature reaches within
+    // this many degrees of the ceiling, so the result keeps thermal headroom
+    // instead of only stability headroom. 0 = climb purely to the stability edge.
+    double ThermalHeadroomCelsius = 0);
 
 public sealed record TuneScreeningResult(
     bool Passed,

@@ -150,7 +150,10 @@ public static class SmbusRgbIdentify
 /// </summary>
 public static class SmbusRgbFirstLight
 {
-    public static SmbusRgbFirstLightResultV1 Run(string colourHex)
+    public static SmbusRgbFirstLightResultV1 Run(string colourHex) =>
+        Transmit(colourHex, witnessedFirstLight: true);
+
+    internal static SmbusRgbFirstLightResultV1 Transmit(string colourHex, bool witnessedFirstLight)
     {
         if (!TryParseColour(colourHex, out byte red, out byte green, out byte blue))
         {
@@ -205,7 +208,7 @@ public static class SmbusRgbFirstLight
                 red,
                 green,
                 blue,
-                witnessedFirstLight: true);
+                witnessedFirstLight);
             return new SmbusRgbFirstLightResultV1(
                 SmbusRgbFirstLightResultV1.CurrentSchemaVersion,
                 probe,
@@ -214,6 +217,14 @@ public static class SmbusRgbFirstLight
                 $"{write.Message} Identities: {string.Join(", ", identities)}.");
         }
     }
+
+    /// <summary>
+    /// The production DIMM RGB path: identical detection + identity gating to
+    /// the first-light, but the audit gate is enforced — only kits verified at
+    /// a witnessed first-light are ever transmitted to.
+    /// </summary>
+    public static SmbusRgbFirstLightResultV1 Apply(string colourHex) =>
+        Transmit(colourHex, witnessedFirstLight: false);
 
     private static SmbusRgbFirstLightResultV1 Failure(SmbusRgbProbeResultV1 probe, string message) =>
         new(SmbusRgbFirstLightResultV1.CurrentSchemaVersion, probe, SmbusRgbOutcome.Failed.ToString(), 0, message);

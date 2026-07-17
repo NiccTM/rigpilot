@@ -86,7 +86,7 @@ public sealed class ReliabilityLabTests
         DateTimeOffset now = DateTimeOffset.UtcNow;
         SensorTrendV1[] trends =
         [
-            Trend("cpu.temp", "CPU package", "Â°C", [70, 74], now),
+            Trend("cpu.temp", "CPU package", "°C", [70, 74], now),
             Trend("gpu.power", "GPU power", "W", [220, 240], now),
             Trend("case.rpm", "Case fan", "RPM", [900, 920], now),
             Trend("board.voltage", "Board voltage", "V", [1.1, 1.2], now)

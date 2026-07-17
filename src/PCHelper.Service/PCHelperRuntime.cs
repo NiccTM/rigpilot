@@ -388,6 +388,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.SetKrakenLighting => await SetKrakenLightingAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetKrakenPumpDuty => await SetKrakenPumpDutyAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetAuraLighting => await SetAuraLightingAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetDimmRgb => await SetDimmRgbAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StopConflictingProcesses => StopConflictingProcesses(request),
                 IpcCommand.ReadRyzenSmuFeasibility => await ReadRyzenSmuFeasibilityAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuFanControlArmed => await SetGpuFanControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
@@ -2282,6 +2283,21 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return Failure(request, "MULTI_DOMAIN_TUNE_FORBIDDEN", "A tuning operation must target exactly one bounded capability.");
         }
 
+        if (payload.RefinementCandidates is < 0 or > 20)
+        {
+            return Failure(request, "INVALID_REFINEMENT", "Refinement candidate count must be between 0 and 20.");
+        }
+
+        if (!double.IsFinite(payload.SafetyMargin) || payload.SafetyMargin < 0)
+        {
+            return Failure(request, "INVALID_SAFETY_MARGIN", "The safety margin must be a non-negative finite value.");
+        }
+
+        if (!double.IsFinite(payload.ThermalHeadroomCelsius) || payload.ThermalHeadroomCelsius is < 0 or > 40)
+        {
+            return Failure(request, "INVALID_THERMAL_HEADROOM", "The thermal headroom must be between 0 and 40 °C.");
+        }
+
         HardwareSnapshot snapshot = GetSnapshot();
         CapabilityDescriptor capability = snapshot.Capabilities.FirstOrDefault(
             item => string.Equals(item.Id, payload.CapabilityId, StringComparison.Ordinal))
@@ -3359,9 +3375,36 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
 
         string argument = payload.TurnOff ? "off" : payload.Colour.Trim().TrimStart('#');
+        if (payload.HeaderIndex is int auraHeader)
+        {
+            // Single-header target: a passive ARGB device on one header (e.g.
+            // the Cooler Master GPU sag bracket) without repainting the other.
+            argument = $"{argument}@{auraHeader.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        }
         ContainedAuraLighting aura = new(
             () => new AdapterHostControllerDiscoveryProcess("--set-aura-rgb", argument));
         AuraLightingResultV1 result = await aura.WriteAsync(cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private async Task<IpcResponse> SetDimmRgbAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        // RigPilot's in-house DIMM RGB write over the system SMBus (signed
+        // PawnIO transport). Experimental and double-confirmed; quadruple-gated
+        // in the writer (transport, default-deny address policy, identity
+        // check, per-kit first-light audit) and runs in the crash-contained
+        // Adapter Host child. No firmware read-back.
+        DimmRgbRequestV1 payload = IpcJson.FromElement<DimmRgbRequestV1>(request.Payload)
+            ?? throw new InvalidDataException("SetDimmRgb requires a DimmRgbRequestV1 payload.");
+        if (payload.Validate() is string refusal)
+        {
+            return Failure(request, "DIMM_RGB_NOT_CONFIRMED", refusal);
+        }
+
+        string argument = payload.TurnOff ? "off" : payload.Colour.Trim().TrimStart('#');
+        ContainedDimmRgb dimm = new(
+            () => new AdapterHostControllerDiscoveryProcess("--set-smbus-rgb", argument));
+        DimmRgbResultV1 result = await dimm.WriteAsync(cancellationToken).ConfigureAwait(false);
         return Success(request, result);
     }
 

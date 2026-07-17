@@ -50,12 +50,56 @@ public static class AuraUsbLightingWriter
     }
 
     /// <summary>
-    /// Writes a static colour (or off) across both addressable channels of the
-    /// first connected AURA USB controller. An exclusively-held device is a
-    /// designed refusal, never forced.
+    /// Parses an adapter-host lighting target of the form <c>RRGGBB</c>,
+    /// <c>off</c>, <c>RRGGBB@1</c>, or <c>off@2</c>, where the optional
+    /// <c>@N</c> suffix names one addressable header (1-based, 1..2). Used to
+    /// drive a single header carrying a passive ARGB device — e.g. the Cooler
+    /// Master GPU sag bracket — without repainting the other header.
     /// </summary>
-    public static AuraLightingResultV1 Write(string colourHex, bool turnOff)
+    public static bool TryParseTarget(string value, out string colourHex, out bool turnOff, out int? headerIndex)
     {
+        colourHex = string.Empty;
+        turnOff = false;
+        headerIndex = null;
+        string trimmed = value?.Trim() ?? string.Empty;
+        int at = trimmed.IndexOf('@');
+        if (at >= 0)
+        {
+            if (!int.TryParse(trimmed[(at + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
+                || parsed < 1 || parsed > ChannelCount)
+            {
+                return false;
+            }
+            headerIndex = parsed;
+            trimmed = trimmed[..at];
+        }
+
+        if (string.Equals(trimmed, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            turnOff = true;
+            return true;
+        }
+
+        colourHex = trimmed;
+        return trimmed.TrimStart('#').Length == 6;
+    }
+
+    /// <summary>
+    /// Writes a static colour (or off) to the addressable channels of the
+    /// first connected AURA USB controller — both channels by default, or a
+    /// single 1-based header when <paramref name="headerIndex"/> is given (for
+    /// a passive ARGB device on one header, like a GPU sag bracket). An
+    /// exclusively-held device is a designed refusal, never forced.
+    /// </summary>
+    public static AuraLightingResultV1 Write(string colourHex, bool turnOff, int? headerIndex = null)
+    {
+        if (headerIndex is < 1 or > ChannelCount)
+        {
+            return AuraLightingResultV1.Unavailable(
+                KrakenLightingOutcome.Failed,
+                $"Addressable header must be 1..{ChannelCount}.");
+        }
+
         byte red = 0, green = 0, blue = 0;
         if (!turnOff)
         {
@@ -99,7 +143,9 @@ public static class AuraUsbLightingWriter
 
             using (stream)
             {
-                for (byte channel = 0; channel < ChannelCount; channel++)
+                byte firstChannel = (byte)(headerIndex is int index ? index - 1 : 0);
+                byte lastChannel = (byte)(headerIndex is int only ? only - 1 : ChannelCount - 1);
+                for (byte channel = firstChannel; channel <= lastChannel; channel++)
                 {
                     for (int start = 0; start < LedsPerChannel; start += LedsPerFrame)
                     {
@@ -111,13 +157,16 @@ public static class AuraUsbLightingWriter
                     }
                 }
 
+                string scope = headerIndex is int named
+                    ? $"addressable header {named}"
+                    : "both addressable channels";
                 return new AuraLightingResultV1(
                     AuraLightingResultV1.CurrentSchemaVersion,
                     KrakenLightingOutcome.WriteIssued,
                     SafeProductName(device),
                     turnOff
-                        ? "Lighting-off frames written to both addressable channels. There is no firmware read-back; confirm visually."
-                        : "Static colour frames written to both addressable channels. There is no firmware read-back; confirm visually.");
+                        ? $"Lighting-off frames written to {scope}. There is no firmware read-back; confirm visually."
+                        : $"Static colour frames written to {scope}. There is no firmware read-back; confirm visually.");
             }
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
