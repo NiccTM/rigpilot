@@ -606,6 +606,110 @@ public sealed class HardwareOperationsTests
         Assert.DoesNotContain("stability margin", result.GeneratedProfile!.Description, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(30, 60)]     // 30s coarse -> 60s refinement
+    [InlineData(200, 300)]   // 200s -> 400s capped at 300s (5 min)
+    [InlineData(0, 0)]       // zero coarse stays zero (fast tests)
+    public void RefinementScreeningTimeDoublesAndCapsAtFiveMinutes(double coarseSeconds, double expectedSeconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(expectedSeconds),
+            GpuAutoOcSearch.RefinementScreeningTime(TimeSpan.FromSeconds(coarseSeconds)));
+    }
+
+    [Theory]
+    [InlineData(79, 83, 4, true)]   // within the 4C headroom band
+    [InlineData(78, 83, 4, false)]  // still below the band
+    [InlineData(82, 83, 0, false)]  // headroom disabled
+    public void ReachedThermalHeadroomFlagsTheThermalEdge(double peak, double ceiling, double headroom, bool expected)
+    {
+        Assert.Equal(expected, GpuAutoOcSearch.ReachedThermalHeadroom(peak, ceiling, headroom));
+    }
+
+    [Fact]
+    public void ReachedThermalHeadroomIsFalseWithoutATemperature()
+    {
+        Assert.False(GpuAutoOcSearch.ReachedThermalHeadroom(null, 83, 4));
+    }
+
+    [Fact]
+    public async Task ThermalHeadroomStopsTheClimbBeforeTheStabilityEdge()
+    {
+        // Everything is stable (edge above range) but temperature rises with the
+        // clock: 40 C + 0.25 C per MHz. Ceiling 83, headroom 4 -> stop at the
+        // first stable candidate whose peak reaches 79 C (160 MHz), not 200.
+        FakeNumericAdapter adapter = new(initialValue: 0, rpmForDuty: _ => 1_500);
+        CapabilityDescriptor capability = GpuClockCapability();
+        TunePlan plan = Plan(capability) with
+        {
+            Bounds = new Dictionary<string, TuneBounds> { [capability.Id] = new(0, 200, 20) },
+            ScreeningDuration = TimeSpan.FromMinutes(10),
+            TemperatureCeilingCelsius = 83
+        };
+        StartTuneRequest request = new(
+            plan,
+            capability.Id,
+            TuneDirection.Maximize,
+            ConfirmExperimental: true,
+            ConfirmDevice: true,
+            CandidateScreeningTime: TimeSpan.Zero,
+            MaximumCandidates: 11,
+            RefinementCandidates: 5,
+            SafetyMargin: 0,
+            ThermalHeadroomCelsius: 4);
+        RisingTemperatureMonitor monitor = new(adapter, baseTemperature: 40, degreesPerUnit: 0.25, stabilityEdge: 10_000);
+
+        TuneResult result = await HardwareTuneEngine.RunAsync(
+            request, capability, adapter, monitor, reportProgress: null, CancellationToken.None);
+
+        Assert.Equal(160, result.SelectedValue); // stopped for thermal headroom, not at 200
+    }
+
+    [Fact]
+    public async Task WithoutThermalHeadroomTheClimbGoesToTheTopOfTheRange()
+    {
+        FakeNumericAdapter adapter = new(initialValue: 0, rpmForDuty: _ => 1_500);
+        CapabilityDescriptor capability = GpuClockCapability();
+        TunePlan plan = Plan(capability) with
+        {
+            Bounds = new Dictionary<string, TuneBounds> { [capability.Id] = new(0, 200, 20) },
+            ScreeningDuration = TimeSpan.FromMinutes(10),
+            TemperatureCeilingCelsius = 83
+        };
+        StartTuneRequest request = new(
+            plan,
+            capability.Id,
+            TuneDirection.Maximize,
+            ConfirmExperimental: true,
+            ConfirmDevice: true,
+            CandidateScreeningTime: TimeSpan.Zero,
+            MaximumCandidates: 11); // headroom 0
+        RisingTemperatureMonitor monitor = new(adapter, baseTemperature: 40, degreesPerUnit: 0.15, stabilityEdge: 10_000);
+
+        TuneResult result = await HardwareTuneEngine.RunAsync(
+            request, capability, adapter, monitor, reportProgress: null, CancellationToken.None);
+
+        Assert.Equal(200, result.SelectedValue);
+    }
+
+    /// <summary>Screening monitor whose peak temperature rises with the applied value; passes until a stability edge.</summary>
+    private sealed class RisingTemperatureMonitor(FakeNumericAdapter adapter, double baseTemperature, double degreesPerUnit, double stabilityEdge)
+        : ITuneScreeningMonitor
+    {
+        public Task<TuneScreeningResult> ScreenAsync(
+            CapabilityDescriptor capability,
+            TunePlan plan,
+            TimeSpan duration,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            double temperature = baseTemperature + (adapter.CurrentValue * degreesPerUnit);
+            bool passed = adapter.CurrentValue <= stabilityEdge + 1e-6 && temperature < plan.TemperatureCeilingCelsius;
+            return Task.FromResult(new TuneScreeningResult(
+                passed, passed ? "stable" : "rejected", temperature, 300, 1_800));
+        }
+    }
+
     private static CapabilityDescriptor GpuClockCapability() => new(
         "gpuclock.core:0",
         "nvidia.gpuclock.core",

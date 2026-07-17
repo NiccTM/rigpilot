@@ -636,7 +636,7 @@ public sealed partial class MainViewModel
         }
     }
 
-    private async Task StartTuneCoreAsync(int refinementCandidates = 0, double safetyMargin = 0)
+    private async Task StartTuneCoreAsync(int refinementCandidates = 0, double safetyMargin = 0, double thermalHeadroom = 0)
     {
         EnsureServiceWritesAvailable();
         OperationTargetDisplay target = SelectedTuneTarget
@@ -671,7 +671,8 @@ public sealed partial class MainViewModel
                 CandidateScreeningTime: TimeSpan.FromSeconds(30),
                 MaximumCandidates: 12,
                 RefinementCandidates: refinementCandidates,
-                SafetyMargin: safetyMargin);
+                SafetyMargin: safetyMargin,
+                ThermalHeadroomCelsius: thermalHeadroom);
             IpcRequest request = NamedPipeRequestClient.CreateRequest(
                 IpcCommand.StartTune,
                 payload,

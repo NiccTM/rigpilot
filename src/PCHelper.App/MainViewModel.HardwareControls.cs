@@ -256,7 +256,11 @@ public sealed partial class MainViewModel
     /// writable motherboard fan output to the maximum of CPU and GPU
     /// temperature. Pump and CPU-fan role protections are enforced service-side.
     /// </summary>
-    public async Task StartAutomaticCoolingAsync(bool gpuFans)
+    /// <summary>Maps a command parameter ("silent"/"balanced"/"cooling") to the curve mode, defaulting to Balanced.</summary>
+    private static CoolingCurveMode ParseCoolingCurveMode(object? parameter) =>
+        Enum.TryParse(parameter as string, ignoreCase: true, out CoolingCurveMode mode) ? mode : CoolingCurveMode.Balanced;
+
+    public async Task StartAutomaticCoolingAsync(bool gpuFans, CoolingCurveMode mode = CoolingCurveMode.Balanced)
     {
         if (!HardwareControlEnabled)
         {
@@ -294,7 +298,8 @@ public sealed partial class MainViewModel
                 outputs,
                 gpuFans ? "GPU fan" : "Case fans",
                 _snapshot.Sensors,
-                preferGpuSourceOnly: gpuFans);
+                preferGpuSourceOnly: gpuFans,
+                mode: mode);
         }
         catch (InvalidOperationException exception)
         {
@@ -323,7 +328,7 @@ public sealed partial class MainViewModel
             _lifetime.Token);
         EnsureSuccess(applyResponse);
         ShowNotice(
-            $"{draft.Profile.Name} is active: {outputs.Length} output(s) follow the temperature curve with a {AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent:0}% floor. Stale sensors command maximum cooling.",
+            $"{draft.Profile.Name} is active: {outputs.Length} output(s) follow the {mode} temperature curve with a {AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent:0}% floor. Stale sensors command maximum cooling.",
             "Success");
         await RefreshAsync(full: true, userInitiated: false);
     }
@@ -477,6 +482,9 @@ public sealed partial class MainViewModel
     private const int AutoOcRefinementCandidates = 5;
     private const double AutoOcCoreSafetyMarginMhz = 15;
     private const double AutoOcMemorySafetyMarginMhz = 100;
+    // Stop climbing once a stable candidate is within this many degrees of the
+    // 83 °C ceiling, so the shipped overclock keeps real thermal headroom.
+    private const double AutoOcThermalHeadroomCelsius = 4;
 
     public System.Windows.Input.ICommand StartGpuMemoryAutoOcCommand => _startGpuMemoryAutoOcCommand ??= new AsyncCommand(
         _ => StartGpuMemoryAutoOcAsync(),
@@ -526,7 +534,7 @@ public sealed partial class MainViewModel
         TuneTemperatureCeilingText = "83";
         AdvancedWritesAcknowledged = true;
         TuneDeviceAcknowledged = true;
-        await StartTuneCoreAsync(AutoOcRefinementCandidates, safetyMarginMhz);
+        await StartTuneCoreAsync(AutoOcRefinementCandidates, safetyMarginMhz, AutoOcThermalHeadroomCelsius);
     }
 
     private async Task EnsureHardwareControlArmedAsync()

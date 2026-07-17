@@ -969,6 +969,37 @@ public static class GpuAutoOcSearch
         double snapped = minimum + (Math.Round((value - minimum) / step) * step);
         return Math.Clamp(snapped, minimum, maximum);
     }
+
+    /// <summary>
+    /// Refinement candidates sit right at the stability edge, so they earn a
+    /// longer screen than the fast coarse climb — doubled, capped at the 5-minute
+    /// per-candidate limit. A zero coarse time (fast tests) stays zero.
+    /// </summary>
+    public static TimeSpan RefinementScreeningTime(TimeSpan coarseCandidateTime)
+    {
+        if (coarseCandidateTime <= TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        TimeSpan doubled = coarseCandidateTime * 2;
+        TimeSpan cap = TimeSpan.FromMinutes(5);
+        return doubled > cap ? cap : doubled;
+    }
+
+    /// <summary>
+    /// True when a passing candidate's peak temperature has reached within the
+    /// thermal-headroom band of the ceiling — the practical thermal edge, where
+    /// climbing further would trade away cooling headroom. Ignored when headroom
+    /// is zero or no peak temperature was recorded.
+    /// </summary>
+    public static bool ReachedThermalHeadroom(double? peakTemperatureCelsius, double ceilingCelsius, double headroomCelsius)
+    {
+        return headroomCelsius > 0
+            && peakTemperatureCelsius is double peak
+            && double.IsFinite(peak)
+            && peak >= ceilingCelsius - headroomCelsius;
+    }
 }
 
 public static class HardwareTuneEngine
@@ -1030,6 +1061,7 @@ public static class HardwareTuneEngine
             List<TuneCandidateResult> results = [];
             double? selected = null;
             double? firstFailingValue = null;
+            bool stoppedForThermalHeadroom = false;
             for (int index = 0; index < candidates.Length; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1047,6 +1079,18 @@ public static class HardwareTuneEngine
                 }
 
                 selected = candidate;
+
+                // Thermal-headroom stop: this candidate is stable but already
+                // near the temperature ceiling, so keep it and stop climbing —
+                // going higher would trade away cooling headroom, not add it.
+                if (GpuAutoOcSearch.ReachedThermalHeadroom(
+                    outcome.Result.Screening.MaximumTemperatureCelsius,
+                    request.Plan.TemperatureCeilingCelsius,
+                    request.ThermalHeadroomCelsius))
+                {
+                    stoppedForThermalHeadroom = true;
+                    break;
+                }
             }
 
             if (selected is null)
@@ -1063,10 +1107,12 @@ public static class HardwareTuneEngine
             // Refinement: bisect the gap between the last stable candidate and
             // the first failing one to locate the true stability edge, so the
             // coarse step size no longer caps how close to the limit we get.
-            if (request.RefinementCandidates > 0 && firstFailingValue is double firstFail)
+            // Skipped when the climb already stopped for thermal headroom.
+            if (request.RefinementCandidates > 0 && !stoppedForThermalHeadroom && firstFailingValue is double firstFail)
             {
                 IReadOnlyList<double> fine = GpuAutoOcSearch.FineCandidates(
                     selected.Value, firstFail, request.RefinementCandidates);
+                TimeSpan refinementTime = GpuAutoOcSearch.RefinementScreeningTime(candidateTime);
                 for (int index = 0; index < fine.Count; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -1080,7 +1126,7 @@ public static class HardwareTuneEngine
                         50 + (10d * index / Math.Max(1, fine.Count)),
                         $"Refining near the stability edge: {candidate:0.###} {capability.Unit}".TrimEnd());
                     CandidateOutcome outcome = await TestCandidateAsync(
-                        adapter, monitor, original, capability, request.Plan, candidate, candidateTime, cancellationToken).ConfigureAwait(false);
+                        adapter, monitor, original, capability, request.Plan, candidate, refinementTime, cancellationToken).ConfigureAwait(false);
                     results.Add(outcome.Result);
                     if (!outcome.Passed)
                     {
@@ -1088,6 +1134,13 @@ public static class HardwareTuneEngine
                     }
 
                     selected = candidate;
+                    if (GpuAutoOcSearch.ReachedThermalHeadroom(
+                        outcome.Result.Screening.MaximumTemperatureCelsius,
+                        request.Plan.TemperatureCeilingCelsius,
+                        request.ThermalHeadroomCelsius))
+                    {
+                        break;
+                    }
                 }
             }
 

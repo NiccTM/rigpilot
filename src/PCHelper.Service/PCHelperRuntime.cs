@@ -2292,6 +2292,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return Failure(request, "INVALID_SAFETY_MARGIN", "The safety margin must be a non-negative finite value.");
         }
 
+        if (!double.IsFinite(payload.ThermalHeadroomCelsius) || payload.ThermalHeadroomCelsius is < 0 or > 40)
+        {
+            return Failure(request, "INVALID_THERMAL_HEADROOM", "The thermal headroom must be between 0 and 40 °C.");
+        }
+
         HardwareSnapshot snapshot = GetSnapshot();
         CapabilityDescriptor capability = snapshot.Capabilities.FirstOrDefault(
             item => string.Equals(item.Id, payload.CapabilityId, StringComparison.Ordinal))

@@ -331,11 +331,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             _ => IsServiceOnline && HardwareControlEnabled,
             ReportError);
         _enableGpuFanAutoModeCommand = new AsyncCommand(
-            _ => StartAutomaticCoolingAsync(gpuFans: true),
+            parameter => StartAutomaticCoolingAsync(gpuFans: true, ParseCoolingCurveMode(parameter)),
             _ => IsServiceOnline && HardwareControlEnabled,
             ReportError);
         _enableCaseFansAutoModeCommand = new AsyncCommand(
-            _ => StartAutomaticCoolingAsync(gpuFans: false),
+            parameter => StartAutomaticCoolingAsync(gpuFans: false, ParseCoolingCurveMode(parameter)),
             _ => IsServiceOnline && HardwareControlEnabled,
             ReportError);
         _applyProfileCommand = new AsyncCommand(

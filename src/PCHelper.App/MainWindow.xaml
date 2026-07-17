@@ -1055,11 +1055,23 @@
                   </Grid>
                 </Border>
                 <TextBlock Text="{Binding KrakenPumpStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                <WrapPanel Margin="0,14,0,0">
-                  <Button Content="Automatic mode (CPU/GPU curve)" Command="{Binding EnableCaseFansAutoModeCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" x:Name="CaseFansAutoModeButton"
-                          ToolTip="Binds every writable fan output to the maximum of CPU and GPU temperature through the service graph engine: 50% safety floor, full speed at 85 °C, stale sensors command maximum cooling. Pump and CPU-fan protections always hold."
-                          automation:AutomationProperties.Name="Enable automatic temperature curve for case fans"
+                <TextBlock Text="AUTOMATIC FAN CURVE (CPU/GPU TEMPERATURE)" Style="{StaticResource EyebrowStyle}" Margin="0,14,0,5" />
+                <TextBlock Text="Binds every writable fan output to the maximum of CPU and GPU temperature through the service graph engine, with a 50% safety floor, full speed at the mode's critical temperature, and stale-sensor maximum cooling. Pump and CPU-fan protections always hold." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />
+                <WrapPanel>
+                  <Button Content="Silent" Command="{Binding EnableCaseFansAutoModeCommand}" CommandParameter="silent" Margin="0,0,8,8" x:Name="CaseFansAutoModeButton"
+                          ToolTip="Quiet-biased curve: stays near the floor longer and reaches full speed only near critical (88 °C)."
+                          automation:AutomationProperties.Name="Enable silent automatic fan curve for case fans"
+                          automation:AutomationProperties.AutomationId="Cooling.CaseFansSilent" />
+                  <Button Content="Balanced" Command="{Binding EnableCaseFansAutoModeCommand}" CommandParameter="balanced" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                          ToolTip="The default balance of noise and temperature (full speed at 85 °C)."
+                          automation:AutomationProperties.Name="Enable balanced automatic fan curve for case fans"
                           automation:AutomationProperties.AutomationId="Cooling.EnableCaseFansAutoMode" />
+                  <Button Content="Cooling" Command="{Binding EnableCaseFansAutoModeCommand}" CommandParameter="cooling" Margin="0,0,8,8"
+                          ToolTip="Temperature-biased curve: ramps early and steeply, reaching full speed at a lower temperature (78 °C)."
+                          automation:AutomationProperties.Name="Enable cooling automatic fan curve for case fans"
+                          automation:AutomationProperties.AutomationId="Cooling.CaseFansCooling" />
+                </WrapPanel>
+                <WrapPanel Margin="0,4,0,0">
                   <Button Content="Set up fan curves &amp; calibration" Command="{Binding ToggleAdvancedLabCommand}" Margin="0,0,8,8"
                           ToolTip="Opens the Advanced Lab curve studio on this page: adaptive curve creation, custom curve points with hysteresis, and the bounded 0-100% calibration wizard."
                           automation:AutomationProperties.Name="Open fan curve and calibration studio">
@@ -1607,11 +1619,23 @@
                           ToolTip="The same refined climb, edge-find, and back-off search applied to the GDDR6X memory clock offset (100 MHz safety margin). Often the larger real-world gain on this card. Same aborts, rollback, and boot sentinel; no voltage."
                           automation:AutomationProperties.Name="Start GPU memory auto overclock screening"
                           automation:AutomationProperties.AutomationId="Performance.AutoOcMemory" />
-                  <Button Content="Automatic fan curve" Command="{Binding EnableGpuFanAutoModeCommand}" Margin="0,0,8,8"
-                          ToolTip="Binds the armed GPU fan to GPU temperature through the service graph engine: 50% safety floor, full speed at 85 °C, stale sensors command maximum cooling."
-                          automation:AutomationProperties.Name="Enable automatic GPU fan temperature curve"
-                          automation:AutomationProperties.AutomationId="Performance.EnableGpuFanAutoMode" />
                   <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Margin="0,0,8,8" />
+                </WrapPanel>
+                <TextBlock Text="AUTOMATIC GPU FAN CURVE" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,5" />
+                <TextBlock Text="Binds the armed GPU fan to GPU temperature through the service graph engine, with a 50% safety floor, full speed at the mode's critical temperature, and stale-sensor maximum cooling." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />
+                <WrapPanel>
+                  <Button Content="Silent" Command="{Binding EnableGpuFanAutoModeCommand}" CommandParameter="silent" Margin="0,0,8,8"
+                          ToolTip="Quiet-biased GPU fan curve: stays near the floor longer, full speed only near critical (88 °C)."
+                          automation:AutomationProperties.Name="Enable silent automatic GPU fan curve"
+                          automation:AutomationProperties.AutomationId="Performance.GpuFanSilent" />
+                  <Button Content="Balanced" Command="{Binding EnableGpuFanAutoModeCommand}" CommandParameter="balanced" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                          ToolTip="Default balance of noise and temperature (full speed at 85 °C)."
+                          automation:AutomationProperties.Name="Enable balanced automatic GPU fan curve"
+                          automation:AutomationProperties.AutomationId="Performance.EnableGpuFanAutoMode" />
+                  <Button Content="Cooling" Command="{Binding EnableGpuFanAutoModeCommand}" CommandParameter="cooling" Margin="0,0,8,8"
+                          ToolTip="Temperature-biased GPU fan curve: ramps early and steeply, full speed at a lower temperature (78 °C)."
+                          automation:AutomationProperties.Name="Enable cooling automatic GPU fan curve"
+                          automation:AutomationProperties.AutomationId="Performance.GpuFanCooling" />
                 </WrapPanel>
                 <Grid Margin="0,2,0,0">
                   <TextBlock Text="{Binding OperationTitle}" FontWeight="SemiBold" />
