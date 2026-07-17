@@ -16,8 +16,23 @@ public static class ConflictDetector
         new("signalrgb", "SignalRGB", ["SignalRgb", "SignalRgbLauncher"], ["Lighting", "UsbFan"], "Use only one owner for affected lighting and fan controllers."),
         new("openrgb", "OpenRGB", ["OpenRGB"], ["Lighting"], "RigPilot may bridge to OpenRGB, but must not compete with another OpenRGB client."),
         new("icue", "Corsair iCUE", ["iCUE", "iCUE5"], ["Lighting", "UsbFan", "Aio"], "Use only one owner for affected Corsair devices."),
-        new("l-connect", "L-Connect", ["L-Connect", "L-Connect 3"], ["Lighting", "UsbFan"], "Use only one owner for affected Lian Li controllers.")
+        new("l-connect", "L-Connect", ["L-Connect", "L-Connect 3"], ["Lighting", "UsbFan"], "Use only one owner for affected Lian Li controllers."),
+        new("rgb-fusion", "Gigabyte RGB Fusion / AORUS Engine", ["RGBFusion", "AorusEngine", "GigabyteControlCenter", "GCC.Service"], ["MotherboardFan", "Lighting", "GpuTuning"], "Use only one owner for overlapping Gigabyte/AORUS controls."),
+        new("mystic-light", "MSI Center / Dragon Center", ["MSI Center", "Dragon Center", "MysticLight_Service"], ["MotherboardFan", "Lighting"], "Use only one owner for overlapping MSI controls.")
     ];
+
+    /// <summary>
+    /// The curated process-name allowlist for a known controller id, or empty
+    /// for an unrecognised id. This is the ONLY set the "close blockers" action
+    /// may terminate — it never operates on an arbitrary caller-supplied name.
+    /// </summary>
+    public static IReadOnlyList<string> ProcessNamesFor(string conflictId) =>
+        KnownControllers.FirstOrDefault(controller => string.Equals(controller.Id, conflictId, StringComparison.Ordinal))
+            ?.ProcessNames ?? [];
+
+    /// <summary>Every known-controller id, exposed so callers can validate against the allowlist.</summary>
+    public static IReadOnlyList<string> KnownControllerIds =>
+        [.. KnownControllers.Select(controller => controller.Id)];
 
     public static IReadOnlyList<ConflictDescriptor> Detect()
     {

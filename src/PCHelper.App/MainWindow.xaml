@@ -2441,7 +2441,26 @@
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
                   <TextBlock Text="Warnings and conflicts" Style="{StaticResource CardTitleStyle}" />
-                  <TextBlock Text="RigPilot reports overlap but never terminates another program." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,2" />
+                  <TextBlock Text="RigPilot reports overlapping controllers. Close blockers terminates the detected apps so they release the hardware; it takes over no control — relaunch any app to hand it back." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,2" />
+                  <Border Margin="0,10,0,4" Padding="14" CornerRadius="12" Background="{StaticResource SurfaceRaisedBrush}">
+                    <Border.Style>
+                      <Style TargetType="Border">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
+                    <StackPanel>
+                      <CheckBox IsChecked="{Binding CloseBlockersAcknowledged}" automation:AutomationProperties.Name="Acknowledge closing competing controllers" automation:AutomationProperties.AutomationId="Diagnostics.CloseBlockersAcknowledge">
+                        <TextBlock Text="Close the competing controllers RigPilot detected so it can take the hardware. This closes the apps (like NZXT CAM, MSI Afterburner, Fan Control, Armoury Crate); relaunch any of them to hand control back." TextWrapping="Wrap" />
+                      </CheckBox>
+                      <Button Content="{Binding CloseBlockersLabel}" Command="{Binding CloseBlockersCommand}" Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" Margin="0,12,0,0"
+                              automation:AutomationProperties.Name="Close competing controller apps" automation:AutomationProperties.AutomationId="Diagnostics.CloseBlockers" />
+                    </StackPanel>
+                  </Border>
                   <ItemsControl ItemsSource="{Binding Diagnostics}" ItemTemplate="{StaticResource DiagnosticTemplate}" />
                   <Border Margin="0,13,0,0">
                     <Border.Style>

@@ -139,7 +139,8 @@ public enum IpcCommand
     StartPresentMonBenchmark,
     StopPresentMonBenchmark,
     GetPresentMonBenchmarkStatus,
-    SetKrakenLighting
+    SetKrakenLighting,
+    StopConflictingProcesses
 }
 
 public static class ProtocolConstants
