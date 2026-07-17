@@ -332,7 +332,15 @@ public sealed record StartTuneRequest(
     bool ConfirmExperimental,
     bool ConfirmDevice,
     TimeSpan? CandidateScreeningTime = null,
-    int MaximumCandidates = 12);
+    int MaximumCandidates = 12,
+    // Auto-OC refinement: after the coarse scan finds the last stable candidate
+    // and the first failing one, screen this many evenly-spaced values in that
+    // gap to locate the stability edge precisely. 0 keeps the plain coarse scan.
+    int RefinementCandidates = 0,
+    // Back off this many units (the capability's unit) from the best stable
+    // value before the final long screening, so the shipped result carries
+    // headroom instead of sitting on the edge of stability. 0 = no margin.
+    double SafetyMargin = 0);
 
 public sealed record TuneScreeningResult(
     bool Passed,

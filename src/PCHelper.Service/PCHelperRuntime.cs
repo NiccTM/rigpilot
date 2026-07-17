@@ -2282,6 +2282,16 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return Failure(request, "MULTI_DOMAIN_TUNE_FORBIDDEN", "A tuning operation must target exactly one bounded capability.");
         }
 
+        if (payload.RefinementCandidates is < 0 or > 20)
+        {
+            return Failure(request, "INVALID_REFINEMENT", "Refinement candidate count must be between 0 and 20.");
+        }
+
+        if (!double.IsFinite(payload.SafetyMargin) || payload.SafetyMargin < 0)
+        {
+            return Failure(request, "INVALID_SAFETY_MARGIN", "The safety margin must be a non-negative finite value.");
+        }
+
         HardwareSnapshot snapshot = GetSnapshot();
         CapabilityDescriptor capability = snapshot.Capabilities.FirstOrDefault(
             item => string.Equals(item.Id, payload.CapabilityId, StringComparison.Ordinal))

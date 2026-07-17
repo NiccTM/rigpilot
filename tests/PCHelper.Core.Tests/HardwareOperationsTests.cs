@@ -502,6 +502,144 @@ public sealed class HardwareOperationsTests
         Assert.True(adapter.ResetCalled);
     }
 
+    // --- Refined GPU Auto-OC search ------------------------------------------
+
+    [Theory]
+    [InlineData(80d, 100d, 3, new[] { 85d, 90d, 95d })]
+    [InlineData(0d, 40d, 1, new[] { 20d })]
+    public void FineCandidatesBisectTheGapTowardTheFailure(double lastStable, double firstFail, int count, double[] expected)
+    {
+        Assert.Equal(expected, GpuAutoOcSearch.FineCandidates(lastStable, firstFail, count).ToArray());
+    }
+
+    [Fact]
+    public void FineCandidatesAreEmptyWhenTheGapIsZeroOrCountIsZero()
+    {
+        Assert.Empty(GpuAutoOcSearch.FineCandidates(90, 90, 5));
+        Assert.Empty(GpuAutoOcSearch.FineCandidates(80, 100, 0));
+    }
+
+    [Fact]
+    public void ApplyMarginBacksOffTheSafeWayForEachDirection()
+    {
+        // Maximizing (higher clock = more perf): a lower value is safer.
+        Assert.Equal(75, GpuAutoOcSearch.ApplyMargin(90, 15, TuneDirection.Maximize, 0, 200));
+        // Minimizing (lower duty = quieter): a higher value is safer.
+        Assert.Equal(55, GpuAutoOcSearch.ApplyMargin(40, 15, TuneDirection.Minimize, 0, 200));
+        // Clamped to the search range.
+        Assert.Equal(0, GpuAutoOcSearch.ApplyMargin(10, 50, TuneDirection.Maximize, 0, 200));
+    }
+
+    [Theory]
+    [InlineData(83.3, 0, 200, 5, 85)]
+    [InlineData(92, 0, 200, 5, 90)]
+    [InlineData(1000, 0, 200, 5, 200)] // clamped to max
+    public void SnapToStepLandsOnTheGrid(double value, double min, double max, double step, double expected)
+    {
+        Assert.Equal(expected, GpuAutoOcSearch.SnapToStep(value, min, max, step));
+    }
+
+    [Fact]
+    public async Task RefinedAutoOcFindsTheEdgeThenBacksOffAMargin()
+    {
+        // Stability edge at 92: values <= 92 pass, higher fail.
+        FakeNumericAdapter adapter = new(initialValue: 0, rpmForDuty: _ => 1_500, temperatureForDuty: _ => 60);
+        CapabilityDescriptor capability = GpuClockCapability();
+        TunePlan plan = Plan(capability) with
+        {
+            Bounds = new Dictionary<string, TuneBounds> { [capability.Id] = new(0, 200, 20) }, // coarse step 20
+            ScreeningDuration = TimeSpan.FromMinutes(10),
+            TemperatureCeilingCelsius = 83
+        };
+        StartTuneRequest request = new(
+            plan,
+            capability.Id,
+            TuneDirection.Maximize,
+            ConfirmExperimental: true,
+            ConfirmDevice: true,
+            CandidateScreeningTime: TimeSpan.Zero,
+            MaximumCandidates: 11,          // coarse candidates 0,20,...,200
+            RefinementCandidates: 5,
+            SafetyMargin: 5);
+        ThresholdScreeningMonitor monitor = new(adapter, stabilityEdge: 92);
+
+        TuneResult result = await HardwareTuneEngine.RunAsync(
+            request, capability, adapter, monitor, reportProgress: null, CancellationToken.None);
+
+        // Coarse alone would stop at 80; refinement finds 90 is the highest
+        // stable step, then the 5-unit margin ships 85 — higher than the coarse
+        // result AND carrying headroom below the 90 edge.
+        Assert.Equal("Passed 10-minute screening", result.StatusLabel);
+        Assert.Equal(85, result.SelectedValue);
+        Assert.NotNull(result.GeneratedProfile);
+        Assert.Equal(85, result.GeneratedProfile.Actions.Single().Value.Numeric);
+        Assert.Contains("stability margin", result.GeneratedProfile.Description, StringComparison.Ordinal);
+        Assert.Equal(0, adapter.CurrentValue); // rolled back to stock
+        Assert.True(adapter.RollbackCalled);
+    }
+
+    [Fact]
+    public async Task WithoutRefinementTheCoarseResultShipsUnchanged()
+    {
+        FakeNumericAdapter adapter = new(initialValue: 0, rpmForDuty: _ => 1_500, temperatureForDuty: _ => 60);
+        CapabilityDescriptor capability = GpuClockCapability();
+        TunePlan plan = Plan(capability) with
+        {
+            Bounds = new Dictionary<string, TuneBounds> { [capability.Id] = new(0, 200, 20) },
+            ScreeningDuration = TimeSpan.FromMinutes(10),
+            TemperatureCeilingCelsius = 83
+        };
+        StartTuneRequest request = new(
+            plan,
+            capability.Id,
+            TuneDirection.Maximize,
+            ConfirmExperimental: true,
+            ConfirmDevice: true,
+            CandidateScreeningTime: TimeSpan.Zero,
+            MaximumCandidates: 11); // no refinement, no margin
+        ThresholdScreeningMonitor monitor = new(adapter, stabilityEdge: 92);
+
+        TuneResult result = await HardwareTuneEngine.RunAsync(
+            request, capability, adapter, monitor, reportProgress: null, CancellationToken.None);
+
+        Assert.Equal(80, result.SelectedValue); // last coarse pass, no edge-find
+        Assert.DoesNotContain("stability margin", result.GeneratedProfile!.Description, StringComparison.Ordinal);
+    }
+
+    private static CapabilityDescriptor GpuClockCapability() => new(
+        "gpuclock.core:0",
+        "nvidia.gpuclock.core",
+        "device:gpu",
+        "GPU core clock offset",
+        CapabilityAccessState.Experimental,
+        AdapterExecutionContext.AdapterHost,
+        ControlValueKind.Numeric,
+        new NumericRange(0, 200, 5), // driver fine step 5
+        "MHz",
+        RiskLevel.Experimental,
+        EvidenceLevel.Detected,
+        null,
+        "Fake GPU clock offset.",
+        CanResetToDefault: true,
+        Domain: ControlDomain.Gpu);
+
+    /// <summary>Screening monitor that passes while the adapter's applied value stays at or below a stability edge.</summary>
+    private sealed class ThresholdScreeningMonitor(FakeNumericAdapter adapter, double stabilityEdge) : ITuneScreeningMonitor
+    {
+        public Task<TuneScreeningResult> ScreenAsync(
+            CapabilityDescriptor capability,
+            TunePlan plan,
+            TimeSpan duration,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            bool passed = adapter.CurrentValue <= stabilityEdge + 1e-6;
+            return Task.FromResult(passed
+                ? new TuneScreeningResult(true, $"stable at {adapter.CurrentValue}", 60, 300, 1_800)
+                : new TuneScreeningResult(false, $"unstable at {adapter.CurrentValue}", 70, 320, 1_400));
+        }
+    }
+
     private static CapabilityDescriptor Capability(CapabilityAccessState state) => new(
         "fan.control",
         "fake",

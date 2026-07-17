@@ -1599,9 +1599,14 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <WrapPanel Margin="0,14,0,0">
-                  <Button Content="Auto OC (10-minute screen)" Command="{Binding StartGpuAutoOcCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
-                          ToolTip="Bounded automatic core-clock search with thermal/WHEA/display-reset aborts, rollback, and a boot sentinel. Result is labelled 'Passed 10-minute screening', never 'stable'."
-                          automation:AutomationProperties.Name="Start GPU auto overclock screening" />
+                  <Button Content="Auto OC core" Command="{Binding StartGpuAutoOcCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                          ToolTip="Refined core-clock search: climbs in coarse steps, bisects the gap to the first failure to find the stability edge, then backs off a 15 MHz safety margin for headroom. Thermal/WHEA/display-reset aborts, rollback, boot sentinel, no voltage. Labelled 'Passed 10-minute screening', never 'stable'."
+                          automation:AutomationProperties.Name="Start GPU core auto overclock screening"
+                          automation:AutomationProperties.AutomationId="Performance.AutoOcCore" />
+                  <Button Content="Auto OC memory" Command="{Binding StartGpuMemoryAutoOcCommand}" Margin="0,0,8,8"
+                          ToolTip="The same refined climb, edge-find, and back-off search applied to the GDDR6X memory clock offset (100 MHz safety margin). Often the larger real-world gain on this card. Same aborts, rollback, and boot sentinel; no voltage."
+                          automation:AutomationProperties.Name="Start GPU memory auto overclock screening"
+                          automation:AutomationProperties.AutomationId="Performance.AutoOcMemory" />
                   <Button Content="Automatic fan curve" Command="{Binding EnableGpuFanAutoModeCommand}" Margin="0,0,8,8"
                           ToolTip="Binds the armed GPU fan to GPU temperature through the service graph engine: 50% safety floor, full speed at 85 °C, stale sensors command maximum cooling."
                           automation:AutomationProperties.Name="Enable automatic GPU fan temperature curve"

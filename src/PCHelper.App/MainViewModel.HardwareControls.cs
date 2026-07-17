@@ -469,13 +469,43 @@ public sealed partial class MainViewModel
         });
     }
 
+    // Refined Auto-OC tuning parameters. The coarse scan climbs in ~12 steps;
+    // the refinement then bisects the gap to the first failing step to find the
+    // stability edge, and the safety margin backs the shipped offset off from
+    // that edge so it runs with headroom rather than on the cliff. Memory uses
+    // a larger margin because GDDR6X clock error scales in bigger increments.
+    private const int AutoOcRefinementCandidates = 5;
+    private const double AutoOcCoreSafetyMarginMhz = 15;
+    private const double AutoOcMemorySafetyMarginMhz = 100;
+
+    public System.Windows.Input.ICommand StartGpuMemoryAutoOcCommand => _startGpuMemoryAutoOcCommand ??= new AsyncCommand(
+        _ => StartGpuMemoryAutoOcAsync(),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    private AsyncCommand? _startGpuMemoryAutoOcCommand;
+
     /// <summary>
-    /// One-click GPU auto-OC: targets the armed core clock offset with the
-    /// existing bounded tuning engine (Performance objective, 83 °C ceiling,
-    /// 10-minute screening, WHEA/thermal/display-reset aborts, rollback, boot
-    /// sentinel). The Hardware-control switch supplies the acknowledgements.
+    /// One-click GPU core auto-OC: climbs the armed core clock offset, refines
+    /// the stability edge between the last stable step and the first failing
+    /// one, then backs off a small safety margin — the way a careful
+    /// overclocker works. Uses the existing bounded engine (Performance
+    /// objective, 83 °C ceiling, 10-minute final screening, WHEA/thermal/
+    /// display-reset aborts, rollback, boot sentinel). No voltage is touched.
+    /// The Hardware-control switch supplies the acknowledgements.
     /// </summary>
-    public async Task StartGpuAutoOcAsync()
+    public Task StartGpuAutoOcAsync() =>
+        StartGpuClockAutoOcAsync("gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz);
+
+    /// <summary>
+    /// One-click GPU memory auto-OC: the same refined climb/edge-find/back-off
+    /// search applied to the armed memory clock offset. GDDR6X memory tuning is
+    /// often the larger real-world gain on this class of card. Same safety gates.
+    /// </summary>
+    public Task StartGpuMemoryAutoOcAsync() =>
+        StartGpuClockAutoOcAsync("gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz);
+
+    private async Task StartGpuClockAutoOcAsync(string capabilityPrefix, string label, double safetyMarginMhz)
     {
         if (!HardwareControlEnabled)
         {
@@ -484,10 +514,10 @@ public sealed partial class MainViewModel
         }
 
         OperationTargetDisplay? target = TuneTargets.FirstOrDefault(
-            item => item.Descriptor.Id.StartsWith("gpuclock.core:", StringComparison.Ordinal));
+            item => item.Descriptor.Id.StartsWith(capabilityPrefix, StringComparison.Ordinal));
         if (target is null)
         {
-            ShowNotice("The GPU core clock target is not available on this system.", "Warning");
+            ShowNotice($"The {label} target is not available on this system.", "Warning");
             return;
         }
 
@@ -496,7 +526,7 @@ public sealed partial class MainViewModel
         TuneTemperatureCeilingText = "83";
         AdvancedWritesAcknowledged = true;
         TuneDeviceAcknowledged = true;
-        await StartTuneCoreAsync();
+        await StartTuneCoreAsync(AutoOcRefinementCandidates, safetyMarginMhz);
     }
 
     private async Task EnsureHardwareControlArmedAsync()

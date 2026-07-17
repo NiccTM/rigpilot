@@ -636,7 +636,7 @@ public sealed partial class MainViewModel
         }
     }
 
-    private async Task StartTuneCoreAsync()
+    private async Task StartTuneCoreAsync(int refinementCandidates = 0, double safetyMargin = 0)
     {
         EnsureServiceWritesAvailable();
         OperationTargetDisplay target = SelectedTuneTarget
@@ -669,7 +669,9 @@ public sealed partial class MainViewModel
                 AdvancedWritesAcknowledged,
                 TuneDeviceAcknowledged,
                 CandidateScreeningTime: TimeSpan.FromSeconds(30),
-                MaximumCandidates: 12);
+                MaximumCandidates: 12,
+                RefinementCandidates: refinementCandidates,
+                SafetyMargin: safetyMargin);
             IpcRequest request = NamedPipeRequestClient.CreateRequest(
                 IpcCommand.StartTune,
                 payload,
