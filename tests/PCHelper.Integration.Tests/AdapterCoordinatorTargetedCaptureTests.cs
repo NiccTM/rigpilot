@@ -22,8 +22,10 @@ public sealed class AdapterCoordinatorTargetedCaptureTests
         FakeGpuFanCoolerTransport transport = new(new GpuFanBounds(50, 100));
         await using NvidiaGpuFanAdapter adapter = new(transport, DeviceId, ChannelId, () => armed);
 
+        // Inject an empty conflict set: the live process scan would make this test
+        // depend on whichever fan/RGB applications happen to be running locally.
         CapabilityDescriptor disarmed = Assert.Single(
-            await AdapterCoordinator.CaptureAdapterCapabilitiesAsync(adapter, default));
+            await AdapterCoordinator.CaptureAdapterCapabilitiesAsync(adapter, conflicts: [], default));
         Assert.Equal(CapabilityId, disarmed.Id);
         Assert.Equal(CapabilityAccessState.ReadOnly, disarmed.State);
 
@@ -31,7 +33,7 @@ public sealed class AdapterCoordinatorTargetedCaptureTests
         // immediately, which is exactly what the arm handler depends on.
         armed = true;
         CapabilityDescriptor live = Assert.Single(
-            await AdapterCoordinator.CaptureAdapterCapabilitiesAsync(adapter, default));
+            await AdapterCoordinator.CaptureAdapterCapabilitiesAsync(adapter, conflicts: [], default));
         Assert.Equal(CapabilityAccessState.Experimental, live.State);
     }
 
