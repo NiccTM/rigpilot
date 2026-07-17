@@ -751,6 +751,12 @@ Version 1.0 is blocked by any unresolved BSOD, stuck fan, failed reset, unauthor
 - **Conflict-aware messaging.** The fan auto-mode and Auto OC "unavailable" notices now inspect the capability's Blocked state and name the competing writer (`DescribeUnavailableFanOutputs` / `DescribeConflictOwners`), pointing at the new button, instead of the misleading Hardware-control hint.
 - Validation: build 0 warnings/0 errors; full suite **716 tests (341 core + 375 integration)** passed; all nine pages rendered; **live screenshot confirmed** the Performance conflict bar naming "MSI Afterburner, NZXT CAM, Fan Control" with a live "Close 3 conflicting apps" button against the deployed beta26 service. The dashboard changes work against the existing beta26 service (the `StopConflictingProcesses` IPC already ships there); no redeploy needed to use the button.
 
+## Verification snapshot: 2026-07-17 (IPC reliability: split connect/operation timeouts, clear timeout errors)
+
+- **Fixed the recurring client-side apply timeout** (noted across several prior snapshots as a hardening item). `NamedPipeRequestClient` used a single short timeout (the App passed 3 s) for connect **and** write **and** read, so a transactional hardware apply — prepare, apply, read-back verify, plus the service serialising rapid back-to-back writes on one channel — could exceed it and fail client-side even though the write succeeded. Split into an independent `connectTimeout` (unchanged, fail-fast when the service is down) and `operationTimeout` (default 30 s) for the request/response once connected. Backward-compatible constructor (new optional param); the App's clients now get connect 3 s / operation 30 s automatically.
+- **Actionable timeout errors.** A genuine timeout now throws a `TimeoutException` with a clear message ("The RigPilot service did not respond within 30 s. It may be busy with another hardware operation — try again in a moment.") instead of a bare "operation was canceled". Distinguished from real caller cancellation via the token.
+- Tests: 2 new IPC tests — a 700 ms response inside the operation window but past a 250 ms connect timeout still succeeds (proving the split), and a never-responding server surfaces the actionable `TimeoutException`. Full suite **718 tests (341 core + 377 integration), 0 warnings**; build clean. No behaviour change on the happy path; every existing IPC test unchanged.
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.
