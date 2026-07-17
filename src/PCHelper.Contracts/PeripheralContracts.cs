@@ -151,3 +151,36 @@ public sealed record KrakenLightingResultV1(
     public static KrakenLightingResultV1 Unavailable(KrakenLightingOutcome outcome, string message) =>
         new(CurrentSchemaVersion, outcome, null, message);
 }
+
+/// <summary>
+/// Requests termination of the running processes for one or more detected
+/// conflicting controllers (for example NZXT CAM, MSI Afterburner, Fan Control,
+/// Armoury Crate). This frees the device handles those apps hold so RigPilot's
+/// own gated write paths can operate; it takes over no hardware control and is
+/// distinct from the identity-verified hardware-takeover executor. The service
+/// only ever terminates processes on its curated known-controller allowlist,
+/// never an arbitrary name, and only with <see cref="Confirm"/> set. An empty
+/// <see cref="ConflictIds"/> means every detected running conflict.
+/// </summary>
+public sealed record StopConflictingProcessesRequestV1(
+    int SchemaVersion,
+    IReadOnlyList<string> ConflictIds,
+    bool Confirm)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
+public sealed record TerminatedProcessV1(int ProcessId, string ProcessName, bool Terminated, string? Error);
+
+public sealed record StopConflictingProcessesResultV1(
+    int SchemaVersion,
+    IReadOnlyList<TerminatedProcessV1> Results,
+    string Message)
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public int TerminatedCount => Results.Count(result => result.Terminated);
+
+    public static StopConflictingProcessesResultV1 Empty(string message) =>
+        new(CurrentSchemaVersion, [], message);
+}

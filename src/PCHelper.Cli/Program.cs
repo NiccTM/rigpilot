@@ -34,6 +34,7 @@ internal static class Cli
                 "discover-controllers" => await ServiceCommandAsync<ControllerDiscoveryResultV1>(IpcCommand.DiscoverControllers, json),
                 "discover-hid" => await DiscoverHidAsync(json),
                 "ryzen-smu-feasibility" => await ReadRyzenSmuFeasibilityAsync(json),
+                "close-blockers" => await StopConflictingProcessesAsync(args, json),
                 "kraken-rgb" => await SetKrakenLightingAsync(args, json),
                 "gpu-fan-arm" => await SetGpuFanArmedAsync(args, json, arm: true),
                 "gpu-fan-disarm" => await SetGpuFanArmedAsync(args, json, arm: false),
@@ -534,6 +535,20 @@ internal static class Cli
             $"{(value.Valid ? "Valid" : "Rejected")} adapter pack {value.Manifest?.Id ?? "unknown"} {value.Manifest?.Version ?? string.Empty}: "
             + $"signature={value.SignatureValid}, errors={value.Errors.Count}, warnings={value.Warnings.Count}"));
         return inspection.Valid ? 0 : 3;
+    }
+
+    private static async Task<int> StopConflictingProcessesAsync(string[] args, bool json)
+    {
+        string? only = Option(args, "--id");
+        IReadOnlyList<string> ids = only is null ? [] : [only];
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.StopConflictingProcesses,
+            new StopConflictingProcessesRequestV1(
+                StopConflictingProcessesRequestV1.CurrentSchemaVersion, ids, HasFlag(args, "--confirm")));
+        StopConflictingProcessesResultV1 result = IpcJson.FromElement<StopConflictingProcessesResultV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(result, json, value => Console.WriteLine(value.Message));
+        return result.Results.Count == 0 || result.TerminatedCount == result.Results.Count ? 0 : 3;
     }
 
     private static async Task<int> SetKrakenLightingAsync(string[] args, bool json)
@@ -1342,6 +1357,8 @@ internal static class Cli
             pchelper-cli discover-hid [--json]   Run a contained, read-only HID peripheral inventory (keyboard/mouse/RGB/AIO classes).
             pchelper-cli ryzen-smu-feasibility [--json]
                                                  Read PPT/TDC/THM/EDC limit and actual pairs from the Ryzen SMU PM table via signed PawnIO (read-only PBO qualification evidence; no CPU write).
+            pchelper-cli close-blockers --confirm [--id CONTROLLER_ID] [--json]
+                                                 Terminate the running processes of detected conflicting controllers (Afterburner, CAM, Fan Control, Armoury Crate, ...) so they release device ownership. Curated allowlist only; takes over no hardware.
             pchelper-cli kraken-rgb (--colour RRGGBB | --off) --confirm-experimental --confirm-device nzxt:kraken-x3 [--json]
                                                  Write a fixed colour (or off) to the Kraken X3 ring+logo via RigPilot's native adapter. Lighting only; no read-back, confirm visually.
             pchelper-cli gpu-fan-arm --confirm-experimental --confirm-device DEVICE_ID [--json]

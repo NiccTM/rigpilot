@@ -385,6 +385,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.DiscoverHidInventory => await DiscoverHidInventoryAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.ReadKrakenTelemetry => await ReadKrakenTelemetryAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetKrakenLighting => await SetKrakenLightingAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.StopConflictingProcesses => StopConflictingProcesses(request),
                 IpcCommand.ReadRyzenSmuFeasibility => await ReadRyzenSmuFeasibilityAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuFanControlArmed => await SetGpuFanControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuPowerLimitArmed => await SetGpuPowerLimitArmedAsync(request, cancellationToken).ConfigureAwait(false),
@@ -3293,6 +3294,22 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ContainedKrakenTelemetry telemetry = new(
             static () => new AdapterHostControllerDiscoveryProcess("--read-kraken"));
         KrakenTelemetryV1 result = await telemetry.ReadAsync(cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private IpcResponse StopConflictingProcesses(IpcRequest request)
+    {
+        // "Close blockers": terminates the running processes of detected
+        // conflicting controllers so they release the device handles that block
+        // RigPilot's gated writes. This takes over NO hardware control and is
+        // deliberately distinct from the identity-verified takeover executor:
+        // it only terminates processes on ConflictDetector's curated allowlist,
+        // never an arbitrary name, and only with explicit confirmation. The
+        // LocalSystem service can terminate the elevated controllers.
+        StopConflictingProcessesRequestV1 payload = IpcJson.FromElement<StopConflictingProcessesRequestV1>(request.Payload)
+            ?? throw new InvalidDataException("StopConflictingProcesses requires a StopConflictingProcessesRequestV1 payload.");
+        ConflictProcessTerminator terminator = new(new WindowsProcessControl());
+        StopConflictingProcessesResultV1 result = terminator.Terminate(payload);
         return Success(request, result);
     }
 

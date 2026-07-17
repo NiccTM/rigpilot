@@ -42,6 +42,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly AsyncCommand _refreshCommand;
     private readonly AsyncCommand _applyProfileCommand;
     private readonly AsyncCommand _resetVerifiedCommand;
+    private readonly AsyncCommand _closeBlockersCommand;
+    private bool _closeBlockersAcknowledged;
     private readonly AsyncCommand _startCalibrationCommand;
     private readonly AsyncCommand _startTuneCommand;
     private readonly AsyncCommand _abortOperationCommand;
@@ -340,6 +342,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 && (!card.IsExperimental || (AdvancedWritesAcknowledged && ProfileDeviceAcknowledged))
                 && (!card.RequiresManualAcknowledgement
                     || (AdvancedWritesAcknowledged && ProfileDeviceAcknowledged && ManualVoltageAcknowledged)),
+            ReportError);
+        _closeBlockersCommand = new AsyncCommand(
+            _ => CloseBlockersCoreAsync(),
+            _ => IsServiceOnline && RunningConflictCount > 0 && CloseBlockersAcknowledged,
             ReportError);
         _resetVerifiedCommand = new AsyncCommand(
             _ => ResetVerifiedControlsCoreAsync(),
@@ -2624,6 +2630,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _enableCaseFansAutoModeCommand.RaiseCanExecuteChanged();
             _applyProfileCommand.RaiseCanExecuteChanged();
             _resetVerifiedCommand.RaiseCanExecuteChanged();
+            _closeBlockersCommand.RaiseCanExecuteChanged();
             _startCalibrationCommand.RaiseCanExecuteChanged();
             _startTuneCommand.RaiseCanExecuteChanged();
             _abortOperationCommand.RaiseCanExecuteChanged();
@@ -3704,6 +3711,56 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public int WarningCount => Diagnostics.Count(item => item.Severity is "Warning" or "Critical");
 
     public int RunningConflictCount => _snapshot?.Conflicts.Count(conflict => conflict.IsRunning) ?? 0;
+
+    public bool HasRunningConflicts => RunningConflictCount > 0;
+
+    public string CloseBlockersLabel => RunningConflictCount switch
+    {
+        0 => "No blocking apps running",
+        1 => "Close 1 blocking app",
+        int count => $"Close {count} blocking apps"
+    };
+
+    public ICommand CloseBlockersCommand => _closeBlockersCommand;
+
+    public bool CloseBlockersAcknowledged
+    {
+        get => _closeBlockersAcknowledged;
+        set
+        {
+            if (Set(ref _closeBlockersAcknowledged, value))
+            {
+                _closeBlockersCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Terminates the running processes of detected conflicting controllers so
+    /// they release the device handles that block RigPilot's gated writes. This
+    /// takes over no hardware control (distinct from the takeover executor) and
+    /// runs through the LocalSystem service, which can close the elevated apps.
+    /// </summary>
+    private async Task CloseBlockersCoreAsync()
+    {
+        if (RunningConflictCount == 0 || !CloseBlockersAcknowledged)
+        {
+            return;
+        }
+
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.StopConflictingProcesses,
+                new StopConflictingProcessesRequestV1(
+                    StopConflictingProcessesRequestV1.CurrentSchemaVersion, [], Confirm: true)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        StopConflictingProcessesResultV1 result = IpcJson.FromElement<StopConflictingProcessesResultV1>(response.Payload)
+            ?? throw new InvalidDataException("The service returned an empty close-blockers result.");
+        ShowNotice(result.Message, result.TerminatedCount > 0 ? "Success" : "Warning");
+        CloseBlockersAcknowledged = false;
+        await RefreshAsync(full: true, userInitiated: false);
+    }
 
     public bool HasImportantSensors => ImportantSensors.Count > 0;
 
@@ -8391,6 +8448,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(ResettableVerifiedControlCount));
         OnPropertyChanged(nameof(WarningCount));
         OnPropertyChanged(nameof(RunningConflictCount));
+        OnPropertyChanged(nameof(HasRunningConflicts));
+        OnPropertyChanged(nameof(CloseBlockersLabel));
+        _closeBlockersCommand.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasImportantSensors));
         OnPropertyChanged(nameof(HasCoolingSensors));
         OnPropertyChanged(nameof(HasPerformanceSensors));
