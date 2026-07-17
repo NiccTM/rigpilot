@@ -23,7 +23,7 @@ public sealed class AmdGraphicsControlAdapter : IHardwareAdapter
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
         "AMD ADLX feasibility",
-        "0.4.0-alpha",
+        "0.5.0-alpha",
         "AMD Radeon driver (amdadlx64.dll)",
         "AMD Radeon graphics driver",
         AdapterExecutionContext.SystemService,

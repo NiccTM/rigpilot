@@ -36,6 +36,7 @@ internal static class Cli
                 "ryzen-smu-feasibility" => await ReadRyzenSmuFeasibilityAsync(json),
                 "close-blockers" => await StopConflictingProcessesAsync(args, json),
                 "kraken-rgb" => await SetKrakenLightingAsync(args, json),
+                "kraken-pump" => await SetKrakenPumpAsync(args, json),
                 "gpu-fan-arm" => await SetGpuFanArmedAsync(args, json, arm: true),
                 "gpu-fan-disarm" => await SetGpuFanArmedAsync(args, json, arm: false),
                 "gpu-power-arm" => await SetGpuPowerArmedAsync(args, json, arm: true),
@@ -551,6 +552,28 @@ internal static class Cli
         return result.Results.Count == 0 || result.TerminatedCount == result.Results.Count ? 0 : 3;
     }
 
+    private static async Task<int> SetKrakenPumpAsync(string[] args, bool json)
+    {
+        if (!int.TryParse(Option(args, "--duty"), out int duty))
+        {
+            Console.Error.WriteLine("kraken-pump requires --duty <60..100>.");
+            return 64;
+        }
+
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetKrakenPumpDuty,
+            new KrakenPumpRequestV1(
+                KrakenPumpRequestV1.CurrentSchemaVersion,
+                duty,
+                HasFlag(args, "--confirm-experimental"),
+                Option(args, "--confirm-device")));
+        KrakenPumpResultV1 result = IpcJson.FromElement<KrakenPumpResultV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(result, json, value => Console.WriteLine(
+            $"Kraken pump: {value.Outcome}. requested={value.RequestedDutyPercent}% observed={value.ObservedDutyPercent?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-"}% rpm={value.ObservedPumpRpm?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-"}. {value.Message}"));
+        return result.Outcome is KrakenPumpOutcome.ReadBackVerified or KrakenPumpOutcome.WriteIssued ? 0 : 3;
+    }
+
     private static async Task<int> SetKrakenLightingAsync(string[] args, bool json)
     {
         bool off = HasFlag(args, "--off");
@@ -683,7 +706,7 @@ internal static class Cli
             HardwareSnapshot snapshot = await coordinator.CaptureAsync(CancellationToken.None);
             report = CompatibilityReportBuilder.Build(
                 snapshot,
-                "0.4.0-alpha",
+                "0.5.0-alpha",
                 new Dictionary<string, string>
                 {
                     ["framework"] = Environment.Version.ToString(),
@@ -1361,6 +1384,8 @@ internal static class Cli
                                                  Terminate the running processes of detected conflicting controllers (Afterburner, CAM, Fan Control, Armoury Crate, ...) so they release device ownership. Curated allowlist only; takes over no hardware.
             pchelper-cli kraken-rgb (--colour RRGGBB | --off) --confirm-experimental --confirm-device nzxt:kraken-x3 [--json]
                                                  Write a fixed colour (or off) to the Kraken X3 ring+logo via RigPilot's native adapter. Lighting only; no read-back, confirm visually.
+            pchelper-cli kraken-pump --duty 60..100 --confirm-experimental --confirm-device nzxt:kraken-x3 [--json]
+                                                 Set a fixed Kraken X3 pump duty (hard floor 60%, never stopped) with firmware status read-back.
             pchelper-cli gpu-fan-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU fan control after exact-device acknowledgement.
             pchelper-cli gpu-fan-disarm [--json] Disarm GPU fan control and restore the automatic curve.

@@ -162,6 +162,72 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private async void ExportProfile_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        string? json = viewModel.BuildSelectedProfileExport();
+        if (json is null)
+        {
+            return;
+        }
+
+        Microsoft.Win32.SaveFileDialog dialog = new()
+        {
+            Title = $"Export {ProductBrand.Name} profile",
+            Filter = "RigPilot profile (*.rigpilot-profile.json)|*.rigpilot-profile.json",
+            FileName = $"{viewModel.SelectedProfileForExport?.Name ?? "profile"}{ProfileShareFile.FileExtension}",
+            AddExtension = true,
+            DefaultExt = ".json"
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            await System.IO.File.WriteAllTextAsync(dialog.FileName, json);
+            viewModel.ShowNotice("Profile exported. The file carries typed actions and safety limits only — no scripts, no machine identity.", "Success");
+        }
+        catch (Exception exception)
+        {
+            viewModel.ShowNotice(exception.Message, "Error");
+        }
+    }
+
+    private async void ImportProfile_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        Microsoft.Win32.OpenFileDialog dialog = new()
+        {
+            Title = $"Import a shared {ProductBrand.Name} profile",
+            Filter = "RigPilot profile (*.rigpilot-profile.json;*.json)|*.rigpilot-profile.json;*.json",
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            string json = await System.IO.File.ReadAllTextAsync(dialog.FileName);
+            await viewModel.ImportSharedProfileAsync(json);
+        }
+        catch (Exception exception)
+        {
+            viewModel.ShowNotice(exception.Message, "Error");
+        }
+    }
+
     private async void SaveReport_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel viewModel)

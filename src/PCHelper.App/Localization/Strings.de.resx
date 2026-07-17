@@ -54,4 +54,55 @@
   <data name="Nav_Diagnostics" xml:space="preserve">
     <value>Diagnose</value>
   </data>
+  <data name="Onboarding_StepLabel" xml:space="preserve">
+    <value>Schritt {0} von {1}</value>
+  </data>
+  <data name="Onboarding_Title1" xml:space="preserve">
+    <value>Willkommen bei RigPilot</value>
+  </data>
+  <data name="Onboarding_Body1" xml:space="preserve">
+    <value>RigPilot steuert Lüfter, Pumpen, GPU-Limits, Beleuchtung und Profile an einem Ort. Jeder Hardware-Schreibvorgang ist transaktional: Der vorherige Zustand wird zuerst gesichert, der angewendete Wert wird zur Überprüfung von der Hardware zurückgelesen, und ein fehlgeschlagener Schreibvorgang wird zurückgerollt. Integrierte Profile bleiben innerhalb der Werksgrenzen.</value>
+  </data>
+  <data name="Onboarding_Title2" xml:space="preserve">
+    <value>Der Schalter „Hardwaresteuerung"</value>
+  </data>
+  <data name="Onboarding_Body2" xml:space="preserve">
+    <value>Der Schalter „Hardwaresteuerung" in der Kopfzeile ist die Hauptfreigabe für alle schreibfähigen Steuerungen. Solange er aktiviert ist, darf RigPilot die von Ihnen eingestellten Werte anwenden, stets innerhalb der Herstellergrenzen. Beim Deaktivieren werden alle Steuerungen entwaffnet und die Herstellerstandards wiederhergestellt; das Beenden des Dienstes bewirkt dasselbe. Die Spannung wird niemals automatisch erhöht.</value>
+  </data>
+  <data name="Onboarding_Title3" xml:space="preserve">
+    <value>Evidenzlabels, keine Versprechen</value>
+  </data>
+  <data name="Onboarding_Body3" xml:space="preserve">
+    <value>Jede Steuerung trägt ein Evidenzlabel. „Verified" bedeutet: Anwenden, Rücklesen und Zurücksetzen wurden auf echter Hardware nachgewiesen. „Experimental" bedeutet: Es funktioniert, aber mit begrenzter Evidenz — bewusst verwenden. „Read Only"- und „Blocked"-Steuerungen können gar nicht schreiben. Die Seite „Geräte" zeigt die Evidenz und den nächsten sicheren Schritt für jede Steuerung.</value>
+  </data>
+  <data name="Onboarding_Back" xml:space="preserve">
+    <value>Zurück</value>
+  </data>
+  <data name="Onboarding_Next" xml:space="preserve">
+    <value>Weiter</value>
+  </data>
+  <data name="Onboarding_Finish" xml:space="preserve">
+    <value>Verstanden — Dashboard öffnen</value>
+  </data>
+  <data name="Onboarding_Skip" xml:space="preserve">
+    <value>Tour überspringen</value>
+  </data>
+  <data name="Updates_CardTitle" xml:space="preserve">
+    <value>Updates</value>
+  </data>
+  <data name="Updates_CardBody" xml:space="preserve">
+    <value>Prüft die öffentliche GitHub-Releases-Seite auf eine neuere Version. Es wird nichts automatisch heruntergeladen oder installiert, und der Windows-Dienst greift niemals auf das Netzwerk zu.</value>
+  </data>
+  <data name="Updates_CheckButton" xml:space="preserve">
+    <value>Nach Updates suchen</value>
+  </data>
+  <data name="Updates_OpenReleaseButton" xml:space="preserve">
+    <value>Release-Seite öffnen</value>
+  </data>
+  <data name="Updates_NotCheckedYet" xml:space="preserve">
+    <value>In dieser Sitzung wurde noch keine Prüfung ausgeführt.</value>
+  </data>
+  <data name="Updates_Checking" xml:space="preserve">
+    <value>github.com wird auf das neueste Release geprüft…</value>
+  </data>
 </root>

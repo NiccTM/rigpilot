@@ -55,7 +55,7 @@ public sealed class NvidiaGpuClockOffsetAdapter : IHardwareAdapter
         Manifest = new AdapterManifest(
             domain == GpuClockOffsetDomain.Core ? CoreAdapterId : MemoryAdapterId,
             $"NVIDIA GPU {DomainLabel} clock offset (Experimental)",
-            "0.4.0-alpha",
+            "0.5.0-alpha",
             "NVIDIA display driver (NVAPI performance states 2.0)",
             "NVIDIA display driver exposing editable P0 frequency deltas",
             AdapterExecutionContext.SystemService,

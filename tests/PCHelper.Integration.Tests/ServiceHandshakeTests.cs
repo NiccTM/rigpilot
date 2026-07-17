@@ -17,11 +17,11 @@ public sealed class ServiceHandshakeTests
             null,
             IpcJson.ToElement(new HandshakeRequestV2(
                 "RigPilot test",
-                "0.4.0-alpha",
+                "0.5.0-alpha",
                 ProtocolConstants.Version,
                 ProtocolConstants.Version)));
 
-        IpcResponse response = ServiceHandshake.Create(request, "0.4.0-alpha", 42);
+        IpcResponse response = ServiceHandshake.Create(request, "0.5.0-alpha", 42);
         HandshakeResponseV2 handshake = IpcJson.FromElement<HandshakeResponseV2>(response.Payload)!;
 
         Assert.True(response.Success);
@@ -42,11 +42,11 @@ public sealed class ServiceHandshakeTests
             null,
             IpcJson.ToElement(new HandshakeRequestV2(
                 "RigPilot test",
-                "0.4.0-alpha",
+                "0.5.0-alpha",
                 ProtocolConstants.Version,
                 ProtocolConstants.LegacyReadOnlyVersion)));
 
-        IpcResponse response = ServiceHandshake.Create(request, "0.4.0-alpha", 42);
+        IpcResponse response = ServiceHandshake.Create(request, "0.5.0-alpha", 42);
 
         Assert.False(response.Success);
         Assert.Equal("INVALID_HANDSHAKE", response.ErrorCode);

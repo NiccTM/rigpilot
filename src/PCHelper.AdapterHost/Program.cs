@@ -63,6 +63,88 @@ if (args.Contains("--set-kraken-rgb", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--set-aura-rgb", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable AURA addressable lighting child: writes direct-mode static
+    // colour (or off) frames to both headers of the ASUS AURA USB controller.
+    // Lighting registers only, no EEPROM/save command, contained by the parent.
+    int auraArgumentIndex = Array.FindIndex(args, argument => string.Equals(argument, "--set-aura-rgb", StringComparison.OrdinalIgnoreCase));
+    string auraValue = auraArgumentIndex >= 0 && auraArgumentIndex + 1 < args.Length ? args[auraArgumentIndex + 1] : string.Empty;
+    bool auraOff = string.Equals(auraValue, "off", StringComparison.OrdinalIgnoreCase);
+    AuraLightingResultV1 aura = AuraUsbLightingWriter.Write(auraOff ? string.Empty : auraValue, auraOff);
+    Console.WriteLine(JsonSerializer.Serialize(aura, JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--set-kraken-pump", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable Kraken X3 pump child: writes one fixed-duty (flat profile)
+    // speed report to the pump channel and reads the firmware status stream
+    // back. The duty is hard-clamped to [60, 100]% inside the writer — the
+    // pump is never slowed below the safety floor and never stopped — and a
+    // native fault is contained by the parent.
+    int pumpArgumentIndex = Array.FindIndex(args, argument => string.Equals(argument, "--set-kraken-pump", StringComparison.OrdinalIgnoreCase));
+    string pumpValue = pumpArgumentIndex >= 0 && pumpArgumentIndex + 1 < args.Length ? args[pumpArgumentIndex + 1] : string.Empty;
+    KrakenPumpResultV1 pump = int.TryParse(pumpValue, out int pumpDuty)
+        ? KrakenX3PumpWriter.Write(pumpDuty)
+        : KrakenPumpResultV1.Unavailable(KrakenPumpOutcome.Failed, "--set-kraken-pump requires an integer duty percentage.");
+    Console.WriteLine(JsonSerializer.Serialize(pump, JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--probe-smbus-rgb", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable, purely read-only ENE DIMM RGB detection child. Read-byte
+    // transactions only, restricted to the RGB-controller address range
+    // (0x70-0x77); no pointer, colour, or any other byte is written to the
+    // bus. A native PawnIO fault is contained by the parent.
+    SmbusRgbProbeResultV1 smbusProbe = SmbusRgbDetection.Probe();
+    Console.WriteLine(JsonSerializer.Serialize(smbusProbe, JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--survey-smbus", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable, purely read-only FCH SMBus port survey: SPD presence reads
+    // (DRAM-type byte) and ENE detection reads on every selectable port. No
+    // write of any kind is issued; port selection is routing, not a write.
+    Console.WriteLine(JsonSerializer.Serialize(SmbusBusSurvey.Run(), JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--identify-smbus-rgb-deep", StringComparer.OrdinalIgnoreCase))
+{
+    // Operator-run deep identity pass at one named RGB-range address: tries
+    // the documented read-command/pointer variants; each issues exactly one
+    // pointer write and byte reads. Refuses non-RGB addresses outright.
+    int deepIndex = Array.FindIndex(args, argument => string.Equals(argument, "--identify-smbus-rgb-deep", StringComparison.OrdinalIgnoreCase));
+    string deepValue = deepIndex >= 0 && deepIndex + 1 < args.Length ? args[deepIndex + 1] : string.Empty;
+    byte deepAddress = Convert.ToByte(deepValue, 16);
+    Console.WriteLine(JsonSerializer.Serialize(SmbusRgbIdentify.DeepRun(deepAddress), JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--identify-smbus-rgb", StringComparer.OrdinalIgnoreCase))
+{
+    // Operator-run ENE identity read: one pointer write plus byte reads per
+    // acknowledged RGB address. No colour/mode/apply register is touched.
+    Console.WriteLine(JsonSerializer.Serialize(SmbusRgbIdentify.Run(), JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--first-light-smbus-rgb", StringComparer.OrdinalIgnoreCase))
+{
+    // Operator-run witnessed first-light for the ENE DIMM RGB protocol. This
+    // is the ONLY path that may transmit to an unaudited kit, and it exists to
+    // be run manually by the operator while watching the DIMMs. It bypasses
+    // only the audit gate — the SmbusAddressPolicy still checks every
+    // transaction, so nothing here can reach an SPD, thermal, or PMIC address.
+    int firstLightIndex = Array.FindIndex(args, argument => string.Equals(argument, "--first-light-smbus-rgb", StringComparison.OrdinalIgnoreCase));
+    string firstLightColour = firstLightIndex >= 0 && firstLightIndex + 1 < args.Length ? args[firstLightIndex + 1] : string.Empty;
+    Console.WriteLine(JsonSerializer.Serialize(SmbusRgbFirstLight.Run(firstLightColour), JsonDefaults.Options));
+    return;
+}
+
 if (args.Contains("--discover-hid", StringComparer.OrdinalIgnoreCase))
 {
     // Disposable read-only HID inventory child. Native HidSharp enumeration runs here so a
@@ -116,7 +198,7 @@ async Task<IpcResponse> HandleAsync(IpcRequest request, CancellationToken cancel
             IpcCommand.AdapterDiagnostics => Diagnostics(request),
             IpcCommand.AdapterShutdown => Shutdown(request),
             IpcCommand.GetServiceStatus => Success(request, new ServiceStatus(
-                "0.4.0-alpha",
+                "0.5.0-alpha",
                 DateTimeOffset.UtcNow,
                 0,
                 null,
@@ -140,7 +222,7 @@ IpcResponse Handshake(IpcRequest request)
     _ = Unwrap<HandshakeRequest>(request);
     return Success(request, new HandshakeResponse(
         ProtocolConstants.Version,
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.4.0-alpha",
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.5.0-alpha",
         0));
 }
 

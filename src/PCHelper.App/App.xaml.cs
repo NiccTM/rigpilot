@@ -112,6 +112,11 @@ public partial class App : System.Windows.Application, IDisposable
         }
 
         await _viewModel.InitialiseAsync();
+        _viewModel.ShowOnboardingIfFirstRun();
+
+        // Quiet once-per-launch release check (user process only; rule 11 keeps
+        // all network access out of the service). Non-throwing by contract.
+        _ = _viewModel.CheckForUpdatesCoreAsync(noticeOnUpdate: true);
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -216,6 +221,7 @@ public partial class App : System.Windows.Application, IDisposable
             Font = new System.Drawing.Font("Segoe UI", 9f, System.Drawing.FontStyle.Bold)
         };
         Forms.ToolStripMenuItem statusItem = new("Connecting to service\u2026") { Enabled = false };
+        Forms.ToolStripMenuItem telemetryItem = new("No telemetry yet") { Enabled = false };
         Forms.ToolStripMenuItem profileMenu = new("Profiles");
         Forms.ToolStripMenuItem quietItem = new("Quiet", null, async (_, _) => await _viewModel!.ApplyBuiltInAsync("quiet"));
         Forms.ToolStripMenuItem balancedItem = new("Balanced", null, async (_, _) => await _viewModel!.ApplyBuiltInAsync("balanced"));
@@ -224,10 +230,31 @@ public partial class App : System.Windows.Application, IDisposable
         profileMenu.DropDown.BackColor = menu.BackColor;
         profileMenu.DropDown.ForeColor = menu.ForeColor;
 
+        // G-Helper-style quick access: the master switch and the undervolt
+        // presets are one click from the tray. Both run the exact same
+        // acknowledged, transactional paths as the dashboard controls.
+        Forms.ToolStripMenuItem hardwareControlItem = new("Hardware control", null, (_, _) =>
+        {
+            if (_viewModel is not null)
+            {
+                _viewModel.HardwareControlEnabled = !_viewModel.HardwareControlEnabled;
+            }
+        });
+        Forms.ToolStripMenuItem undervoltMenu = new("GPU undervolt");
+        Forms.ToolStripMenuItem undervoltQuiet = new("Quiet (\u221225% power)", null, async (_, _) => await _viewModel!.ApplyUndervoltPresetAsync(UndervoltPresets.Quiet));
+        Forms.ToolStripMenuItem undervoltEfficient = new("Efficient (\u221215% power)", null, async (_, _) => await _viewModel!.ApplyUndervoltPresetAsync(UndervoltPresets.Efficient));
+        Forms.ToolStripMenuItem undervoltStock = new("Back to stock", null, async (_, _) => await _viewModel!.ApplyUndervoltPresetAsync(UndervoltPresets.Stock));
+        undervoltMenu.DropDownItems.AddRange([undervoltQuiet, undervoltEfficient, undervoltStock]);
+        undervoltMenu.DropDown.BackColor = menu.BackColor;
+        undervoltMenu.DropDown.ForeColor = menu.ForeColor;
+
         menu.Items.Add(openItem);
         menu.Items.Add(statusItem);
+        menu.Items.Add(telemetryItem);
         menu.Items.Add(new Forms.ToolStripSeparator());
+        menu.Items.Add(hardwareControlItem);
         menu.Items.Add(profileMenu);
+        menu.Items.Add(undervoltMenu);
         menu.Items.Add(new Forms.ToolStripSeparator());
         Forms.ToolStripMenuItem resetItem = new("Reset verified controls", null, async (_, _) => await _viewModel!.ResetVerifiedControlsAsync());
         menu.Items.Add(resetItem);
@@ -246,6 +273,14 @@ public partial class App : System.Windows.Application, IDisposable
             statusItem.Text = _viewModel.IsServiceOnline
                 ? $"Service connected \u00B7 {_viewModel.ActiveProfileName}"
                 : "Local read-only mode";
+            string[] readings = _viewModel.ImportantSensors
+                .Take(3)
+                .Select(sensor => $"{sensor.Name} {sensor.DisplayValue}")
+                .ToArray();
+            telemetryItem.Text = readings.Length > 0 ? string.Join("  \u00B7  ", readings) : "No telemetry yet";
+            hardwareControlItem.Checked = _viewModel.HardwareControlEnabled;
+            hardwareControlItem.Enabled = _viewModel.IsServiceOnline;
+            undervoltMenu.Enabled = _viewModel.IsServiceOnline && _viewModel.HardwareControlEnabled;
             profileMenu.Enabled = _viewModel.IsServiceOnline;
             resetItem.Enabled = _viewModel.IsServiceOnline && _viewModel.ResettableVerifiedControlCount > 0;
             quietItem.Checked = _viewModel.ActiveProfileName.Equals("Quiet", StringComparison.OrdinalIgnoreCase);

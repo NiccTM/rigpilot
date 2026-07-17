@@ -21,7 +21,7 @@ public sealed class IntelGraphicsControlAdapter : IHardwareAdapter
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
         "Intel Graphics Control Library feasibility",
-        "0.4.0-alpha",
+        "0.5.0-alpha",
         "Intel graphics driver (ControlLib.dll)",
         "Intel graphics driver",
         AdapterExecutionContext.SystemService,

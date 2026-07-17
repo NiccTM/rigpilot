@@ -25,7 +25,7 @@ public enum TimelineScope
     Adapter
 }
 
-public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
+public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 {
     private static readonly TimeSpan LocalProbeInterval = TimeSpan.FromSeconds(3);
 
@@ -326,6 +326,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _ => StartGpuAutoOcAsync(),
             _ => IsServiceOnline && HardwareControlEnabled && !HasActiveOperation,
             ReportError);
+        SetKrakenPumpCommand = new AsyncCommand(
+            _ => SetKrakenPumpAsync(),
+            _ => IsServiceOnline && HardwareControlEnabled,
+            ReportError);
         _enableGpuFanAutoModeCommand = new AsyncCommand(
             _ => StartAutomaticCoolingAsync(gpuFans: true),
             _ => IsServiceOnline && HardwareControlEnabled,
@@ -374,6 +378,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _turnOffOpenRgbCommand = new AsyncCommand(
             _ => ApplyOpenRgbCoreAsync(turnOff: true),
             _ => OpenRgbEnabled && OpenRgbConnected && !HasLightingConflict,
+            ReportError);
+        ApplyRazerChromaCommand = new AsyncCommand(
+            _ => ApplyRazerChromaAsync(),
+            _ => AreOpenRgbInputsValid,
             ReportError);
         _probeDynamicLightingCommand = new AsyncCommand(
             _ => ProbeDynamicLightingCoreAsync(),
@@ -1622,7 +1630,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public string RgbCompatibilitySummary => !HasRgbRouteAssessments
         ? "Waiting for RGB inventory and standard-bridge discovery."
-        : $"{RgbReadyRouteCount} ready · {RgbSetupRouteCount} setup needed · {RgbReadOnlyRouteCount} direct qualification · {RgbBlockedRouteCount} blocked. Manufacturer recognition never enables a raw USB write by itself.";
+        : $"{RgbReadyRouteCount} ready Â· {RgbSetupRouteCount} setup needed Â· {RgbReadOnlyRouteCount} direct qualification Â· {RgbBlockedRouteCount} blocked. Manufacturer recognition never enables a raw USB write by itself.";
 
     public DynamicLightingDevice? SelectedDynamicLightingDevice
     {
@@ -1903,7 +1911,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    /// <summary>Slider-friendly view of <see cref="MonitorBrightnessPercentText"/>; whole percent, clamped 0–100.</summary>
+    /// <summary>Slider-friendly view of <see cref="MonitorBrightnessPercentText"/>; whole percent, clamped 0â€“100.</summary>
     public double MonitorBrightnessPercentValue
     {
         get => int.TryParse(MonitorBrightnessPercentText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int percent)
@@ -2145,451 +2153,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public string GameBundleSummary => SelectedGame is null
         ? "Select a local game to assign a profile, lighting scene, macro, OSD, and capture preset."
-        : $"{SelectedGameProfile?.Name ?? "No profile"} · {SelectedGameLightingScene?.Name ?? "No scene"} · {SelectedGameMacro?.Name ?? "No macro"} · {SelectedGameOsdLayout?.Name ?? "No OSD"} · {SelectedGameCapturePreset?.Name ?? "No capture"}";
-
-    // --- Master hardware-control switch --------------------------------------
-    // One persisted, per-machine owner acknowledgement that arms every
-    // implemented GPU write family (fan duty, power limit, clock offsets)
-    // whenever the service is connected, replacing the per-family per-session
-    // arming ceremony. The service-side contract is unchanged: arming still
-    // requires the Experimental confirmation and exact device id (this switch
-    // supplies them), disarm restores vendor defaults, and the physical
-    // fail-safes (no voltage path, pump/CPU-fan protection, stale-sensor
-    // emergency cooling, rollback on failed verify) are untouched.
-
-    private static readonly string ControlPreferencesPath = System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "RigPilot",
-        "control-preferences.json");
-
-    private bool _hardwareControlEnabled = ReadPersistedHardwareControlPreference();
-    private bool _hardwareControlArmedThisConnection;
-
-    public bool HardwareControlEnabled
-    {
-        get => _hardwareControlEnabled;
-        set
-        {
-            if (!Set(ref _hardwareControlEnabled, value))
-            {
-                return;
-            }
-
-            PersistHardwareControlPreference(value);
-            _hardwareControlArmedThisConnection = false;
-            _applyGpuControlCommand.RaiseCanExecuteChanged();
-            _startGpuAutoOcCommand.RaiseCanExecuteChanged();
-            _enableGpuFanAutoModeCommand.RaiseCanExecuteChanged();
-            _enableCaseFansAutoModeCommand.RaiseCanExecuteChanged();
-            _ = ApplyHardwareControlSafelyAsync(value);
-        }
-    }
-
-    private async Task ApplyHardwareControlSafelyAsync(bool enable)
-    {
-        try
-        {
-            await ApplyHardwareControlAsync(enable);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            ShowNotice($"Hardware control change failed: {exception.Message}", "Warning");
-        }
-    }
-
-    private async Task ApplyHardwareControlAsync(bool enable)
-    {
-        if (!IsServiceOnline || _snapshot is null)
-        {
-            return;
-        }
-
-        (IpcCommand Command, string Prefix)[] families =
-        [
-            (IpcCommand.SetGpuFanControlArmed, "gpufan."),
-            (IpcCommand.SetGpuPowerLimitArmed, "gpupower."),
-            (IpcCommand.SetGpuClockOffsetArmed, "gpuclock.")
-        ];
-        int armed = 0;
-        foreach ((IpcCommand command, string prefix) in families)
-        {
-            string? deviceId = _snapshot.Capabilities
-                .FirstOrDefault(capability => capability.Id.StartsWith(prefix, StringComparison.Ordinal))
-                ?.DeviceId;
-            if (deviceId is null)
-            {
-                continue;
-            }
-
-            IReadOnlyList<string> confirmed = [deviceId];
-            object payload = command switch
-            {
-                IpcCommand.SetGpuFanControlArmed => new SetGpuFanControlArmedRequest(enable, enable, confirmed),
-                IpcCommand.SetGpuPowerLimitArmed => new SetGpuPowerLimitArmedRequest(enable, enable, confirmed),
-                _ => new SetGpuClockOffsetArmedRequest(enable, enable, confirmed)
-            };
-            IpcResponse response = await _client.SendAsync(
-                NamedPipeRequestClient.CreateRequest(command, payload),
-                _lifetime.Token);
-            if (response.Success)
-            {
-                armed++;
-            }
-        }
-
-        _hardwareControlArmedThisConnection = enable && armed > 0;
-        if (armed > 0)
-        {
-            ShowNotice(enable
-                ? $"Hardware control enabled: {armed} GPU write famil{(armed == 1 ? "y" : "ies")} armed for this machine."
-                : "Hardware control disabled; vendor defaults restored.",
-                "Success");
-            await RefreshAsync(full: true, userInitiated: false);
-        }
-    }
-
-    /// <summary>
-    /// Live GPU control sliders (fan duty, power limit, clock offsets). Each
-    /// apply is a normal one-action transactional profile: prepare, bounds
-    /// clamp, apply, read-back verify, rollback on failure. The master
-    /// Hardware-control switch supplies the Experimental + exact-device
-    /// confirmations.
-    /// </summary>
-    public System.Collections.ObjectModel.ObservableCollection<GpuControlSlider> GpuControlSliders { get; } = [];
-
-    /// <summary>Motherboard fan outputs surfaced as the same one-action slider controls.</summary>
-    public System.Collections.ObjectModel.ObservableCollection<GpuControlSlider> FanControlSliders { get; } = [];
-
-    private readonly AsyncCommand _applyGpuControlCommand;
-    private readonly AsyncCommand _startGpuAutoOcCommand;
-    private readonly AsyncCommand _enableGpuFanAutoModeCommand;
-    private readonly AsyncCommand _enableCaseFansAutoModeCommand;
-
-    public System.Windows.Input.ICommand ApplyGpuControlCommand => _applyGpuControlCommand;
-
-    public System.Windows.Input.ICommand StartGpuAutoOcCommand => _startGpuAutoOcCommand;
-
-    private void RebuildGpuControlSliders()
-    {
-        if (_snapshot is null)
-        {
-            return;
-        }
-
-        (string Prefix, string Label)[] families =
-        [
-            ("gpufan.duty:", "GPU fan duty"),
-            ("gpupower.limit:", "GPU power limit"),
-            ("gpuclock.core:", "GPU core clock offset"),
-            ("gpuclock.memory:", "GPU memory clock offset")
-        ];
-        List<GpuControlSlider> next = [];
-        foreach ((string prefix, string label) in families)
-        {
-            CapabilityDescriptor? capability = _snapshot.Capabilities
-                .FirstOrDefault(item => item.Id.StartsWith(prefix, StringComparison.Ordinal));
-            if (capability?.Range is NumericRange range)
-            {
-                next.Add(new GpuControlSlider
-                {
-                    CapabilityId = capability.Id,
-                    AdapterId = capability.AdapterId,
-                    DeviceId = capability.DeviceId,
-                    Name = label,
-                    Minimum = range.Minimum,
-                    Maximum = range.Maximum,
-                    Default = range.Default,
-                    Unit = capability.Unit ?? string.Empty,
-                    Value = prefix.StartsWith("gpuclock", StringComparison.Ordinal) ? 0
-                        : prefix == "gpufan.duty:" ? range.Maximum
-                        : range.Maximum
-                });
-            }
-        }
-
-        // Rebuild only when the capability set changes so a slider mid-drag is
-        // not reset by the one-second snapshot refresh.
-        if (!next.Select(item => item.CapabilityId).SequenceEqual(GpuControlSliders.Select(item => item.CapabilityId)))
-        {
-            GpuControlSliders.Clear();
-            foreach (GpuControlSlider slider in next)
-            {
-                GpuControlSliders.Add(slider);
-            }
-        }
-
-        // Motherboard fan outputs: every writable bounded cooling control gets
-        // the same slider treatment. The transaction engine still enforces the
-        // floors, pump/CPU-fan protections, and read-back on every apply.
-        List<GpuControlSlider> fans = _snapshot.Capabilities
-            .Where(capability => capability.Id.StartsWith("lhm.control:", StringComparison.Ordinal)
-                && capability.Domain == ControlDomain.Cooling
-                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
-                && capability.Range is NumericRange
-                // The NVML gpufan.duty slider owns the GPU cooler; LHM's own
-                // GPU-fan controls are the same physical fans via a second path.
-                && !capability.Id.Contains("/gpu-nvidia/", StringComparison.Ordinal))
-            .OrderBy(capability => capability.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(capability =>
-            {
-                NumericRange range = (NumericRange)capability.Range!;
-                // Start the slider at the fan's live duty when telemetry
-                // exposes it, so opening the page never suggests a jump to 100%.
-                string controlPath = capability.Id["lhm.control:".Length..];
-                double? currentDuty = _snapshot.Sensors
-                    .FirstOrDefault(sensor => sensor.Unit == "%"
-                        && sensor.Value is not null
-                        && sensor.SensorId.EndsWith(controlPath, StringComparison.Ordinal))
-                    ?.Value;
-                return new GpuControlSlider
-                {
-                    CapabilityId = capability.Id,
-                    AdapterId = capability.AdapterId,
-                    DeviceId = capability.DeviceId,
-                    Name = capability.Name,
-                    Minimum = range.Minimum,
-                    Maximum = range.Maximum,
-                    Unit = capability.Unit ?? "%",
-                    Value = currentDuty is double duty
-                        ? Math.Clamp(duty, range.Minimum, range.Maximum)
-                        : range.Maximum
-                };
-            })
-            .ToList();
-        if (!fans.Select(item => item.CapabilityId).SequenceEqual(FanControlSliders.Select(item => item.CapabilityId)))
-        {
-            FanControlSliders.Clear();
-            foreach (GpuControlSlider fan in fans)
-            {
-                FanControlSliders.Add(fan);
-            }
-        }
-    }
-
-    public ICommand EnableGpuFanAutoModeCommand => _enableGpuFanAutoModeCommand;
-
-    public ICommand EnableCaseFansAutoModeCommand => _enableCaseFansAutoModeCommand;
-
-    /// <summary>
-    /// One-click automatic cooling mode: builds and applies a conservative
-    /// temperature→duty graph (50% safety floor, full maximum for emergency
-    /// headroom) through the service graph engine, which keeps read-back
-    /// verification and the stale-sensor → maximum-cooling protection. GPU mode
-    /// binds the armed GPU fan to GPU temperature; case-fan mode binds every
-    /// writable motherboard fan output to the maximum of CPU and GPU
-    /// temperature. Pump and CPU-fan role protections are enforced service-side.
-    /// </summary>
-    public async Task StartAutomaticCoolingAsync(bool gpuFans)
-    {
-        if (!HardwareControlEnabled)
-        {
-            ShowNotice("Turn on Hardware control in the header first.", "Warning");
-            return;
-        }
-        if (_snapshot is null)
-        {
-            return;
-        }
-
-        CapabilityDescriptor[] outputs = gpuFans
-            ? [.. _snapshot.Capabilities.Where(capability =>
-                capability.Id.StartsWith("gpufan.duty:", StringComparison.Ordinal)
-                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
-                && capability.Range is NumericRange)]
-            : [.. _snapshot.Capabilities.Where(capability =>
-                capability.Id.StartsWith("lhm.control:", StringComparison.Ordinal)
-                && capability.Domain == ControlDomain.Cooling
-                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
-                && capability.Range is NumericRange
-                && !capability.Id.Contains("/gpu-nvidia/", StringComparison.Ordinal))];
-        if (outputs.Length == 0)
-        {
-            ShowNotice(gpuFans
-                ? "No armed GPU fan control is available. Turn on Hardware control and refresh."
-                : "No writable motherboard fan outputs are available.", "Warning");
-            return;
-        }
-
-        AdaptiveCoolingProfileDraft draft;
-        try
-        {
-            draft = AdaptiveCoolingProfileFactory.CreateAutomaticMode(
-                outputs,
-                gpuFans ? "GPU fan" : "Case fans",
-                _snapshot.Sensors,
-                preferGpuSourceOnly: gpuFans);
-        }
-        catch (InvalidOperationException exception)
-        {
-            ShowNotice(exception.Message, "Warning");
-            return;
-        }
-
-        IpcResponse saveResponse = await _client.SendAsync(
-            NamedPipeRequestClient.CreateRequest(
-                IpcCommand.SaveCoolingGraph, draft.Graph, _status?.StateRevision, Guid.NewGuid().ToString("N")),
-            _lifetime.Token);
-        EnsureSuccess(saveResponse);
-        UpdateStateRevision(saveResponse);
-
-        IpcResponse applyResponse = await _client.SendAsync(
-            NamedPipeRequestClient.CreateRequest(
-                IpcCommand.ApplyProfileV2,
-                new ApplyProfileV2Request(
-                    draft.Profile,
-                    ProfileActivationSource.Manual,
-                    ConfirmExperimental: true,
-                    [.. outputs.Select(capability => capability.DeviceId).Distinct(StringComparer.Ordinal)],
-                    ConfirmManualVoltage: false),
-                _status?.StateRevision,
-                Guid.NewGuid().ToString("N")),
-            _lifetime.Token);
-        EnsureSuccess(applyResponse);
-        ShowNotice(
-            $"{draft.Profile.Name} is active: {outputs.Length} output(s) follow the temperature curve with a {AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent:0}% floor. Stale sensors command maximum cooling.",
-            "Success");
-        await RefreshAsync(full: true, userInitiated: false);
-    }
-
-    public async Task ApplyGpuControlAsync(GpuControlSlider slider)
-    {
-        ArgumentNullException.ThrowIfNull(slider);
-        if (!HardwareControlEnabled)
-        {
-            ShowNotice("Turn on Hardware control in the header first.", "Warning");
-            return;
-        }
-
-        double value = Math.Round(slider.Value);
-        ProfileAction action = new(
-            $"gpu-slider-{Guid.NewGuid():N}",
-            slider.AdapterId,
-            slider.CapabilityId,
-            ControlValue.FromNumeric(value),
-            Required: true,
-            Order: 0);
-        ProfileV2 profile = new(
-            ProfileV2.CurrentSchemaVersion,
-            $"gpu-direct-{slider.CapabilityId}",
-            slider.Name,
-            "Direct GPU control from the Performance page.",
-            [action],
-            new SafetyLimits(),
-            null,
-            null,
-            null,
-            [],
-            [],
-            IsBuiltIn: false,
-            IsExperimental: true);
-        IpcRequest request = NamedPipeRequestClient.CreateRequest(
-            IpcCommand.ApplyProfileV2,
-            new ApplyProfileV2Request(
-                profile,
-                ProfileActivationSource.Manual,
-                ConfirmExperimental: true,
-                [slider.DeviceId],
-                ConfirmManualVoltage: false),
-            _status?.StateRevision,
-            Guid.NewGuid().ToString("N"));
-        IpcResponse response = await _client.SendAsync(request, _lifetime.Token);
-        EnsureSuccess(response);
-        ShowNotice($"{slider.Name} applied and read-back verified at {value:0.##} {slider.Unit}.", "Success");
-        await RefreshAsync(full: true, userInitiated: false);
-    }
-
-    /// <summary>
-    /// One-click GPU auto-OC: targets the armed core clock offset with the
-    /// existing bounded tuning engine (Performance objective, 83 °C ceiling,
-    /// 10-minute screening, WHEA/thermal/display-reset aborts, rollback, boot
-    /// sentinel). The Hardware-control switch supplies the acknowledgements.
-    /// </summary>
-    public async Task StartGpuAutoOcAsync()
-    {
-        if (!HardwareControlEnabled)
-        {
-            ShowNotice("Turn on Hardware control in the header first.", "Warning");
-            return;
-        }
-
-        OperationTargetDisplay? target = TuneTargets.FirstOrDefault(
-            item => item.Descriptor.Id.StartsWith("gpuclock.core:", StringComparison.Ordinal));
-        if (target is null)
-        {
-            ShowNotice("The GPU core clock target is not available on this system.", "Warning");
-            return;
-        }
-
-        SelectedTuneTarget = target;
-        SelectedTuneObjective = TuningObjective.Performance;
-        TuneTemperatureCeilingText = "83";
-        AdvancedWritesAcknowledged = true;
-        TuneDeviceAcknowledged = true;
-        await StartTuneCoreAsync();
-    }
-
-    private async Task EnsureHardwareControlArmedAsync()
-    {
-        if (HardwareControlEnabled && !_hardwareControlArmedThisConnection)
-        {
-            _hardwareControlArmedThisConnection = true; // set first so a failure does not retry every second
-            await ApplyHardwareControlSafelyAsync(true);
-        }
-    }
-
-    private static bool ReadPersistedHardwareControlPreference()
-    {
-        // Owner policy amendment (2026-07-16): Hardware control defaults ON
-        // when no preference has been persisted yet; an explicit opt-out is
-        // remembered. Arming still records the Experimental + exact-device
-        // confirmations on every connect, and unchecking restores defaults.
-        try
-        {
-            if (!System.IO.File.Exists(ControlPreferencesPath))
-            {
-                return true;
-            }
-
-            return System.Text.Json.JsonSerializer.Deserialize<ControlPreferences>(
-                System.IO.File.ReadAllText(ControlPreferencesPath))?.HardwareControlEnabled == true;
-        }
-        catch (Exception exception) when (exception is System.IO.IOException or System.Text.Json.JsonException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private static void PersistHardwareControlPreference(bool enabled)
-    {
-        try
-        {
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(ControlPreferencesPath)!);
-            System.IO.File.WriteAllText(
-                ControlPreferencesPath,
-                System.Text.Json.JsonSerializer.Serialize(new ControlPreferences(enabled)));
-        }
-        catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException)
-        {
-            // A failed preference write only means the switch resets next launch.
-        }
-    }
-
-    private sealed record ControlPreferences(bool HardwareControlEnabled);
-
-    public sealed class GpuControlSlider
-    {
-        public string CapabilityId { get; init; } = string.Empty;
-        public string AdapterId { get; init; } = string.Empty;
-        public string DeviceId { get; init; } = string.Empty;
-        public string Name { get; init; } = string.Empty;
-        public double Minimum { get; init; }
-        public double Maximum { get; init; }
-        public string Unit { get; init; } = string.Empty;
-        public double Value { get; set; }
-
-        /// <summary>Vendor default (Afterburner-style 100% reference), when the adapter discovered one.</summary>
-        public double? Default { get; init; }
-    }
+        : $"{SelectedGameProfile?.Name ?? "No profile"} Â· {SelectedGameLightingScene?.Name ?? "No scene"} Â· {SelectedGameMacro?.Name ?? "No macro"} Â· {SelectedGameOsdLayout?.Name ?? "No OSD"} Â· {SelectedGameCapturePreset?.Name ?? "No capture"}";
 
     public bool IsBusy
     {
@@ -3142,7 +2706,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public string CustomCoolingCurvePreview => TryReadCustomCoolingCurve(out CustomCoolingCurveDefinition? definition, out string error)
-        ? $"CPU/GPU maximum input · {string.Join("  ·  ", definition!.Points.Select(point => $"{point.Input:0.#} °C → {point.Output:0.#}%"))}"
+        ? $"CPU/GPU maximum input Â· {string.Join("  Â·  ", definition!.Points.Select(point => $"{point.Input:0.#} Â°C â†’ {point.Output:0.#}%"))}"
         : error;
 
     public WpfPointCollection CustomCoolingCurvePreviewGeometry
@@ -3174,7 +2738,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         get
         {
             (double minimumDuty, double maximumDuty) = GetCustomCoolingCurveDutyRange();
-            return $"0–110 °C  ·  {minimumDuty:0.#}–{maximumDuty:0.#}% controller range";
+            return $"0â€“110 Â°C  Â·  {minimumDuty:0.#}â€“{maximumDuty:0.#}% controller range";
         }
     }
 
@@ -3477,7 +3041,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         private set => Set(ref _krakenLightingStatus, value);
     }
 
-    private string _krakenLightingStatus = "RigPilot's own Kraken X3 adapter writes a fixed ring+logo colour directly over HID — no OpenRGB needed. Lighting only; the pump is untouched. Requires Hardware control.";
+    private string _krakenLightingStatus = "RigPilot's own Kraken X3 adapter writes a fixed ring+logo colour directly over HID â€” no OpenRGB needed. Lighting only; the pump is untouched. Requires Hardware control.";
 
     /// <summary>
     /// Native (non-OpenRGB) Kraken X3 lighting write through the service and
@@ -3569,8 +3133,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             : "No competing lighting writer or local OpenRGB bridge is active.";
 
     public string OpenRgbConnectionLabel => OpenRgbConnected
-        ? $"Connected · {OpenRgbControllerCount} controller{(OpenRgbControllerCount == 1 ? string.Empty : "s")}"
-        : OpenRgbEnabled ? "Enabled · not connected" : "Disabled";
+        ? $"Connected Â· {OpenRgbControllerCount} controller{(OpenRgbControllerCount == 1 ? string.Empty : "s")}"
+        : OpenRgbEnabled ? "Enabled Â· not connected" : "Disabled";
 
     public bool AreOpenRgbInputsValid => TryParseOpenRgbInputs(out _, out _);
 
@@ -3659,7 +3223,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public bool HasManualOverride => !string.IsNullOrWhiteSpace(_manualProfileId);
 
     public string ManualOverrideLabel => HasManualOverride
-        ? $"Manual override · {Profiles.FirstOrDefault(profile => profile.Id == _manualProfileId)?.Name ?? _manualProfileId}"
+        ? $"Manual override Â· {Profiles.FirstOrDefault(profile => profile.Id == _manualProfileId)?.Name ?? _manualProfileId}"
         : "Automation owns profile selection";
 
     public bool CanAddAutomationRule
@@ -3782,13 +3346,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             int experimental = CapabilityDecisions.Count(item => item.AccessState == CapabilityAccessState.Experimental);
             int blocked = CapabilityDecisions.Count(item => item.AccessState is CapabilityAccessState.Blocked or CapabilityAccessState.Faulted);
             int readOnly = CapabilityDecisions.Count(item => item.AccessState is CapabilityAccessState.ReadOnly or CapabilityAccessState.Unsupported);
-            return $"{verified} verified · {experimental} experimental · {blocked} blocked/faulted · {readOnly} read-only/unsupported";
+            return $"{verified} verified Â· {experimental} experimental Â· {blocked} blocked/faulted Â· {readOnly} read-only/unsupported";
         }
     }
 
     public string ExperimentalControlSummary => ExperimentalControlCount == 0
         ? "No Experimental hardware controls were detected."
-        : $"{ExperimentalControlCount} detected · {CommissioningEligibleExperimentalControlCount} can enter the cooling commissioning workflow · {ProtectedExperimentalControlCount} protected";
+        : $"{ExperimentalControlCount} detected Â· {CommissioningEligibleExperimentalControlCount} can enter the cooling commissioning workflow Â· {ProtectedExperimentalControlCount} protected";
 
     public string ExperimentalGateBadge => ExperimentalControlCount == 0
         ? "NO EXPERIMENTAL CONTROLS"
@@ -3846,7 +3410,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public string OperationTitle => _operation is null
         ? "No operation has run"
-        : $"{SplitWords(_operation.Kind.ToString())} · {SplitWords(_operation.State.ToString())}";
+        : $"{SplitWords(_operation.Kind.ToString())} Â· {SplitWords(_operation.State.ToString())}";
 
     public string OperationMessage => _operation?.Message ?? "Select an eligible control to begin.";
 
@@ -3856,7 +3420,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public double OperationProgress => _operation?.ProgressPercent ?? 0;
 
-    public string OperationProgressText => _operation is null ? "—" : $"{_operation.ProgressPercent:0}%";
+    public string OperationProgressText => _operation is null ? "â€”" : $"{_operation.ProgressPercent:0}%";
 
     public bool HasCalibrationResult => _operation?.CalibrationResult is not null;
 
@@ -3881,7 +3445,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             {
                 return $"Calibration measurements are recorded only; maximum observed {result.MaximumRpm:0} RPM. {restart}";
             }
-            return $"Recommended floor {result.MinimumDutyPercent:0}% · maximum observed {result.MaximumRpm:0} RPM · {restart}";
+            return $"Recommended floor {result.MinimumDutyPercent:0}% Â· maximum observed {result.MaximumRpm:0} RPM Â· {restart}";
         }
     }
 
@@ -3971,7 +3535,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public string AppVersion => _serviceCompatibility.ClientVersion;
 
-    public string StateRevisionText => _status is null ? "—" : _status.StateRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public string StateRevisionText => _status is null ? "â€”" : _status.StateRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     public string ServiceUptimeText
     {
@@ -4110,7 +3674,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
 
-        HidInventoryStatus = "Scanning connected peripherals…";
+        HidInventoryStatus = "Scanning connected peripheralsâ€¦";
         IpcResponse response = await _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(IpcCommand.DiscoverHidInventory),
             _lifetime.Token);
@@ -4131,7 +3695,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             .GroupBy(device => (device.VendorId, device.ProductId, device.ProductName))
             .Select(group => new HidDeviceDisplay(
                 string.IsNullOrWhiteSpace(group.Key.ProductName) ? "Unnamed HID device" : group.Key.ProductName!,
-                $"VID {group.Key.VendorId:X4}  ·  PID {group.Key.ProductId:X4}",
+                $"VID {group.Key.VendorId:X4}  Â·  PID {group.Key.ProductId:X4}",
                 string.Join(", ", group
                     .Select(device => device.DeviceClass)
                     .Distinct()
@@ -4255,7 +3819,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
 
-        KrakenTelemetryStatus = "Reading streamed Kraken status…";
+        KrakenTelemetryStatus = "Reading streamed Kraken statusâ€¦";
         IpcResponse response = await _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(IpcCommand.ReadKrakenTelemetry),
             _lifetime.Token);
@@ -4263,7 +3827,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         KrakenTelemetryV1 result = IpcJson.FromElement<KrakenTelemetryV1>(response.Payload)
             ?? throw new InvalidDataException("Service returned an empty Kraken telemetry result.");
         KrakenTelemetryStatus = result.Outcome == KrakenTelemetryOutcome.Succeeded
-            ? $"{result.ProductName ?? "Kraken"}: liquid {result.LiquidTemperatureCelsius:0.0} °C, pump {result.PumpSpeedRpm} rpm at {result.PumpDutyPercent}% duty. Read-only; no report was written to the cooler."
+            ? $"{result.ProductName ?? "Kraken"}: liquid {result.LiquidTemperatureCelsius:0.0} Â°C, pump {result.PumpSpeedRpm} rpm at {result.PumpDutyPercent}% duty. Read-only; no report was written to the cooler."
             : result.Message;
     }
 
@@ -4345,6 +3909,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _disposed = true;
         _refreshTimer.Dispose();
         _desktopOsd.Dispose();
+        _ambientCancellation?.Cancel();
+        _ambientCancellation?.Dispose();
         _lifetime.Cancel();
         _lifetime.Dispose();
         DisposeLocalCoordinator();
@@ -6396,9 +5962,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
 
         string preview = string.Join(
-            " · ",
+            " Â· ",
             _macroEditorSteps.Take(6).Select(DescribeMacroStep));
-        string suffix = _macroEditorSteps.Count > 6 ? " · …" : string.Empty;
+        string suffix = _macroEditorSteps.Count > 6 ? " Â· â€¦" : string.Empty;
         MacroEditorSummary = $"{_macroEditorSteps.Count} typed step(s): {preview}{suffix}";
     }
 
@@ -7288,7 +6854,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private static string OsdColourFor(string unit) => unit switch
     {
-        "°C" => "#FFB26B",
+        "Â°C" => "#FFB26B",
         "RPM" => "#7EE7C5",
         "W" => "#8EC5FF",
         "%" => "#D5AEFF",
@@ -7360,7 +6926,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         if (!TryReadTuneLimits(out double temperatureCeiling, out double? powerCeiling))
         {
-            throw new InvalidOperationException("Enter a temperature ceiling from 40 to 100 °C and an optional positive power ceiling.");
+            throw new InvalidOperationException("Enter a temperature ceiling from 40 to 100 Â°C and an optional positive power ceiling.");
         }
 
         TunePlan plan = CreateTunePlan(target, temperatureCeiling, powerCeiling);
@@ -7592,7 +7158,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         CapabilityDescriptor capability) => (_snapshot?.Sensors ?? [])
         .Where(sensor => string.Equals(sensor.AdapterId, capability.AdapterId, StringComparison.Ordinal)
             && string.Equals(sensor.DeviceId, capability.DeviceId, StringComparison.Ordinal)
-            && string.Equals(sensor.Unit, "°C", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(sensor.Unit, "Â°C", StringComparison.OrdinalIgnoreCase)
             && sensor.Quality == SensorQuality.Good
             && sensor.Value.HasValue
             && !sensor.Name.Contains("Critical Temperature", StringComparison.OrdinalIgnoreCase)
@@ -7630,7 +7196,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         if (!TryReadTuneLimits(out double temperatureCeiling, out double? powerCeiling))
         {
             return HardwareOperationEligibility.Deny(
-                "Enter a temperature ceiling from 40 to 100 °C and an optional positive power ceiling.");
+                "Enter a temperature ceiling from 40 to 100 Â°C and an optional positive power ceiling.");
         }
 
         return HardwareOperationEligibilityEvaluator.ForTuning(
@@ -8432,8 +7998,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         DeviceCompatibilitySummary = compatibleFamilies.Length == 0
             ? "No classified desktop families detected"
             : totalCompatibleFamilies > compatibleFamilies.Length
-                ? $"{string.Join(" · ", compatibleFamilies)} +{totalCompatibleFamilies - compatibleFamilies.Length}"
-                : string.Join(" · ", compatibleFamilies);
+                ? $"{string.Join(" Â· ", compatibleFamilies)} +{totalCompatibleFamilies - compatibleFamilies.Length}"
+                : string.Join(" Â· ", compatibleFamilies);
         OnPropertyChanged(nameof(HasDevices));
     }
 
@@ -8795,7 +8361,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             .OrderBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
             .Take(6);
         IEnumerable<SensorSample> liquid = candidates
-            .Where(sensor => NormaliseUnit(sensor.Unit) == "°C" && sensor.Value > 1 && sensor.Value < 130
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "Â°C" && sensor.Value > 1 && sensor.Value < 130
                 && (sensor.Name.Contains("liquid", StringComparison.OrdinalIgnoreCase)
                     || sensor.Name.Contains("coolant", StringComparison.OrdinalIgnoreCase)
                     || sensor.Name.Contains("water", StringComparison.OrdinalIgnoreCase)))
@@ -8842,7 +8408,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    /// Deduplicated finite Good-quality samples from named devices — the shared
+    /// Deduplicated finite Good-quality samples from named devices â€” the shared
     /// candidate pool for curated cards. The unit is part of the dedupe key: a
     /// fan tachometer (RPM) and its duty control (%) legitimately share a name.
     /// </summary>
@@ -8950,664 +8516,3 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
-public sealed record OperationTargetDisplay(
-    CapabilityDescriptor Descriptor,
-    string DisplayName,
-    string State,
-    string Range,
-    string Reason,
-    string? RpmSensorId,
-    bool IsAvailable,
-    bool IsExperimental)
-{
-    public static OperationTargetDisplay From(
-        CapabilityDescriptor capability,
-        string deviceName,
-        string? rpmSensorId)
-    {
-        string range = capability.Range is NumericRange numeric
-            ? $"{numeric.Minimum:0.##}–{numeric.Maximum:0.##} {capability.Unit}".TrimEnd()
-            : "No numeric range";
-        bool available = capability.State is CapabilityAccessState.Verified or CapabilityAccessState.Experimental
-            && capability.CanResetToDefault
-            && capability.Range is not null;
-        return new OperationTargetDisplay(
-            capability,
-            $"{capability.Name} · {deviceName}",
-            SplitWords(capability.State.ToString()),
-            range,
-            capability.Reason,
-            rpmSensorId,
-            available,
-            capability.State == CapabilityAccessState.Experimental);
-    }
-
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
-}
-
-public sealed record AutomationRuleDisplay(
-    AutomationRuleV1 Rule,
-    string Name,
-    string Trigger,
-    string Profile,
-    string Priority,
-    string Status)
-{
-    public static AutomationRuleDisplay From(AutomationRuleV1 rule) => new(
-        rule,
-        rule.Name,
-        $"{SplitWords(rule.TriggerKind.ToString())} · {rule.TriggerValue}",
-        rule.ProfileId,
-        rule.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        rule.Enabled ? "Enabled" : "Disabled");
-
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
-}
-
-public sealed record SensorDisplay(string Name, string Device, string DisplayValue, string Severity, string Glyph);
-
-public sealed record HidDeviceDisplay(string ProductName, string Identity, string Classes);
-
-public sealed record ProfileCardDisplay(
-    ProfileV1 Profile,
-    string Name,
-    string Description,
-    string Objective,
-    string Glyph,
-    string ActionSummary,
-    string StatusLabel,
-    bool IsActive,
-    bool IsExperimental,
-    bool RequiresManualAcknowledgement)
-{
-    public static ProfileCardDisplay From(ProfileV1 profile, bool active, ProfileV2? suiteProfile = null)
-    {
-        (string objective, string glyph) = profile.Id.ToLowerInvariant() switch
-        {
-            "quiet" => ("Lower acoustic target", "\uE708"),
-            "performance" => ("Prioritise sustained output", "\uE945"),
-            _ => ("Everyday efficiency", "\uE9D2")
-        };
-        int manualOnlyCount = suiteProfile?.ManualOnlyActionIds.Count ?? 0;
-        bool hasCoolingGraph = !string.IsNullOrWhiteSpace(suiteProfile?.CoolingGraphId);
-        string actionSummary = profile.Actions.Count == 0
-            ? hasCoolingGraph
-                ? "Calibrated cooling graph; apply manually"
-                : "No hardware writes in this build"
-            : manualOnlyCount > 0
-                ? $"{profile.Actions.Count} typed action{(profile.Actions.Count == 1 ? string.Empty : "s")} · {manualOnlyCount} Manual Only"
-            : $"{profile.Actions.Count} typed action{(profile.Actions.Count == 1 ? string.Empty : "s")}";
-        return new ProfileCardDisplay(
-            profile,
-            profile.Name,
-            profile.Description,
-            objective,
-            glyph,
-            actionSummary,
-            active ? "Active" : manualOnlyCount > 0 ? "Manual only" : profile.IsExperimental ? "Experimental" : "Stock-safe",
-            active,
-            profile.IsExperimental,
-            manualOnlyCount > 0);
-    }
-}
-
-public sealed record DeviceDisplay(
-    string Id,
-    string Name,
-    string Kind,
-    string Manufacturer,
-    string Model,
-    string Details,
-    string Glyph,
-    string? CompatibilityLabel,
-    string SearchText)
-{
-    public static DeviceDisplay From(HardwareDevice device)
-    {
-        string manufacturer = string.IsNullOrWhiteSpace(device.Manufacturer) ? "Unknown manufacturer" : device.Manufacturer;
-        string model = string.IsNullOrWhiteSpace(device.Model) ? "Model not reported" : device.Model;
-        device.Properties.TryGetValue("compatibilityLabel", out string? compatibilityLabel);
-        device.Properties.TryGetValue("boardPartnerLabel", out string? boardPartnerLabel);
-        string details = string.IsNullOrWhiteSpace(compatibilityLabel)
-            ? $"{manufacturer} \u00B7 {model}"
-            : $"{manufacturer} \u00B7 {model} · {compatibilityLabel}";
-        if (!string.IsNullOrWhiteSpace(boardPartnerLabel))
-        {
-            details = string.Concat(details, " \u00B7 ", boardPartnerLabel);
-        }
-        string glyph = device.Kind switch
-        {
-            DeviceKind.Cpu => "\uE950",
-            DeviceKind.Gpu => "\uE7F4",
-            DeviceKind.Motherboard or DeviceKind.Bios => "\uE950",
-            DeviceKind.Memory => "\uE964",
-            DeviceKind.Storage => "\uEDA2",
-            DeviceKind.Network => "\uE968",
-            DeviceKind.Cooling => "\uE9CA",
-            DeviceKind.Lighting => "\uE706",
-            DeviceKind.OperatingSystem => "\uE782",
-            _ => "\uE772"
-        };
-        return new DeviceDisplay(
-            device.Id,
-            device.Name,
-            SplitWords(device.Kind.ToString()),
-            manufacturer,
-            model,
-            details,
-            glyph,
-            compatibilityLabel,
-            $"{device.Name} {device.Kind} {manufacturer} {model} {compatibilityLabel} {string.Join(' ', device.Properties.Values)}");
-    }
-
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
-}
-
-public sealed record CapabilityDisplay(
-    CapabilityAccessState AccessState,
-    string Name,
-    string State,
-    string Reason,
-    string Range,
-    string Evidence,
-    string Domain,
-    string Risk,
-    string Owner,
-    string NextSafeStep,
-    string StateTone)
-{
-    // The capability lists are rebuilt on every snapshot refresh, which
-    // recreates these display records. The details-expander state must survive
-    // that churn or an open expander snaps shut within a second, so it is
-    // persisted per capability ID for the lifetime of the process.
-    private static readonly HashSet<string> ExpandedDetailIds = [];
-
-    /// <summary>Stable capability identity used to persist UI state across refreshes.</summary>
-    public string Id { get; init; } = string.Empty;
-
-    public bool IsDetailsExpanded
-    {
-        get
-        {
-            lock (ExpandedDetailIds)
-            {
-                return ExpandedDetailIds.Contains(Id);
-            }
-        }
-        set
-        {
-            lock (ExpandedDetailIds)
-            {
-                if (value)
-                {
-                    ExpandedDetailIds.Add(Id);
-                }
-                else
-                {
-                    ExpandedDetailIds.Remove(Id);
-                }
-            }
-        }
-    }
-
-    public static CapabilityDisplay From(CapabilityDescriptor capability)
-    {
-        string range = capability.Range is NumericRange numeric
-            ? $"{numeric.Minimum:0.##}\u2013{numeric.Maximum:0.##} {capability.Unit}".TrimEnd()
-            : capability.ValueKind.ToString();
-        string owner = string.IsNullOrWhiteSpace(capability.ConflictOwner)
-            ? "No competing writer detected"
-            : $"Blocked by {capability.ConflictOwner}";
-        string nextSafeStep = GetNextSafeStep(capability);
-        string tone = capability.State switch
-        {
-            CapabilityAccessState.Verified => "Safe",
-            CapabilityAccessState.Experimental => "Warning",
-            CapabilityAccessState.Blocked or CapabilityAccessState.Faulted => "Critical",
-            _ => "Neutral"
-        };
-        // Friendlier state labels: an armable-but-disarmed control reads as
-        // "Off" rather than bureaucratic "Read Only"; an armed Experimental
-        // control reads as "On". The underlying AccessState is unchanged.
-        // "Off"/"On" only for controls the Hardware-control switch can actually
-        // arm; permanently informational read-only cards keep "Read Only" so
-        // they do not masquerade as switches.
-        bool armable = capability.Id.StartsWith("gpufan.", StringComparison.Ordinal)
-            || capability.Id.StartsWith("gpupower.", StringComparison.Ordinal)
-            || capability.Id.StartsWith("gpuclock.", StringComparison.Ordinal);
-        string stateLabel = capability.State switch
-        {
-            CapabilityAccessState.ReadOnly when armable => "Off",
-            CapabilityAccessState.Experimental when armable => "On",
-            _ => SplitWords(capability.State.ToString())
-        };
-        return new CapabilityDisplay(
-            capability.State,
-            capability.Name,
-            stateLabel,
-            capability.Reason,
-            range,
-            SplitWords(capability.Evidence.ToString()),
-            SplitWords(capability.Domain.ToString()),
-            capability.Risk.ToString(),
-            owner,
-            nextSafeStep,
-            tone)
-        {
-            Id = capability.Id
-        };
-    }
-
-    private static string GetNextSafeStep(CapabilityDescriptor capability) => capability.State switch
-    {
-        CapabilityAccessState.Verified => capability.CanResetToDefault
-            ? "Use only within the published bounds; firmware/default reset is available."
-            : "Use only within the published bounds; reset evidence is still limited.",
-        CapabilityAccessState.Experimental => "Keep this control manual and exact-device scoped until apply, read-back, reset, and fault-screening evidence passes.",
-        CapabilityAccessState.Blocked when !string.IsNullOrWhiteSpace(capability.ConflictOwner) =>
-            "Resolve the named competing writer through the ownership workflow. Never terminate a process by name alone.",
-        CapabilityAccessState.Blocked => "Resolve the stated driver, firmware, bounds, or reset gate before any write can be considered.",
-        CapabilityAccessState.ReadOnly => "Telemetry and inventory are available; no reviewed write endpoint is published for this exact device.",
-        CapabilityAccessState.Unsupported => "No supported adapter path exists for this exact device and software version.",
-        CapabilityAccessState.Faulted => "Use recovery and diagnostics, restore firmware/default control, then collect a new exact-device trace.",
-        _ => "Review the capability evidence before changing hardware state."
-    };
-
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
-}
-
-/// <summary>
-/// Presentation model for the Advanced Lab Experimental Control Center. It
-/// makes the current gates explicit without promoting an inventory item to a
-/// write capability. Only bounded, resettable, non-protected motherboard-fan
-/// outputs can be routed into the existing commissioning wizard.
-/// </summary>
-public sealed record ExperimentalControlDisplay(
-    CapabilityDescriptor Descriptor,
-    string Name,
-    string Device,
-    string Domain,
-    string Range,
-    string Evidence,
-    string Path,
-    string Readiness,
-    string NextSafeStep,
-    bool IsCoolingControl,
-    bool IsGpuCoolingControl,
-    bool IsProtected,
-    bool CanOpenCoolingCommissioning,
-    string Tone)
-{
-    public static ExperimentalControlDisplay From(
-        CapabilityDescriptor capability,
-        string deviceName,
-        CoolingOutputAssignmentV1? assignment,
-        bool serviceWritePathReady,
-        bool sessionAcknowledged)
-    {
-        bool cooling = capability.Domain is ControlDomain.Cooling or ControlDomain.CoolingSafety
-            || capability.Name.Contains("fan", StringComparison.OrdinalIgnoreCase)
-            || capability.Name.Contains("pump", StringComparison.OrdinalIgnoreCase);
-        bool gpuCooling = cooling
-            && (capability.Name.Contains("gpu", StringComparison.OrdinalIgnoreCase)
-                || capability.DeviceId.Contains("gpu", StringComparison.OrdinalIgnoreCase)
-                || capability.AdapterId.Contains("gpu", StringComparison.OrdinalIgnoreCase)
-                || deviceName.Contains("geforce", StringComparison.OrdinalIgnoreCase)
-                || deviceName.Contains("radeon", StringComparison.OrdinalIgnoreCase)
-                || deviceName.Contains("arc", StringComparison.OrdinalIgnoreCase));
-        bool protectedByRole = CoolingOutputAssignmentPolicy.IsProtected(assignment, capability);
-        bool protectedByName = capability.Name.Contains("cpu", StringComparison.OrdinalIgnoreCase)
-            || capability.Name.Contains("pump", StringComparison.OrdinalIgnoreCase);
-        bool protectedOutput = protectedByRole || protectedByName;
-        bool boundedResetPath = capability.ValueKind == ControlValueKind.Numeric
-            && capability.Range is not null
-            && capability.CanResetToDefault;
-        bool competingWriter = !string.IsNullOrWhiteSpace(capability.ConflictOwner);
-        bool canCommission = capability.State == CapabilityAccessState.Experimental
-            && cooling
-            && !gpuCooling
-            && !protectedOutput
-            && !competingWriter
-            && boundedResetPath;
-        string range = capability.Range is NumericRange numeric
-            ? $"{numeric.Minimum:0.##}\u2013{numeric.Maximum:0.##} {capability.Unit}".TrimEnd()
-            : "No numeric range";
-        string path = protectedOutput
-            ? "Safety protected"
-            : gpuCooling
-                ? "GPU validation"
-                : canCommission
-                    ? "Header commissioning"
-                    : "Evidence required";
-        string readiness = protectedOutput
-            ? $"Protected as {SplitWords(assignment?.Role.ToString() ?? "CPU/Pump")}; commissioning and fan-stop remain unavailable."
-            : gpuCooling
-                ? "GPU fan validation is separate from chassis-header commissioning; the conservative floor remains in force."
-                : competingWriter
-                    ? $"Blocked by {capability.ConflictOwner}; resolve ownership before any write workflow."
-                    : !boundedResetPath
-                        ? "This adapter does not publish the bounded reset path required for commissioning."
-                        : !serviceWritePathReady
-                            ? "Service write path is not ready. Evidence can be reviewed, but commissioning is unavailable."
-                            : !sessionAcknowledged
-                                ? "Session acknowledgement required; no hardware command has been authorised."
-                                : "Ready to select in Cooling. Exact-device confirmation, a physical header, RPM pairing, and a witnessed pulse are still required.";
-        string nextSafeStep = protectedOutput
-            ? "Keep the current safety role. A pump or CPU-fan output cannot use this commissioning path."
-            : gpuCooling
-                ? "Keep the conservative GPU fan floor. Complete repeated direct restart validation before any lower floor is considered."
-                : competingWriter
-                    ? "Review the exact competing writer in Devices; never terminate a process by name alone."
-                    : !boundedResetPath
-                        ? "Collect adapter evidence with bounds, read-back, and reset behaviour before adding a write path."
-                    : "Open Cooling, select this exact control, enter its physical chassis header, and begin setup. No hardware command is sent by this selection.";
-        string tone = protectedOutput ? "Critical" : canCommission ? "Warning" : "Neutral";
-        return new ExperimentalControlDisplay(
-            capability,
-            capability.Name,
-            deviceName,
-            SplitWords(capability.Domain.ToString()),
-            range,
-            SplitWords(capability.Evidence.ToString()),
-            path,
-            readiness,
-            nextSafeStep,
-            cooling,
-            gpuCooling,
-            protectedOutput,
-            canCommission,
-            tone);
-    }
-
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
-}
-
-public sealed record DiagnosticDisplay(string Title, string Message, string Severity, string Remediation, string Glyph)
-{
-    public static DiagnosticDisplay From(DiagnosticWarning warning) => new(
-        warning.Code,
-        warning.Message,
-        NormaliseSeverity(warning.Severity),
-        warning.Remediation ?? "Review the Devices page for capability evidence.",
-        warning.Severity.Equals("critical", StringComparison.OrdinalIgnoreCase) ? "\uEA39" : "\uE7BA");
-
-    public static DiagnosticDisplay From(ConflictDescriptor conflict) => new(
-        $"{conflict.DisplayName} is running",
-        $"Overlapping control families: {string.Join(", ", conflict.ResourceFamilies)}.",
-        "Warning",
-        conflict.Guidance,
-        "\uE7BA");
-
-    public static int Rank(DiagnosticDisplay item) => item.Severity switch
-    {
-        "Critical" => 0,
-        "Warning" => 1,
-        _ => 2
-    };
-
-    private static string NormaliseSeverity(string severity) => severity.ToLowerInvariant() switch
-    {
-        "critical" or "error" => "Critical",
-        "warning" or "warn" => "Warning",
-        _ => "Info"
-    };
-}
-
-public sealed record AdapterHealthDisplay(string Name, string Status, string Message, string Checked, bool Healthy)
-{
-    public static AdapterHealthDisplay From(AdapterHealth health) => new(
-        health.AdapterId,
-        health.Healthy ? "Healthy" : "Needs attention",
-        health.Message,
-        health.CheckedAt.ToLocalTime().ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
-        health.Healthy);
-}
-
-public sealed record SensorTrendDisplay(
-    SensorTrendV1 Trend,
-    string SensorId,
-    string DisplayName,
-    string Unit,
-    string Latest,
-    string Range,
-    string Sparkline,
-    bool IsPinned)
-{
-    public static SensorTrendDisplay From(SensorTrendV1 trend) => new(
-        trend,
-        trend.SensorId,
-        trend.DisplayName,
-        trend.Unit,
-        trend.Latest is double latest
-            ? $"{latest:0.##} {trend.Unit}".TrimEnd()
-            : "Unavailable",
-        trend.Minimum is double minimum && trend.Maximum is double maximum
-            ? $"{minimum:0.##}–{maximum:0.##} {trend.Unit}".TrimEnd()
-            : "No range",
-        trend.Sparkline,
-        false);
-
-    public SensorTrendDisplay WithPinned(bool pinned) => this with { IsPinned = pinned };
-}
-
-/// <summary>
-/// Presentation-only normalized series for the dashboard comparison workspace.
-/// It preserves the actual value/range in the legend so unrelated units are
-/// never represented as directly comparable magnitudes.
-/// </summary>
-public sealed record SensorComparisonSeriesDisplay(
-    string SensorId,
-    string DisplayName,
-    string Latest,
-    string Range,
-    string Unit,
-    WpfPointCollection Points,
-    WpfBrush Stroke,
-    IReadOnlyList<double> Values)
-{
-    private static readonly WpfColor[] Palette =
-    [
-        WpfColor.FromRgb(0x68, 0xB0, 0xFF),
-        WpfColor.FromRgb(0x5B, 0xD6, 0xB3),
-        WpfColor.FromRgb(0xE4, 0xB7, 0x5B),
-        WpfColor.FromRgb(0xC2, 0x8C, 0xFF)
-    ];
-
-    public static SensorComparisonSeriesDisplay From(SensorTrendDisplay trend, int index)
-    {
-        SensorTrendPointV1[] source = trend.Trend.Points.ToArray();
-        double minimum = trend.Trend.Minimum ?? (source.Length == 0 ? 0 : source.Min(point => point.Value));
-        double maximum = trend.Trend.Maximum ?? (source.Length == 0 ? 0 : source.Max(point => point.Value));
-        WpfPointCollection points = BuildPoints(source, minimum, maximum);
-        WpfSolidColorBrush brush = new(Palette[index % Palette.Length]);
-        brush.Freeze();
-        return new SensorComparisonSeriesDisplay(
-            trend.SensorId,
-            trend.DisplayName,
-            trend.Latest,
-            trend.Range,
-            trend.Unit,
-            points,
-            brush,
-            source.Select(point => point.Value).ToArray());
-    }
-
-    private static WpfPointCollection BuildPoints(SensorTrendPointV1[] source, double minimum, double maximum)
-    {
-        const double width = 320;
-        const double top = 12;
-        const double height = 96;
-        if (source.Length == 0)
-        {
-            return [];
-        }
-
-        double ToY(double value)
-        {
-            double ratio = maximum > minimum
-                ? Math.Clamp((value - minimum) / (maximum - minimum), 0, 1)
-                : 0.5;
-            return top + (1 - ratio) * height;
-        }
-
-        if (source.Length == 1)
-        {
-            double y = ToY(source[0].Value);
-            return [new WpfPoint(0, y), new WpfPoint(width, y)];
-        }
-
-        WpfPointCollection points = [];
-        for (int index = 0; index < source.Length; index++)
-        {
-            double x = width * index / (source.Length - 1d);
-            points.Add(new WpfPoint(x, ToY(source[index].Value)));
-        }
-        return points;
-    }
-}
-
-public sealed record HealthRuleDisplay(
-    HealthRuleV1 Rule,
-    string Name,
-    string Condition,
-    string Action,
-    string Source,
-    string Summary)
-{
-    public static HealthRuleDisplay From(HealthRuleV1 rule)
-    {
-        string threshold = rule.Threshold is double value ? $" {value:0.##}" : string.Empty;
-        string source = string.IsNullOrWhiteSpace(rule.SensorId) ? "System event" : rule.SensorId;
-        return new HealthRuleDisplay(
-            rule,
-            rule.Name,
-            SplitWords(rule.Condition.ToString()),
-            SplitWords(rule.Action.ToString()),
-            source,
-            $"{rule.ConsecutiveObservations} consecutive observation(s), {rule.Cooldown.TotalSeconds:0} s cooldown{threshold}.");
-    }
-
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
-}
-
-public sealed record HealthAlertDisplay(
-    HealthAlertEventV1 Alert,
-    string RuleName,
-    string Message,
-    string State,
-    string Action,
-    string Timestamp,
-    string Tone,
-    bool CanAcknowledge)
-{
-    public static HealthAlertDisplay From(HealthAlertEventV1 alert) => new(
-        alert,
-        alert.RuleName,
-        alert.Message,
-        alert.State.ToString(),
-        alert.ActionResult ?? SplitWords(alert.RequestedAction.ToString()),
-        alert.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
-        alert.State == HealthAlertState.Cleared ? "Safe" : "Warning",
-        alert.State == HealthAlertState.Active);
-
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
-}
-
-public sealed record TimelineEventDisplay(
-    DateTimeOffset When,
-    string Source,
-    string Title,
-    string Message,
-    string Tone)
-{
-    public string Timestamp => When.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-
-    public static TimelineEventDisplay From(HealthAlertDisplay alert) => new(
-        alert.Alert.UpdatedAt,
-        "Health",
-        alert.RuleName,
-        alert.Message,
-        alert.Tone);
-
-    public static TimelineEventDisplay From(AdapterTraceDisplay trace) => new(
-        DateTimeOffset.Now,
-        "Adapter",
-        $"{trace.Adapter}: {trace.Operation}",
-        trace.Message,
-        trace.Success ? "Info" : "Warning");
-}
-
-public sealed record AdapterTraceDisplay(
-    string Adapter,
-    string Operation,
-    string Target,
-    string Status,
-    string Message,
-    string Timestamp,
-    bool Success)
-{
-    public static AdapterTraceDisplay From(AdapterTraceEvent trace) => new(
-        trace.AdapterId,
-        trace.Operation,
-        string.IsNullOrWhiteSpace(trace.CapabilityId) ? "Adapter" : trace.CapabilityId,
-        trace.Success ? "Completed" : "Failed",
-        trace.Message,
-        trace.Timestamp.ToLocalTime().ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
-        trace.Success);
-}
-
-internal sealed class AsyncCommand(
-    Func<object?, Task> execute,
-    Func<object?, bool>? canExecute = null,
-    Action<Exception>? onError = null) : ICommand
-{
-    private bool _executing;
-
-    public event EventHandler? CanExecuteChanged;
-
-    public bool CanExecute(object? parameter) => !_executing && (canExecute?.Invoke(parameter) ?? true);
-
-    public async void Execute(object? parameter)
-    {
-        if (!CanExecute(parameter))
-        {
-            return;
-        }
-
-        _executing = true;
-        RaiseCanExecuteChanged();
-        try
-        {
-            await execute(parameter);
-        }
-        catch (Exception exception)
-        {
-            onError?.Invoke(exception);
-        }
-        finally
-        {
-            _executing = false;
-            RaiseCanExecuteChanged();
-        }
-    }
-
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
-}
-
-internal sealed class RelayCommand(Action<object?> execute, Predicate<object?>? canExecute = null) : ICommand
-{
-    public event EventHandler? CanExecuteChanged;
-
-    public bool CanExecute(object? parameter) => canExecute?.Invoke(parameter) ?? true;
-
-    public void Execute(object? parameter) => execute(parameter);
-
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
-}
