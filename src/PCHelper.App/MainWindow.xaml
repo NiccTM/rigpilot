@@ -1562,7 +1562,7 @@
                     <TextBlock Text="Live fan, power, and clock control. Every apply is transactional: bounds-clamped, read-back verified, rolled back on failure." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
                   </StackPanel>
                   <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
-                    <TextBlock Text="{Binding HardwareControlEnabled, StringFormat=Hardware control: {0}}" Style="{StaticResource BadgeTextStyle}" />
+                    <TextBlock Text="{Binding HardwareControlBadge}" Style="{StaticResource BadgeTextStyle}" />
                   </Border>
                 </Grid>
                 <ItemsControl ItemsSource="{Binding GpuControlSliders}">

@@ -46,6 +46,7 @@ public sealed partial class MainViewModel
                 return;
             }
 
+            OnPropertyChanged(nameof(HardwareControlBadge));
             PersistHardwareControlPreference(value);
             _hardwareControlArmedThisConnection = false;
             _applyGpuControlCommand.RaiseCanExecuteChanged();
@@ -55,6 +56,9 @@ public sealed partial class MainViewModel
             _ = ApplyHardwareControlSafelyAsync(value);
         }
     }
+
+    /// <summary>User-facing badge for the GPU controls card (On/Off, not True/False).</summary>
+    public string HardwareControlBadge => HardwareControlEnabled ? "Hardware control: On" : "Hardware control: Off";
 
     private async Task ApplyHardwareControlSafelyAsync(bool enable)
     {
