@@ -1792,14 +1792,17 @@
                     <Button Content="Turn lighting off" Command="{Binding TurnOffOpenRgbCommand}" Margin="0,0,8,8" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="SCREEN-AMBIENT LIGHTING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="AMBIENT &amp; MUSIC LIGHTING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding AmbientStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.AmbientStatus" />
+                  <CheckBox IsChecked="{Binding AmbientMusicMode}" Content="Music mode (react to system audio instead of the screen)" Margin="0,0,0,8"
+                            ToolTip="Reacts to your computer's own output audio spectrum — a music visualiser. Captured via WASAPI loopback, never a microphone; audio stays in memory."
+                            automation:AutomationProperties.Name="Music-reactive mode" automation:AutomationProperties.AutomationId="Lighting.AmbientMusicMode" />
                   <WrapPanel>
-                    <Button Content="Start screen ambience" Command="{Binding StartAmbientLightingCommand}" Margin="0,0,8,8"
-                            ToolTip="Mirrors the primary display's edge colours onto every OpenRGB controller. The screen sample is a 32×18 in-memory thumbnail — never saved, logged, or uploaded."
-                            automation:AutomationProperties.Name="Start screen-ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StartAmbient" />
+                    <Button Content="Start ambience" Command="{Binding StartAmbientLightingCommand}" Margin="0,0,8,8"
+                            ToolTip="Screen mode mirrors the display's edge colours (a 32×18 in-memory thumbnail); music mode reacts to system audio. Neither is saved, logged, or uploaded."
+                            automation:AutomationProperties.Name="Start ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StartAmbient" />
                     <Button Content="Stop" Command="{Binding StopAmbientLightingCommand}" Margin="0,0,8,8"
-                            automation:AutomationProperties.Name="Stop screen-ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StopAmbient" />
+                            automation:AutomationProperties.Name="Stop ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StopAmbient" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
                   <TextBlock Text="NATIVE KRAKEN LIGHTING (RIGPILOT ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
@@ -2209,6 +2212,24 @@
                     <Button Content="Start per-frame benchmark" Command="{Binding StartPresentMonBenchmarkCommand}" Margin="0,0,8,0" automation:AutomationProperties.Name="Start per-frame benchmark via Intel PresentMon" automation:AutomationProperties.AutomationId="Games.StartPresentMonBenchmark" />
                     <Button Content="Stop per-frame benchmark" Command="{Binding StopPresentMonBenchmarkCommand}" Style="{StaticResource GhostButtonStyle}" automation:AutomationProperties.Name="Stop per-frame benchmark" automation:AutomationProperties.AutomationId="Games.StopPresentMonBenchmark" />
                   </WrapPanel>
+                  <Separator Margin="0,10,0,4" />
+                  <TextBlock Text="BENCHMARK HISTORY" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="{Binding BenchmarkCompareStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,6" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Games.BenchmarkCompareStatus" />
+                  <ItemsControl ItemsSource="{Binding BenchmarkHistoryEntries}" MaxHeight="220" automation:AutomationProperties.Name="Benchmark history list" automation:AutomationProperties.AutomationId="Games.BenchmarkHistory">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,7">
+                          <StackPanel>
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding Summary}" Style="{StaticResource SubtleStyle}" Margin="0,2,0,0" />
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <TextBlock Text="No benchmark runs recorded yet. Completed runs appear here automatically and stay on this PC." Margin="0,4,0,0">
+                    <TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource SubtleStyle}"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers><DataTrigger Binding="{Binding HasBenchmarkHistory}" Value="False"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+                  </TextBlock>
                 </StackPanel>
               </Border>
               <Border Style="{StaticResource CardStyle}">

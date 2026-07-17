@@ -345,7 +345,7 @@ public sealed class UiPresentationTests
             "osd.test",
             DateTimeOffset.UtcNow,
             [
-                new OsdRenderedWidgetV1("cpu.temp", "CPU", "64.5 Â°C", 0, 1, "#FFB26B", SensorQuality.Good),
+                new OsdRenderedWidgetV1("cpu.temp", "CPU", "64.5 °C", 0, 1, "#FFB26B", SensorQuality.Good),
                 new OsdRenderedWidgetV1("gpu.power", "GPU", "--", 1, 0, "#8EC5FF", SensorQuality.Unavailable)
             ]);
 

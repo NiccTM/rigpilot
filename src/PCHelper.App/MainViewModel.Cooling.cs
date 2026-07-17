@@ -649,7 +649,7 @@ public sealed partial class MainViewModel
 
         if (!TryReadTuneLimits(out double temperatureCeiling, out double? powerCeiling))
         {
-            throw new InvalidOperationException("Enter a temperature ceiling from 40 to 100 Ã‚Â°C and an optional positive power ceiling.");
+            throw new InvalidOperationException("Enter a temperature ceiling from 40 to 100 °C and an optional positive power ceiling.");
         }
 
         TunePlan plan = CreateTunePlan(target, temperatureCeiling, powerCeiling);

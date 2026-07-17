@@ -165,9 +165,9 @@ public sealed partial class MainViewModel
         }
 
         string preview = string.Join(
-            " Ã‚Â· ",
+            " · ",
             _macroEditorSteps.Take(6).Select(DescribeMacroStep));
-        string suffix = _macroEditorSteps.Count > 6 ? " Ã‚Â· Ã¢â‚¬Â¦" : string.Empty;
+        string suffix = _macroEditorSteps.Count > 6 ? " · …" : string.Empty;
         MacroEditorSummary = $"{_macroEditorSteps.Count} typed step(s): {preview}{suffix}";
     }
 

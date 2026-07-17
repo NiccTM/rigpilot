@@ -190,7 +190,7 @@ public sealed partial class MainViewModel
         CapabilityDescriptor capability) => (_snapshot?.Sensors ?? [])
         .Where(sensor => string.Equals(sensor.AdapterId, capability.AdapterId, StringComparison.Ordinal)
             && string.Equals(sensor.DeviceId, capability.DeviceId, StringComparison.Ordinal)
-            && string.Equals(sensor.Unit, "Ã‚Â°C", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(sensor.Unit, "°C", StringComparison.OrdinalIgnoreCase)
             && sensor.Quality == SensorQuality.Good
             && sensor.Value.HasValue
             && !sensor.Name.Contains("Critical Temperature", StringComparison.OrdinalIgnoreCase)
@@ -228,7 +228,7 @@ public sealed partial class MainViewModel
         if (!TryReadTuneLimits(out double temperatureCeiling, out double? powerCeiling))
         {
             return HardwareOperationEligibility.Deny(
-                "Enter a temperature ceiling from 40 to 100 Ã‚Â°C and an optional positive power ceiling.");
+                "Enter a temperature ceiling from 40 to 100 °C and an optional positive power ceiling.");
         }
 
         return HardwareOperationEligibilityEvaluator.ForTuning(

@@ -18,6 +18,58 @@ namespace PCHelper.App;
 
 public sealed partial class MainViewModel
 {
+    // --- Benchmark history (local, bounded, never uploaded) -------------------
+
+    public ObservableCollection<BenchmarkHistoryEntryV1> BenchmarkHistoryEntries { get; } = new(BenchmarkHistory.Load());
+
+    private string _benchmarkCompareStatus = "Completed benchmark runs are recorded locally so the next run of the same game shows the change — e.g. after an undervolt preset.";
+
+    public string BenchmarkCompareStatus
+    {
+        get => _benchmarkCompareStatus;
+        private set => Set(ref _benchmarkCompareStatus, value);
+    }
+
+    public bool HasBenchmarkHistory => BenchmarkHistoryEntries.Count > 0;
+
+    private void RecordCompletedBenchmark(FrametimeBenchmarkStatusV1 status, string source)
+    {
+        if (status.State != FrametimeBenchmarkState.Completed
+            || string.IsNullOrWhiteSpace(status.ProcessName)
+            || status.SampleCount <= 0)
+        {
+            return;
+        }
+
+        BenchmarkHistoryEntryV1 entry = new(
+            BenchmarkHistoryEntryV1.CurrentSchemaVersion,
+            DateTimeOffset.Now,
+            source,
+            Path.GetFileName(status.ProcessName),
+            status.AverageFps ?? 0,
+            status.MinimumFps ?? 0,
+            status.MaximumFps ?? 0,
+            status.OnePercentLowFps ?? 0,
+            status.PointOnePercentLowFps ?? 0,
+            status.SampleCount,
+            status.DurationSeconds);
+        BenchmarkHistoryEntryV1[] current = [.. BenchmarkHistoryEntries];
+        if (BenchmarkHistory.IsDuplicateOfLatest(current, entry))
+        {
+            return;
+        }
+
+        BenchmarkCompareStatus = BenchmarkHistory.DescribeDelta(current, entry);
+        BenchmarkHistory.Append(current, entry);
+        BenchmarkHistoryEntries.Insert(0, entry);
+        while (BenchmarkHistoryEntries.Count > BenchmarkHistory.MaximumEntries)
+        {
+            BenchmarkHistoryEntries.RemoveAt(BenchmarkHistoryEntries.Count - 1);
+        }
+
+        OnPropertyChanged(nameof(HasBenchmarkHistory));
+    }
+
     private async Task ReadRtssFrameStatsCoreAsync()
     {
         IpcResponse response = await _userAgentClient.SendAsync(
@@ -60,6 +112,7 @@ public sealed partial class MainViewModel
 
     private void ApplyFrametimeBenchmarkStatus(FrametimeBenchmarkStatusV1 status)
     {
+        RecordCompletedBenchmark(status, "RTSS windows");
         IsFrametimeBenchmarkRunning = status.State == FrametimeBenchmarkState.Running;
         FrametimeBenchmarkStatus = status.State switch
         {
@@ -103,6 +156,7 @@ public sealed partial class MainViewModel
 
     private void ApplyPresentMonBenchmarkStatus(FrametimeBenchmarkStatusV1 status)
     {
+        RecordCompletedBenchmark(status, "PresentMon frames");
         IsPresentMonBenchmarkRunning = status.State == FrametimeBenchmarkState.Running;
         PresentMonBenchmarkStatus = status.State switch
         {

@@ -1630,7 +1630,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public string RgbCompatibilitySummary => !HasRgbRouteAssessments
         ? "Waiting for RGB inventory and standard-bridge discovery."
-        : $"{RgbReadyRouteCount} ready Ã‚Â· {RgbSetupRouteCount} setup needed Ã‚Â· {RgbReadOnlyRouteCount} direct qualification Ã‚Â· {RgbBlockedRouteCount} blocked. Manufacturer recognition never enables a raw USB write by itself.";
+        : $"{RgbReadyRouteCount} ready · {RgbSetupRouteCount} setup needed · {RgbReadOnlyRouteCount} direct qualification · {RgbBlockedRouteCount} blocked. Manufacturer recognition never enables a raw USB write by itself.";
 
     public DynamicLightingDevice? SelectedDynamicLightingDevice
     {
@@ -1911,7 +1911,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    /// <summary>Slider-friendly view of <see cref="MonitorBrightnessPercentText"/>; whole percent, clamped 0Ã¢â‚¬â€œ100.</summary>
+    /// <summary>Slider-friendly view of <see cref="MonitorBrightnessPercentText"/>; whole percent, clamped 0–100.</summary>
     public double MonitorBrightnessPercentValue
     {
         get => int.TryParse(MonitorBrightnessPercentText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int percent)
@@ -2153,7 +2153,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public string GameBundleSummary => SelectedGame is null
         ? "Select a local game to assign a profile, lighting scene, macro, OSD, and capture preset."
-        : $"{SelectedGameProfile?.Name ?? "No profile"} Ã‚Â· {SelectedGameLightingScene?.Name ?? "No scene"} Ã‚Â· {SelectedGameMacro?.Name ?? "No macro"} Ã‚Â· {SelectedGameOsdLayout?.Name ?? "No OSD"} Ã‚Â· {SelectedGameCapturePreset?.Name ?? "No capture"}";
+        : $"{SelectedGameProfile?.Name ?? "No profile"} · {SelectedGameLightingScene?.Name ?? "No scene"} · {SelectedGameMacro?.Name ?? "No macro"} · {SelectedGameOsdLayout?.Name ?? "No OSD"} · {SelectedGameCapturePreset?.Name ?? "No capture"}";
 
     public bool IsBusy
     {
@@ -2706,7 +2706,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public string CustomCoolingCurvePreview => TryReadCustomCoolingCurve(out CustomCoolingCurveDefinition? definition, out string error)
-        ? $"CPU/GPU maximum input Ã‚Â· {string.Join("  Ã‚Â·  ", definition!.Points.Select(point => $"{point.Input:0.#} Ã‚Â°C Ã¢â€ â€™ {point.Output:0.#}%"))}"
+        ? $"CPU/GPU maximum input · {string.Join("  ·  ", definition!.Points.Select(point => $"{point.Input:0.#} °C → {point.Output:0.#}%"))}"
         : error;
 
     public WpfPointCollection CustomCoolingCurvePreviewGeometry
@@ -2738,7 +2738,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         get
         {
             (double minimumDuty, double maximumDuty) = GetCustomCoolingCurveDutyRange();
-            return $"0Ã¢â‚¬â€œ110 Ã‚Â°C  Ã‚Â·  {minimumDuty:0.#}Ã¢â‚¬â€œ{maximumDuty:0.#}% controller range";
+            return $"0–110 °C  ·  {minimumDuty:0.#}–{maximumDuty:0.#}% controller range";
         }
     }
 
@@ -3041,7 +3041,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         private set => Set(ref _krakenLightingStatus, value);
     }
 
-    private string _krakenLightingStatus = "RigPilot's own Kraken X3 adapter writes a fixed ring+logo colour directly over HID Ã¢â‚¬â€ no OpenRGB needed. Lighting only; the pump is untouched. Requires Hardware control.";
+    private string _krakenLightingStatus = "RigPilot's own Kraken X3 adapter writes a fixed ring+logo colour directly over HID — no OpenRGB needed. Lighting only; the pump is untouched. Requires Hardware control.";
 
     /// <summary>
     /// Native (non-OpenRGB) Kraken X3 lighting write through the service and
@@ -3133,8 +3133,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             : "No competing lighting writer or local OpenRGB bridge is active.";
 
     public string OpenRgbConnectionLabel => OpenRgbConnected
-        ? $"Connected Ã‚Â· {OpenRgbControllerCount} controller{(OpenRgbControllerCount == 1 ? string.Empty : "s")}"
-        : OpenRgbEnabled ? "Enabled Ã‚Â· not connected" : "Disabled";
+        ? $"Connected · {OpenRgbControllerCount} controller{(OpenRgbControllerCount == 1 ? string.Empty : "s")}"
+        : OpenRgbEnabled ? "Enabled · not connected" : "Disabled";
 
     public bool AreOpenRgbInputsValid => TryParseOpenRgbInputs(out _, out _);
 
@@ -3223,7 +3223,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     public bool HasManualOverride => !string.IsNullOrWhiteSpace(_manualProfileId);
 
     public string ManualOverrideLabel => HasManualOverride
-        ? $"Manual override Ã‚Â· {Profiles.FirstOrDefault(profile => profile.Id == _manualProfileId)?.Name ?? _manualProfileId}"
+        ? $"Manual override · {Profiles.FirstOrDefault(profile => profile.Id == _manualProfileId)?.Name ?? _manualProfileId}"
         : "Automation owns profile selection";
 
     public bool CanAddAutomationRule
@@ -3346,13 +3346,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             int experimental = CapabilityDecisions.Count(item => item.AccessState == CapabilityAccessState.Experimental);
             int blocked = CapabilityDecisions.Count(item => item.AccessState is CapabilityAccessState.Blocked or CapabilityAccessState.Faulted);
             int readOnly = CapabilityDecisions.Count(item => item.AccessState is CapabilityAccessState.ReadOnly or CapabilityAccessState.Unsupported);
-            return $"{verified} verified Ã‚Â· {experimental} experimental Ã‚Â· {blocked} blocked/faulted Ã‚Â· {readOnly} read-only/unsupported";
+            return $"{verified} verified · {experimental} experimental · {blocked} blocked/faulted · {readOnly} read-only/unsupported";
         }
     }
 
     public string ExperimentalControlSummary => ExperimentalControlCount == 0
         ? "No Experimental hardware controls were detected."
-        : $"{ExperimentalControlCount} detected Ã‚Â· {CommissioningEligibleExperimentalControlCount} can enter the cooling commissioning workflow Ã‚Â· {ProtectedExperimentalControlCount} protected";
+        : $"{ExperimentalControlCount} detected · {CommissioningEligibleExperimentalControlCount} can enter the cooling commissioning workflow · {ProtectedExperimentalControlCount} protected";
 
     public string ExperimentalGateBadge => ExperimentalControlCount == 0
         ? "NO EXPERIMENTAL CONTROLS"
@@ -3410,7 +3410,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public string OperationTitle => _operation is null
         ? "No operation has run"
-        : $"{SplitWords(_operation.Kind.ToString())} Ã‚Â· {SplitWords(_operation.State.ToString())}";
+        : $"{SplitWords(_operation.Kind.ToString())} · {SplitWords(_operation.State.ToString())}";
 
     public string OperationMessage => _operation?.Message ?? "Select an eligible control to begin.";
 
@@ -3420,7 +3420,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public double OperationProgress => _operation?.ProgressPercent ?? 0;
 
-    public string OperationProgressText => _operation is null ? "Ã¢â‚¬â€" : $"{_operation.ProgressPercent:0}%";
+    public string OperationProgressText => _operation is null ? "—" : $"{_operation.ProgressPercent:0}%";
 
     public bool HasCalibrationResult => _operation?.CalibrationResult is not null;
 
@@ -3445,7 +3445,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             {
                 return $"Calibration measurements are recorded only; maximum observed {result.MaximumRpm:0} RPM. {restart}";
             }
-            return $"Recommended floor {result.MinimumDutyPercent:0}% Ã‚Â· maximum observed {result.MaximumRpm:0} RPM Ã‚Â· {restart}";
+            return $"Recommended floor {result.MinimumDutyPercent:0}% · maximum observed {result.MaximumRpm:0} RPM · {restart}";
         }
     }
 
@@ -3535,7 +3535,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public string AppVersion => _serviceCompatibility.ClientVersion;
 
-    public string StateRevisionText => _status is null ? "Ã¢â‚¬â€" : _status.StateRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public string StateRevisionText => _status is null ? "—" : _status.StateRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     public string ServiceUptimeText
     {
@@ -3674,7 +3674,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
 
-        HidInventoryStatus = "Scanning connected peripheralsÃ¢â‚¬Â¦";
+        HidInventoryStatus = "Scanning connected peripherals…";
         IpcResponse response = await _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(IpcCommand.DiscoverHidInventory),
             _lifetime.Token);
@@ -3695,7 +3695,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             .GroupBy(device => (device.VendorId, device.ProductId, device.ProductName))
             .Select(group => new HidDeviceDisplay(
                 string.IsNullOrWhiteSpace(group.Key.ProductName) ? "Unnamed HID device" : group.Key.ProductName!,
-                $"VID {group.Key.VendorId:X4}  Ã‚Â·  PID {group.Key.ProductId:X4}",
+                $"VID {group.Key.VendorId:X4}  ·  PID {group.Key.ProductId:X4}",
                 string.Join(", ", group
                     .Select(device => device.DeviceClass)
                     .Distinct()
@@ -3723,7 +3723,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
 
-        KrakenTelemetryStatus = "Reading streamed Kraken statusÃ¢â‚¬Â¦";
+        KrakenTelemetryStatus = "Reading streamed Kraken status…";
         IpcResponse response = await _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(IpcCommand.ReadKrakenTelemetry),
             _lifetime.Token);
@@ -3731,7 +3731,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         KrakenTelemetryV1 result = IpcJson.FromElement<KrakenTelemetryV1>(response.Payload)
             ?? throw new InvalidDataException("Service returned an empty Kraken telemetry result.");
         KrakenTelemetryStatus = result.Outcome == KrakenTelemetryOutcome.Succeeded
-            ? $"{result.ProductName ?? "Kraken"}: liquid {result.LiquidTemperatureCelsius:0.0} Ã‚Â°C, pump {result.PumpSpeedRpm} rpm at {result.PumpDutyPercent}% duty. Read-only; no report was written to the cooler."
+            ? $"{result.ProductName ?? "Kraken"}: liquid {result.LiquidTemperatureCelsius:0.0} °C, pump {result.PumpSpeedRpm} rpm at {result.PumpDutyPercent}% duty. Read-only; no report was written to the cooler."
             : result.Message;
     }
 
@@ -4744,7 +4744,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private static string OsdColourFor(string unit) => unit switch
     {
-        "Ã‚Â°C" => "#FFB26B",
+        "°C" => "#FFB26B",
         "RPM" => "#7EE7C5",
         "W" => "#8EC5FF",
         "%" => "#D5AEFF",
@@ -5240,8 +5240,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         DeviceCompatibilitySummary = compatibleFamilies.Length == 0
             ? "No classified desktop families detected"
             : totalCompatibleFamilies > compatibleFamilies.Length
-                ? $"{string.Join(" Ã‚Â· ", compatibleFamilies)} +{totalCompatibleFamilies - compatibleFamilies.Length}"
-                : string.Join(" Ã‚Â· ", compatibleFamilies);
+                ? $"{string.Join(" · ", compatibleFamilies)} +{totalCompatibleFamilies - compatibleFamilies.Length}"
+                : string.Join(" · ", compatibleFamilies);
         OnPropertyChanged(nameof(HasDevices));
     }
 
@@ -5603,7 +5603,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             .OrderBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
             .Take(6);
         IEnumerable<SensorSample> liquid = candidates
-            .Where(sensor => NormaliseUnit(sensor.Unit) == "Ã‚Â°C" && sensor.Value > 1 && sensor.Value < 130
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "°C" && sensor.Value > 1 && sensor.Value < 130
                 && (sensor.Name.Contains("liquid", StringComparison.OrdinalIgnoreCase)
                     || sensor.Name.Contains("coolant", StringComparison.OrdinalIgnoreCase)
                     || sensor.Name.Contains("water", StringComparison.OrdinalIgnoreCase)))
@@ -5650,7 +5650,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    /// Deduplicated finite Good-quality samples from named devices Ã¢â‚¬â€ the shared
+    /// Deduplicated finite Good-quality samples from named devices — the shared
     /// candidate pool for curated cards. The unit is part of the dedupe key: a
     /// fan tachometer (RPM) and its duty control (%) legitimately share a name.
     /// </summary>

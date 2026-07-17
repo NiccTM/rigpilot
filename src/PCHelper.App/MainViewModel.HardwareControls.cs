@@ -245,9 +245,9 @@ public sealed partial class MainViewModel
 
     /// <summary>
     /// One-click automatic cooling mode: builds and applies a conservative
-    /// temperatureâ†’duty graph (50% safety floor, full maximum for emergency
+    /// temperature→duty graph (50% safety floor, full maximum for emergency
     /// headroom) through the service graph engine, which keeps read-back
-    /// verification and the stale-sensor â†’ maximum-cooling protection. GPU mode
+    /// verification and the stale-sensor → maximum-cooling protection. GPU mode
     /// binds the armed GPU fan to GPU temperature; case-fan mode binds every
     /// writable motherboard fan output to the maximum of CPU and GPU
     /// temperature. Pump and CPU-fan role protections are enforced service-side.
@@ -422,7 +422,7 @@ public sealed partial class MainViewModel
     // --- NZXT Kraken pump control ---------------------------------------------
 
     private double _krakenPumpDutyTarget = 100;
-    private string _krakenPumpStatus = "Pump duty 60â€“100%. The write is read back from the cooler's own status stream; the pump is never slowed below the floor or stopped.";
+    private string _krakenPumpStatus = "Pump duty 60–100%. The write is read back from the cooler's own status stream; the pump is never slowed below the floor or stopped.";
 
     public double KrakenPumpDutyTarget
     {
@@ -467,7 +467,7 @@ public sealed partial class MainViewModel
 
     /// <summary>
     /// One-click GPU auto-OC: targets the armed core clock offset with the
-    /// existing bounded tuning engine (Performance objective, 83 Â°C ceiling,
+    /// existing bounded tuning engine (Performance objective, 83 °C ceiling,
     /// 10-minute screening, WHEA/thermal/display-reset aborts, rollback, boot
     /// sentinel). The Hardware-control switch supplies the acknowledgements.
     /// </summary>
