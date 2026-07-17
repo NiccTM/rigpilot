@@ -1889,6 +1889,32 @@
                             automation:AutomationProperties.Name="Turn AURA lighting off via native adapter" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
+                  <TextBlock Text="GPU SAG BRACKET — COOLER MASTER ARGB (VIA AURA HEADER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="The bracket is a passive ARGB strip driven by the Aura header it's plugged into. Pick the header, then apply — the other header keeps its colour."
+                             Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,6" />
+                  <WrapPanel>
+                    <ComboBox SelectedIndex="{Binding GpuBracketHeaderIndex}" Width="110" Margin="0,0,8,8" VerticalAlignment="Center"
+                              ToolTip="Which addressable Aura header the GPU sag bracket's 3-pin ARGB cable is plugged into"
+                              automation:AutomationProperties.Name="GPU sag bracket header selection" automation:AutomationProperties.AutomationId="Lighting.GpuBracketHeader">
+                      <ComboBoxItem Content="Header 1" />
+                      <ComboBoxItem Content="Header 2" />
+                    </ComboBox>
+                    <Button Content="Apply to bracket" Command="{Binding ApplyGpuBracketCommand}" Margin="0,0,8,8"
+                            ToolTip="Writes the static colour to only the selected addressable header — the one the Cooler Master GPU sag bracket is on. No read-back; confirm visually."
+                            automation:AutomationProperties.Name="Apply static colour to the GPU sag bracket header" automation:AutomationProperties.AutomationId="Lighting.ApplyGpuBracket" />
+                    <Button Content="Bracket lighting off" Command="{Binding ApplyGpuBracketCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn the GPU sag bracket header lighting off" automation:AutomationProperties.AutomationId="Lighting.GpuBracketOff" />
+                  </WrapPanel>
+                  <Separator Margin="0,4" />
+                  <TextBlock Text="NATIVE RAM RGB — TRIDENT Z (RIGPILOT SMBUS ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <WrapPanel>
+                    <Button Content="Apply to RAM" Command="{Binding ApplyDimmRgbCommand}" Margin="0,0,8,8"
+                            ToolTip="Writes the static colour to the G.Skill Trident Z RGB sticks through RigPilot's own SMBus adapter (signed PawnIO transport, identity-verified ENE controller, first-light audited on this kit). All sticks change together; there is no read-back, so confirm visually."
+                            automation:AutomationProperties.Name="Apply static colour to Trident Z RAM via native SMBus adapter" automation:AutomationProperties.AutomationId="Lighting.ApplyDimmRgb" />
+                    <Button Content="RAM lighting off" Command="{Binding ApplyDimmRgbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn Trident Z RAM lighting off via native SMBus adapter" automation:AutomationProperties.AutomationId="Lighting.DimmRgbOff" />
+                  </WrapPanel>
+                  <Separator Margin="0,4" />
                   <TextBlock Text="NATIVE RAZER CHROMA (OFFICIAL SDK)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding RazerChromaStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" />
                   <Button Content="Apply to Razer Chroma" Command="{Binding ApplyRazerChromaCommand}" HorizontalAlignment="Left"

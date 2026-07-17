@@ -255,6 +255,95 @@ public sealed partial class MainViewModel
         ShowNotice(result.Message, result.Outcome == KrakenLightingOutcome.WriteIssued ? "Success" : "Warning");
     }
 
+    // --- GPU sag bracket (passive ARGB on one addressable header) -------------
+
+    private int _gpuBracketHeader = 1;
+
+    /// <summary>1-based addressable header the Cooler Master GPU sag bracket is plugged into.</summary>
+    public int GpuBracketHeader
+    {
+        get => _gpuBracketHeader;
+        set
+        {
+            if (Set(ref _gpuBracketHeader, Math.Clamp(value, 1, AuraLightingRequestV1.HeaderCount)))
+            {
+                OnPropertyChanged(nameof(GpuBracketHeaderIndex));
+            }
+        }
+    }
+
+    /// <summary>0-based view of <see cref="GpuBracketHeader"/> for ComboBox SelectedIndex binding.</summary>
+    public int GpuBracketHeaderIndex
+    {
+        get => GpuBracketHeader - 1;
+        set => GpuBracketHeader = value + 1;
+    }
+
+    private AsyncCommand? _applyGpuBracketCommand;
+
+    public ICommand ApplyGpuBracketCommand => _applyGpuBracketCommand ??= new AsyncCommand(
+        parameter => ApplyGpuBracketAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    public async Task ApplyGpuBracketAsync(bool turnOff)
+    {
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.SetAuraLighting,
+                new AuraLightingRequestV1(
+                    AuraLightingRequestV1.CurrentSchemaVersion,
+                    OpenRgbColour,
+                    turnOff,
+                    ConfirmExperimental: true,
+                    AuraLightingRequestV1.ExactDeviceId,
+                    GpuBracketHeader)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        AuraLightingResultV1 result = IpcJson.FromElement<AuraLightingResultV1>(response.Payload)
+            ?? throw new InvalidDataException("The service returned an empty AURA lighting result.");
+        ShowNotice(result.Message, result.Outcome == KrakenLightingOutcome.WriteIssued ? "Success" : "Warning");
+    }
+
+    // --- Native DIMM RGB (Trident Z RGB over SMBus, RigPilot in-house) --------
+
+    private AsyncCommand? _applyDimmRgbCommand;
+
+    public ICommand ApplyDimmRgbCommand => _applyDimmRgbCommand ??= new AsyncCommand(
+        parameter => ApplyDimmRgbAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    public async Task ApplyDimmRgbAsync(bool turnOff)
+    {
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.SetDimmRgb,
+                new DimmRgbRequestV1(
+                    DimmRgbRequestV1.CurrentSchemaVersion,
+                    OpenRgbColour,
+                    turnOff,
+                    ConfirmExperimental: true,
+                    DimmRgbRequestV1.ExactDeviceId)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        DimmRgbResultV1 result = IpcJson.FromElement<DimmRgbResultV1>(response.Payload)
+            ?? throw new InvalidDataException("The service returned an empty DIMM RGB result.");
+        ShowNotice(result.Message, result.WriteIssued ? "Success" : "Warning");
+    }
+
     // --- Native Razer Chroma lighting (official REST SDK) ---------------------
 
     private string _razerChromaStatus = "Applies a static colour to every Razer Chroma device — the Lian Li O11 Razer Edition, keyboards, mice, and headsets — through Razer's official Chroma SDK. Needs Razer Synapse running.";

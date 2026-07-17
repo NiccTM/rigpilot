@@ -103,10 +103,26 @@ public sealed class SmbusRgbTests
         FakeSmbusTransport transport = new();
         SmbusRgbWriter writer = new(transport);
 
-        SmbusRgbResult result = writer.WriteStaticColour([0x70], "F4-4000C15-8GTZR", 0x0A, 0x84, 0xFF);
+        // A kit that has never had a witnessed first-light.
+        SmbusRgbResult result = writer.WriteStaticColour([0x70], "F4-3600C16-8GVKC", 0x0A, 0x84, 0xFF);
 
         Assert.Equal(SmbusRgbOutcome.ProtocolNotAudited, result.Outcome);
         Assert.Empty(transport.Transactions); // nothing reached the bus
+    }
+
+    [Fact]
+    public void AuditedReferenceKitWritesThroughTheNormalGatedPath()
+    {
+        // F4-4000C15-8GTZR passed its witnessed first-light on 2026-07-17
+        // (DIMM_LED-0103 at 0x77, operator visually confirmed).
+        Assert.True(EneSmbusRgbProtocol.IsKitAudited(EneSmbusRgbProtocol.ReferenceKitPartNumber));
+
+        FakeSmbusTransport transport = new();
+        SmbusRgbResult result = new SmbusRgbWriter(transport).WriteStaticColour(
+            [0x77], EneSmbusRgbProtocol.ReferenceKitPartNumber, 0xFF, 0x00, 0x00);
+
+        Assert.Equal(SmbusRgbOutcome.WriteIssued, result.Outcome);
+        Assert.Equal(20, result.WritesIssued);
     }
 
     [Fact]

@@ -114,7 +114,10 @@ public sealed class VendorControlEligibilityAdapter : IHardwareAdapter
                 }
 
                 string deviceId = StableIds.Create("memory", manufacturer, partNumber);
-                string reason = $"G.Skill Trident Z RGB ({partNumber}) is recognized. Its RGB controllers sit on the system SMBus at addresses 0x70-0x77. RigPilot's SMBus write path is default-deny address-gated (SPD/thermal/PMIC ranges permanently blocked) and rule-compliant via signed PawnIO, but a live write stays gated until a signed PawnIO SMBus module and a witnessed first-light exist. No SPD or sensor address is ever written.";
+                bool audited = EneSmbusRgbProtocol.IsKitAudited(partNumber);
+                string reason = audited
+                    ? $"G.Skill Trident Z RGB ({partNumber}) is controllable: this kit passed its witnessed first-light (ENE 'DIMM_LED-0103' identified over signed PawnIO SMBus) and static colour is available from the Lighting page. Writes are default-deny address-gated — no SPD, thermal, or PMIC address is ever written — and all sticks change together at the factory-default controller address."
+                    : $"G.Skill Trident Z RGB ({partNumber}) is recognized. Its RGB controllers sit on the system SMBus at addresses 0x70-0x77. RigPilot's SMBus write path is default-deny address-gated (SPD/thermal/PMIC ranges permanently blocked) and rule-compliant via signed PawnIO, but a live write stays gated until this exact kit passes a witnessed first-light. No SPD or sensor address is ever written.";
                 capabilities.Add(Feasibility(
                     $"gskill.tridentz.rgb.feasibility:{deviceId}",
                     deviceId,

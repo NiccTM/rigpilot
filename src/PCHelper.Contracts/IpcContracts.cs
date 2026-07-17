@@ -143,7 +143,8 @@ public enum IpcCommand
     SetKrakenPumpDuty,
     SetAuraLighting,
     StopConflictingProcesses,
-    GetStorageHealth
+    GetStorageHealth,
+    SetDimmRgb
 }
 
 public static class ProtocolConstants

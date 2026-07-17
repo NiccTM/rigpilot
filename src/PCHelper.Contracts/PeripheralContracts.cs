@@ -311,16 +311,22 @@ public sealed record AuraLightingRequestV1(
     string Colour,
     bool TurnOff,
     bool ConfirmExperimental,
-    string? ConfirmDeviceId)
+    string? ConfirmDeviceId,
+    int? HeaderIndex = null)
 {
     public const int CurrentSchemaVersion = 1;
     public const string ExactDeviceId = "asus:aura-usb";
+    public const int HeaderCount = 2;
 
     public string? Validate()
     {
         if (SchemaVersion != CurrentSchemaVersion)
         {
             return $"Unsupported AURA lighting request schema {SchemaVersion}.";
+        }
+        if (HeaderIndex is < 1 or > HeaderCount)
+        {
+            return $"Addressable header must be 1..{HeaderCount} (or omitted for both).";
         }
         if (!ConfirmExperimental)
         {
@@ -351,6 +357,62 @@ public sealed record AuraLightingResultV1(
 
     public static AuraLightingResultV1 Unavailable(KrakenLightingOutcome outcome, string message) =>
         new(CurrentSchemaVersion, outcome, null, message);
+}
+
+/// <summary>
+/// Requests a DIMM RGB static-colour write over the system SMBus (G.Skill
+/// Trident Z RGB / ENE). Experimental and exact-device confirmed like the
+/// other native lighting requests. The write path is quadruple-gated: signed
+/// PawnIO transport, default-deny address policy, read-only detection +
+/// device-name identity check, and the per-kit first-light audit.
+/// </summary>
+public sealed record DimmRgbRequestV1(
+    int SchemaVersion,
+    string Colour,
+    bool TurnOff,
+    bool ConfirmExperimental,
+    string? ConfirmDeviceId)
+{
+    public const int CurrentSchemaVersion = 1;
+    public const string ExactDeviceId = "gskill:tridentz-rgb-smbus";
+
+    public string? Validate()
+    {
+        if (SchemaVersion != CurrentSchemaVersion)
+        {
+            return $"Unsupported DIMM RGB request schema {SchemaVersion}.";
+        }
+        if (!ConfirmExperimental)
+        {
+            return "Native DIMM RGB is Experimental and requires explicit confirmation.";
+        }
+        if (!string.Equals(ConfirmDeviceId, ExactDeviceId, StringComparison.Ordinal))
+        {
+            return $"DIMM RGB requires exact-device confirmation for '{ExactDeviceId}'.";
+        }
+
+        return null;
+    }
+}
+
+/// <summary>
+/// Result of a DIMM RGB SMBus write. Outcome is the writer's outcome name
+/// (WriteIssued / NoTransport / ProtocolNotAudited / AddressRefused /
+/// DeviceNotFound / Failed); like all native lighting there is no firmware
+/// read-back, so a result never claims verification.
+/// </summary>
+public sealed record DimmRgbResultV1(
+    int SchemaVersion,
+    string Outcome,
+    int TransactionsIssued,
+    string Message)
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public bool WriteIssued => string.Equals(Outcome, "WriteIssued", StringComparison.Ordinal);
+
+    public static DimmRgbResultV1 Unavailable(string outcome, string message) =>
+        new(CurrentSchemaVersion, outcome, 0, message);
 }
 
 public sealed record StopConflictingProcessesResultV1(

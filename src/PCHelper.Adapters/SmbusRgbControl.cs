@@ -49,8 +49,14 @@ public static class EneSmbusRgbProtocol
     public const string ReferenceKitPartNumber = "F4-4000C15-8GTZR";
 
     // Kits whose register map has been verified at a witnessed first-light.
-    // Empty until that evidence exists — no kit is transmitted to on a guess.
-    private static readonly HashSet<string> AuditedKits = new(StringComparer.OrdinalIgnoreCase);
+    // F4-4000C15-8GTZR: verified 2026-07-17 on the reference rig — controller
+    // identified as 'DIMM_LED-0103' at 0x77 (factory default, all four sticks
+    // in unison), 20-transaction static-colour plan transmitted, operator
+    // visually confirmed all sticks turned the requested colour.
+    private static readonly HashSet<string> AuditedKits = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ReferenceKitPartNumber,
+    };
 
     /// <summary>SMBus command that latches the 16-bit ENE register pointer (byte-swapped word).</summary>
     public const byte PointerCommand = 0x00;

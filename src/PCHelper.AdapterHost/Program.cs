@@ -70,8 +70,11 @@ if (args.Contains("--set-aura-rgb", StringComparer.OrdinalIgnoreCase))
     // Lighting registers only, no EEPROM/save command, contained by the parent.
     int auraArgumentIndex = Array.FindIndex(args, argument => string.Equals(argument, "--set-aura-rgb", StringComparison.OrdinalIgnoreCase));
     string auraValue = auraArgumentIndex >= 0 && auraArgumentIndex + 1 < args.Length ? args[auraArgumentIndex + 1] : string.Empty;
-    bool auraOff = string.Equals(auraValue, "off", StringComparison.OrdinalIgnoreCase);
-    AuraLightingResultV1 aura = AuraUsbLightingWriter.Write(auraOff ? string.Empty : auraValue, auraOff);
+    // Target forms: RRGGBB, off, RRGGBB@1, off@2 — the @N suffix drives one
+    // header only (e.g. a passive ARGB GPU sag bracket on that header).
+    AuraLightingResultV1 aura = AuraUsbLightingWriter.TryParseTarget(auraValue, out string auraColour, out bool auraOff, out int? auraHeader)
+        ? AuraUsbLightingWriter.Write(auraColour, auraOff, auraHeader)
+        : AuraLightingResultV1.Unavailable(KrakenLightingOutcome.Failed, $"'{auraValue}' is not RRGGBB, off, RRGGBB@1, or off@2.");
     Console.WriteLine(JsonSerializer.Serialize(aura, JsonDefaults.Options));
     return;
 }
@@ -100,6 +103,26 @@ if (args.Contains("--probe-smbus-rgb", StringComparer.OrdinalIgnoreCase))
     // bus. A native PawnIO fault is contained by the parent.
     SmbusRgbProbeResultV1 smbusProbe = SmbusRgbDetection.Probe();
     Console.WriteLine(JsonSerializer.Serialize(smbusProbe, JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--set-smbus-rgb", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable DIMM RGB child: the production audited path. Detection +
+    // device-name identity gates run first; colour is transmitted only to an
+    // identity-confirmed ENE controller on an audited kit, and the address
+    // policy re-checks every transaction. 'off' writes black.
+    int dimmIndex = Array.FindIndex(args, argument => string.Equals(argument, "--set-smbus-rgb", StringComparison.OrdinalIgnoreCase));
+    string dimmValue = dimmIndex >= 0 && dimmIndex + 1 < args.Length ? args[dimmIndex + 1] : string.Empty;
+    if (string.Equals(dimmValue, "off", StringComparison.OrdinalIgnoreCase))
+    {
+        dimmValue = "000000";
+    }
+
+    SmbusRgbFirstLightResultV1 dimm = SmbusRgbFirstLight.Apply(dimmValue);
+    Console.WriteLine(JsonSerializer.Serialize(
+        new DimmRgbResultV1(DimmRgbResultV1.CurrentSchemaVersion, dimm.WriteOutcome, dimm.TransactionsIssued, dimm.Message),
+        JsonDefaults.Options));
     return;
 }
 
