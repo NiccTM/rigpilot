@@ -961,8 +961,8 @@
                       </Style.Triggers>
                     </Style>
                   </Border.Style>
-                  <TextBlock Style="{StaticResource BadgeTextStyle}">
-                    <TextBlock.Resources>
+                  <TextBlock>
+                    <TextBlock.Style>
                       <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeTextStyle}">
                         <Setter Property="Text" Value="TURN ON HARDWARE CONTROL" />
                         <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
@@ -973,7 +973,7 @@
                           </DataTrigger>
                         </Style.Triggers>
                       </Style>
-                    </TextBlock.Resources>
+                    </TextBlock.Style>
                   </TextBlock>
                 </Border>
               </Grid>
@@ -1434,8 +1434,8 @@
                       </Style.Triggers>
                     </Style>
                   </Border.Style>
-                  <TextBlock Style="{StaticResource BadgeTextStyle}">
-                    <TextBlock.Resources>
+                  <TextBlock>
+                    <TextBlock.Style>
                       <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeTextStyle}">
                         <Setter Property="Text" Value="TURN ON HARDWARE CONTROL" />
                         <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
@@ -1446,7 +1446,7 @@
                           </DataTrigger>
                         </Style.Triggers>
                       </Style>
-                    </TextBlock.Resources>
+                    </TextBlock.Style>
                   </TextBlock>
                 </Border>
               </Grid>

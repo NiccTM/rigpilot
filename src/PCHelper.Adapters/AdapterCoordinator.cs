@@ -64,14 +64,25 @@ public sealed class AdapterCoordinator : IAsyncDisposable
     /// refresh one adapter's state synchronously (for example immediately after arming GPU
     /// fan control) without the cost of re-probing every adapter.
     /// </summary>
+    public static Task<IReadOnlyList<CapabilityDescriptor>> CaptureAdapterCapabilitiesAsync(
+        IHardwareAdapter adapter,
+        CancellationToken cancellationToken) =>
+        CaptureAdapterCapabilitiesAsync(adapter, conflicts: null, cancellationToken);
+
+    /// <summary>
+    /// Seam overload: <paramref name="conflicts"/> replaces the live process scan so
+    /// deterministic tests do not depend on which fan/RGB applications happen to be
+    /// running on the machine. Production callers pass null for the real detector.
+    /// </summary>
     public static async Task<IReadOnlyList<CapabilityDescriptor>> CaptureAdapterCapabilitiesAsync(
         IHardwareAdapter adapter,
+        IReadOnlyList<ConflictDescriptor>? conflicts,
         CancellationToken cancellationToken)
     {
         AdapterProbeResult probe = await adapter.ProbeAsync(cancellationToken).ConfigureAwait(false);
-        IReadOnlyList<ConflictDescriptor> conflicts = ConflictDetector.Detect();
+        IReadOnlyList<ConflictDescriptor> resolved = conflicts ?? ConflictDetector.Detect();
         return probe.Capabilities
-            .Select(capability => ApplyConflictOwnership(capability, conflicts))
+            .Select(capability => ApplyConflictOwnership(capability, resolved))
             .ToArray();
     }
 
