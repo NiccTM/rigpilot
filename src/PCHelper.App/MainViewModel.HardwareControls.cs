@@ -260,6 +260,42 @@ public sealed partial class MainViewModel
     private static CoolingCurveMode ParseCoolingCurveMode(object? parameter) =>
         Enum.TryParse(parameter as string, ignoreCase: true, out CoolingCurveMode mode) ? mode : CoolingCurveMode.Balanced;
 
+    /// <summary>
+    /// Explains why an automatic fan mode has no usable output: a competing
+    /// controller holding the fans (the common case — RigPilot blocks only
+    /// overlapping controls and never fights another writer) names the blocker
+    /// and points at Close blockers; a genuinely absent control says so.
+    /// </summary>
+    private string DescribeUnavailableFanOutputs(IReadOnlyList<CapabilityDescriptor> candidates, bool gpuFans)
+    {
+        string label = gpuFans ? "GPU fan control" : "motherboard fan control";
+        string? owner = DescribeConflictOwners(candidates);
+        if (owner is not null)
+        {
+            return $"{label} is blocked by {owner}. Close the competing app — Diagnostics has a \"Close blockers\" button — or stop it, then refresh.";
+        }
+
+        if (!HardwareControlEnabled)
+        {
+            return $"No armed {label} is available. Turn on Hardware control in the header, then refresh.";
+        }
+
+        return gpuFans
+            ? "No GPU fan control was reported on this system. Refresh after the GPU is detected."
+            : "No writable motherboard fan outputs were reported on this system.";
+    }
+
+    /// <summary>The distinct competing-writer names across any Blocked capabilities, or null when none is blocked.</summary>
+    private static string? DescribeConflictOwners(IReadOnlyList<CapabilityDescriptor> candidates)
+    {
+        string[] owners = [.. candidates
+            .Where(capability => capability.State == CapabilityAccessState.Blocked
+                && !string.IsNullOrWhiteSpace(capability.ConflictOwner))
+            .SelectMany(capability => capability.ConflictOwner!.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+        return owners.Length == 0 ? null : string.Join(", ", owners);
+    }
+
     public async Task StartAutomaticCoolingAsync(bool gpuFans, CoolingCurveMode mode = CoolingCurveMode.Balanced)
     {
         if (!HardwareControlEnabled)
@@ -272,22 +308,19 @@ public sealed partial class MainViewModel
             return;
         }
 
-        CapabilityDescriptor[] outputs = gpuFans
-            ? [.. _snapshot.Capabilities.Where(capability =>
-                capability.Id.StartsWith("gpufan.duty:", StringComparison.Ordinal)
-                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
-                && capability.Range is NumericRange)]
-            : [.. _snapshot.Capabilities.Where(capability =>
-                capability.Id.StartsWith("lhm.control:", StringComparison.Ordinal)
+        bool IsFanOutput(CapabilityDescriptor capability) => gpuFans
+            ? capability.Id.StartsWith("gpufan.duty:", StringComparison.Ordinal) && capability.Range is NumericRange
+            : capability.Id.StartsWith("lhm.control:", StringComparison.Ordinal)
                 && capability.Domain == ControlDomain.Cooling
-                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
                 && capability.Range is NumericRange
-                && !capability.Id.Contains("/gpu-nvidia/", StringComparison.Ordinal))];
+                && !capability.Id.Contains("/gpu-nvidia/", StringComparison.Ordinal);
+
+        CapabilityDescriptor[] candidates = [.. _snapshot.Capabilities.Where(IsFanOutput)];
+        CapabilityDescriptor[] outputs = [.. candidates.Where(capability =>
+            capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified)];
         if (outputs.Length == 0)
         {
-            ShowNotice(gpuFans
-                ? "No armed GPU fan control is available. Turn on Hardware control and refresh."
-                : "No writable motherboard fan outputs are available.", "Warning");
+            ShowNotice(DescribeUnavailableFanOutputs(candidates, gpuFans), "Warning");
             return;
         }
 
@@ -525,7 +558,15 @@ public sealed partial class MainViewModel
             item => item.Descriptor.Id.StartsWith(capabilityPrefix, StringComparison.Ordinal));
         if (target is null)
         {
-            ShowNotice($"The {label} target is not available on this system.", "Warning");
+            // The tuning target list only carries armable controls; if the
+            // capability exists but is blocked by a competing writer, say so.
+            CapabilityDescriptor? blocked = _snapshot?.Capabilities.FirstOrDefault(capability =>
+                capability.Id.StartsWith(capabilityPrefix, StringComparison.Ordinal)
+                && capability.State == CapabilityAccessState.Blocked);
+            string owner = blocked?.ConflictOwner is { Length: > 0 } conflict ? conflict : string.Empty;
+            ShowNotice(owner.Length > 0
+                ? $"{label} tuning is blocked by {owner}. Close the competing app (Diagnostics has a \"Close blockers\" button) or stop it, then refresh."
+                : $"The {label} target is not available on this system.", "Warning");
             return;
         }
 

@@ -3287,6 +3287,33 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public ICommand CloseBlockersCommand => _closeBlockersCommand;
 
+    /// <summary>
+    /// Quick, one-click "close conflicting apps" for the Performance and Cooling
+    /// pages (G-Helper style): available whenever a detected controller is
+    /// running, without the separate Diagnostics acknowledgement checkbox — the
+    /// click is the explicit action, and it is exactly equivalent to closing the
+    /// app in Task Manager (relaunching hands control back).
+    /// </summary>
+    public ICommand CloseConflictingAppsCommand => _closeConflictingAppsCommand ??= new AsyncCommand(
+        _ => TerminateConflictingProcessesAsync(),
+        _ => IsServiceOnline && RunningConflictCount > 0,
+        ReportError);
+
+    private AsyncCommand? _closeConflictingAppsCommand;
+
+    /// <summary>The distinct running conflicting-controller names, for button labels and tooltips.</summary>
+    public string RunningConflictSummary => string.Join(", ", _snapshot?.Conflicts
+        .Where(conflict => conflict.IsRunning)
+        .Select(conflict => conflict.DisplayName)
+        .Distinct(StringComparer.OrdinalIgnoreCase) ?? []);
+
+    public string CloseConflictingAppsLabel => RunningConflictCount switch
+    {
+        0 => "No conflicting apps",
+        1 => "Close conflicting app",
+        int count => $"Close {count} conflicting apps"
+    };
+
     public bool CloseBlockersAcknowledged
     {
         get => _closeBlockersAcknowledged;
@@ -3299,15 +3326,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    private async Task CloseBlockersCoreAsync()
+    {
+        if (!CloseBlockersAcknowledged)
+        {
+            return;
+        }
+
+        await TerminateConflictingProcessesAsync();
+        CloseBlockersAcknowledged = false;
+    }
+
     /// <summary>
     /// Terminates the running processes of detected conflicting controllers so
     /// they release the device handles that block RigPilot's gated writes. This
     /// takes over no hardware control (distinct from the takeover executor) and
     /// runs through the LocalSystem service, which can close the elevated apps.
     /// </summary>
-    private async Task CloseBlockersCoreAsync()
+    private async Task TerminateConflictingProcessesAsync()
     {
-        if (RunningConflictCount == 0 || !CloseBlockersAcknowledged)
+        if (RunningConflictCount == 0)
         {
             return;
         }
@@ -3322,7 +3360,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         StopConflictingProcessesResultV1 result = IpcJson.FromElement<StopConflictingProcessesResultV1>(response.Payload)
             ?? throw new InvalidDataException("The service returned an empty close-blockers result.");
         ShowNotice(result.Message, result.TerminatedCount > 0 ? "Success" : "Warning");
-        CloseBlockersAcknowledged = false;
         await RefreshAsync(full: true, userInitiated: false);
     }
 
@@ -5258,7 +5295,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(RunningConflictCount));
         OnPropertyChanged(nameof(HasRunningConflicts));
         OnPropertyChanged(nameof(CloseBlockersLabel));
+        OnPropertyChanged(nameof(CloseConflictingAppsLabel));
+        OnPropertyChanged(nameof(RunningConflictSummary));
         _closeBlockersCommand.RaiseCanExecuteChanged();
+        _closeConflictingAppsCommand?.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasImportantSensors));
         OnPropertyChanged(nameof(HasCoolingSensors));
         OnPropertyChanged(nameof(HasPerformanceSensors));

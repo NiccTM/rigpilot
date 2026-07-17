@@ -1008,6 +1008,24 @@
                     <TextBlock Text="{Binding FanControlSliders.Count, StringFormat={}{0} outputs}" Style="{StaticResource BadgeTextStyle}" />
                   </Border>
                 </Grid>
+                <Border Margin="0,12,0,0" Padding="13,11" CornerRadius="10" Background="{StaticResource WarningSoftBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
+                  <Border.Style>
+                    <Style TargetType="Border">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                      <Style.Triggers><DataTrigger Binding="{Binding HasRunningConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                      <TextBlock Text="Another app is controlling these fans" FontWeight="SemiBold" />
+                      <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks overlapping controls rather than fight them — close them to free its fan controls." /></TextBlock>
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="{Binding CloseConflictingAppsLabel}" Command="{Binding CloseConflictingAppsCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center"
+                            ToolTip="Closes the detected controllers so RigPilot's gated controls unlock. Equivalent to closing them in Task Manager; relaunching hands control back."
+                            automation:AutomationProperties.Name="Close conflicting controller apps" automation:AutomationProperties.AutomationId="Cooling.CloseConflictingApps" />
+                  </Grid>
+                </Border>
                 <ItemsControl ItemsSource="{Binding FanControlSliders}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
@@ -1577,6 +1595,24 @@
                     <TextBlock Text="{Binding HardwareControlBadge}" Style="{StaticResource BadgeTextStyle}" />
                   </Border>
                 </Grid>
+                <Border Margin="0,12,0,0" Padding="13,11" CornerRadius="10" Background="{StaticResource WarningSoftBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
+                  <Border.Style>
+                    <Style TargetType="Border">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                      <Style.Triggers><DataTrigger Binding="{Binding HasRunningConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                      <TextBlock Text="Another app is controlling the GPU" FontWeight="SemiBold" />
+                      <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks overlapping controls rather than fight them — close them to unlock GPU fan/power/clock control and Auto OC." /></TextBlock>
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="{Binding CloseConflictingAppsLabel}" Command="{Binding CloseConflictingAppsCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center"
+                            ToolTip="Closes the detected controllers so RigPilot's gated controls unlock. Equivalent to closing them in Task Manager; relaunching hands control back."
+                            automation:AutomationProperties.Name="Close conflicting controller apps" automation:AutomationProperties.AutomationId="Performance.CloseConflictingApps" />
+                  </Grid>
+                </Border>
                 <ItemsControl ItemsSource="{Binding GpuControlSliders}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
