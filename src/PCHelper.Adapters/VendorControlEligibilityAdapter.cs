@@ -18,7 +18,7 @@ public sealed class VendorControlEligibilityAdapter : IHardwareAdapter
     public AdapterManifest Manifest { get; } = new(
         "vendor.control-eligibility",
         "Vendor control eligibility",
-        "0.4.0-alpha",
+        "0.5.0-alpha",
         "GPL-3.0-only",
         "Vendor display runtime where applicable",
         AdapterExecutionContext.AdapterHost,
@@ -91,6 +91,36 @@ public sealed class VendorControlEligibilityAdapter : IHardwareAdapter
                     deviceId,
                     HardwareCompatibilityCatalog.ClassifyMotherboard(manufacturer, product),
                     ControlDomain.Other);
+            });
+
+            HashSet<string> seenMemoryKits = [];
+            Query("Win32_PhysicalMemory", row =>
+            {
+                string manufacturer = GetString(row, "Manufacturer")?.Trim() ?? "Unknown";
+                string partNumber = GetString(row, "PartNumber")?.Trim() ?? string.Empty;
+                if (partNumber.Length == 0 || !seenMemoryKits.Add(partNumber))
+                {
+                    return; // one card per distinct kit, not one per stick
+                }
+
+                // G.Skill Trident Z RGB part numbers end in a Z...R pattern
+                // (e.g. F4-4000C15-8GTZR); the RGB controllers sit on SMBus.
+                bool isTridentZRgb = manufacturer.Contains("SKILL", StringComparison.OrdinalIgnoreCase)
+                    && partNumber.Contains("TZ", StringComparison.OrdinalIgnoreCase)
+                    && partNumber.EndsWith("R", StringComparison.OrdinalIgnoreCase);
+                if (!isTridentZRgb)
+                {
+                    return;
+                }
+
+                string deviceId = StableIds.Create("memory", manufacturer, partNumber);
+                string reason = $"G.Skill Trident Z RGB ({partNumber}) is recognized. Its RGB controllers sit on the system SMBus at addresses 0x70-0x77. RigPilot's SMBus write path is default-deny address-gated (SPD/thermal/PMIC ranges permanently blocked) and rule-compliant via signed PawnIO, but a live write stays gated until a signed PawnIO SMBus module and a witnessed first-light exist. No SPD or sensor address is ever written.";
+                capabilities.Add(Feasibility(
+                    $"gskill.tridentz.rgb.feasibility:{deviceId}",
+                    deviceId,
+                    "G.Skill Trident Z RGB (SMBus) feasibility",
+                    ControlDomain.Lighting,
+                    reason));
             });
 
             Query("Win32_VideoController", row =>

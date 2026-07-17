@@ -140,7 +140,10 @@ public enum IpcCommand
     StopPresentMonBenchmark,
     GetPresentMonBenchmarkStatus,
     SetKrakenLighting,
-    StopConflictingProcesses
+    SetKrakenPumpDuty,
+    SetAuraLighting,
+    StopConflictingProcesses,
+    GetStorageHealth
 }
 
 public static class ProtocolConstants
@@ -210,6 +213,7 @@ public static class IpcCommandPolicy
         IpcCommand.DiscoverControllers or
         IpcCommand.ReadKrakenTelemetry or
         IpcCommand.ReadRyzenSmuFeasibility or
+        IpcCommand.GetStorageHealth or
         IpcCommand.DiscoverHidInventory or
         IpcCommand.ValidateUpdate or
         IpcCommand.AdapterProbe or

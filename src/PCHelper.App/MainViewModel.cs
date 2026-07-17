@@ -326,6 +326,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _ => StartGpuAutoOcAsync(),
             _ => IsServiceOnline && HardwareControlEnabled && !HasActiveOperation,
             ReportError);
+        SetKrakenPumpCommand = new AsyncCommand(
+            _ => SetKrakenPumpAsync(),
+            _ => IsServiceOnline && HardwareControlEnabled,
+            ReportError);
         _enableGpuFanAutoModeCommand = new AsyncCommand(
             _ => StartAutomaticCoolingAsync(gpuFans: true),
             _ => IsServiceOnline && HardwareControlEnabled,
@@ -374,6 +378,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _turnOffOpenRgbCommand = new AsyncCommand(
             _ => ApplyOpenRgbCoreAsync(turnOff: true),
             _ => OpenRgbEnabled && OpenRgbConnected && !HasLightingConflict,
+            ReportError);
+        ApplyRazerChromaCommand = new AsyncCommand(
+            _ => ApplyRazerChromaAsync(),
+            _ => AreOpenRgbInputsValid,
             ReportError);
         _probeDynamicLightingCommand = new AsyncCommand(
             _ => ProbeDynamicLightingCoreAsync(),
@@ -2269,6 +2277,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public System.Windows.Input.ICommand StartGpuAutoOcCommand => _startGpuAutoOcCommand;
 
+    public System.Windows.Input.ICommand SetKrakenPumpCommand { get; }
+
     private void RebuildGpuControlSliders()
     {
         if (_snapshot is null)
@@ -2498,6 +2508,100 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         await RefreshAsync(full: true, userInitiated: false);
     }
 
+    // --- Guided undervolt (power-limit based; documented APIs only) -----------
+
+    private string _undervoltStatus = "Lowers the GPU power target through the same transactional, read-back-verified path as the slider. Frame rates stay close to stock in most games while heat and fan noise drop. This is not a voltage-frequency curve editor.";
+
+    public string UndervoltStatus
+    {
+        get => _undervoltStatus;
+        private set => Set(ref _undervoltStatus, value);
+    }
+
+    private AsyncCommand? _applyUndervoltPresetCommand;
+    public ICommand ApplyUndervoltPresetCommand => _applyUndervoltPresetCommand ??= new AsyncCommand(
+        parameter => ApplyUndervoltPresetAsync(parameter as string ?? string.Empty),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    public async Task ApplyUndervoltPresetAsync(string preset)
+    {
+        GpuControlSlider? power = GpuControlSliders.FirstOrDefault(slider =>
+            slider.CapabilityId.StartsWith("gpupower.limit:", StringComparison.Ordinal));
+        if (power is null)
+        {
+            ShowNotice("The GPU power-limit control is not available. Turn on Hardware control and check the Devices page.", "Warning");
+            return;
+        }
+
+        double? target = UndervoltPresets.ComputeTargetWatts(power.Minimum, power.Maximum, power.Default, preset);
+        if (target is not double watts)
+        {
+            ShowNotice("That undervolt preset is not available for this GPU's reported power range.", "Warning");
+            return;
+        }
+
+        await ApplyGpuControlAsync(new GpuControlSlider
+        {
+            CapabilityId = power.CapabilityId,
+            AdapterId = power.AdapterId,
+            DeviceId = power.DeviceId,
+            Name = power.Name,
+            Minimum = power.Minimum,
+            Maximum = power.Maximum,
+            Default = power.Default,
+            Unit = power.Unit,
+            Value = watts,
+        });
+        UndervoltStatus = $"{UndervoltPresets.Describe(preset)} applied: power limit {watts:0} {power.Unit}, read-back verified. Run the frame-rate benchmark on Games & tools to confirm your games hold their FPS.";
+    }
+
+    // --- NZXT Kraken pump control ---------------------------------------------
+
+    private double _krakenPumpDutyTarget = 100;
+    private string _krakenPumpStatus = "Pump duty 60–100%. The write is read back from the cooler's own status stream; the pump is never slowed below the floor or stopped.";
+
+    public double KrakenPumpDutyTarget
+    {
+        get => _krakenPumpDutyTarget;
+        set => Set(ref _krakenPumpDutyTarget, value);
+    }
+
+    public string KrakenPumpStatus
+    {
+        get => _krakenPumpStatus;
+        private set => Set(ref _krakenPumpStatus, value);
+    }
+
+    public async Task SetKrakenPumpAsync()
+    {
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.SetKrakenPumpDuty,
+                new KrakenPumpRequestV1(
+                    KrakenPumpRequestV1.CurrentSchemaVersion,
+                    (int)Math.Round(KrakenPumpDutyTarget),
+                    ConfirmExperimental: true,
+                    KrakenPumpRequestV1.ExactDeviceId)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        KrakenPumpResultV1 result = IpcJson.FromElement<KrakenPumpResultV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty pump result.");
+        KrakenPumpStatus = result.Message;
+        ShowNotice(result.Message, result.Outcome switch
+        {
+            KrakenPumpOutcome.ReadBackVerified => "Success",
+            KrakenPumpOutcome.WriteIssued => "Info",
+            _ => "Warning"
+        });
+    }
+
     /// <summary>
     /// One-click GPU auto-OC: targets the armed core clock offset with the
     /// existing bounded tuning engine (Performance objective, 83 °C ceiling,
@@ -2575,6 +2679,177 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     private sealed record ControlPreferences(bool HardwareControlEnabled);
+
+    // --- First-run tour and release check -------------------------------------
+    // Both are user-process only: the tour is presentation plus one local flag
+    // file, and the release check is a bounded anonymous HTTPS read of the
+    // public GitHub releases feed. The service never touches the network.
+
+    public const int OnboardingStepCount = 3;
+
+    private bool _isOnboardingVisible;
+    private int _onboardingStep;
+
+    public bool IsOnboardingVisible
+    {
+        get => _isOnboardingVisible;
+        private set
+        {
+            _isOnboardingVisible = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string OnboardingStepLabel => Localization.L10n.Get("Onboarding_StepLabel")
+        .Replace("{0}", (_onboardingStep + 1).ToString(System.Globalization.CultureInfo.CurrentCulture), StringComparison.Ordinal)
+        .Replace("{1}", OnboardingStepCount.ToString(System.Globalization.CultureInfo.CurrentCulture), StringComparison.Ordinal);
+
+    public string OnboardingTitle => Localization.L10n.Get($"Onboarding_Title{_onboardingStep + 1}");
+
+    public string OnboardingBody => Localization.L10n.Get($"Onboarding_Body{_onboardingStep + 1}");
+
+    public bool IsOnboardingFirstStep => _onboardingStep == 0;
+
+    public bool IsOnboardingLastStep => _onboardingStep == OnboardingStepCount - 1;
+
+    private RelayCommand? _onboardingNextCommand;
+    public ICommand OnboardingNextCommand => _onboardingNextCommand ??= new RelayCommand(_ =>
+    {
+        if (IsOnboardingLastStep)
+        {
+            CompleteOnboarding();
+            return;
+        }
+
+        _onboardingStep++;
+        NotifyOnboardingStepChanged();
+    });
+
+    private RelayCommand? _onboardingBackCommand;
+    public ICommand OnboardingBackCommand => _onboardingBackCommand ??= new RelayCommand(
+        _ =>
+        {
+            _onboardingStep--;
+            NotifyOnboardingStepChanged();
+        },
+        _ => !IsOnboardingFirstStep);
+
+    private RelayCommand? _onboardingSkipCommand;
+    public ICommand OnboardingSkipCommand => _onboardingSkipCommand ??= new RelayCommand(_ => CompleteOnboarding());
+
+    /// <summary>
+    /// Shows the one-time tour when no completion flag is persisted. Only the
+    /// real application startup calls this; the deterministic snapshot host
+    /// never does, so renders stay unobstructed.
+    /// </summary>
+    public void ShowOnboardingIfFirstRun()
+    {
+        if (IsPortableMode || OnboardingState.IsTourCompleted())
+        {
+            return;
+        }
+
+        _onboardingStep = 0;
+        NotifyOnboardingStepChanged();
+        IsOnboardingVisible = true;
+    }
+
+    private void CompleteOnboarding()
+    {
+        OnboardingState.MarkTourCompleted();
+        IsOnboardingVisible = false;
+    }
+
+    private void NotifyOnboardingStepChanged()
+    {
+        OnPropertyChanged(nameof(OnboardingStepLabel));
+        OnPropertyChanged(nameof(OnboardingTitle));
+        OnPropertyChanged(nameof(OnboardingBody));
+        OnPropertyChanged(nameof(IsOnboardingFirstStep));
+        OnPropertyChanged(nameof(IsOnboardingLastStep));
+        _onboardingBackCommand?.RaiseCanExecuteChanged();
+    }
+
+    private string _updateCheckStatus = Localization.L10n.Get("Updates_NotCheckedYet");
+    private bool _updateAvailable;
+    private string _latestReleaseUrl = GitHubUpdateCheck.ReleasesPageUri;
+
+    public string UpdateCheckStatus
+    {
+        get => _updateCheckStatus;
+        private set
+        {
+            _updateCheckStatus = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool UpdateAvailable
+    {
+        get => _updateAvailable;
+        private set
+        {
+            _updateAvailable = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string LatestReleaseUrl
+    {
+        get => _latestReleaseUrl;
+        private set
+        {
+            _latestReleaseUrl = value;
+            OnPropertyChanged();
+        }
+    }
+
+    private AsyncCommand? _checkForUpdatesCommand;
+    public ICommand CheckForUpdatesCommand => _checkForUpdatesCommand ??= new AsyncCommand(
+        _ => CheckForUpdatesCoreAsync(noticeOnUpdate: false),
+        onError: ReportError);
+
+    private RelayCommand? _openReleasePageCommand;
+    public ICommand OpenReleasePageCommand => _openReleasePageCommand ??= new RelayCommand(_ => OpenReleasePage());
+
+    /// <summary>
+    /// One release check. Non-throwing by design so the startup caller can
+    /// fire-and-forget it; every failure becomes an explanatory status line.
+    /// </summary>
+    public async Task CheckForUpdatesCoreAsync(bool noticeOnUpdate)
+    {
+        UpdateCheckStatus = Localization.L10n.Get("Updates_Checking");
+        try
+        {
+            UpdateCheckResult result = await new GitHubUpdateCheck().CheckAsync(AppVersion, CancellationToken.None);
+            UpdateAvailable = result.Succeeded && result.UpdateAvailable;
+            LatestReleaseUrl = result.ReleaseUrl;
+            UpdateCheckStatus = result.Message;
+            if (UpdateAvailable && noticeOnUpdate)
+            {
+                ShowNotice(result.Message, "Info");
+            }
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            UpdateCheckStatus = $"The update check failed unexpectedly: {exception.GetType().Name}.";
+        }
+    }
+
+    private void OpenReleasePage()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(LatestReleaseUrl)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            ShowNotice($"The release page could not be opened: {exception.Message}", "Warning");
+        }
+    }
 
     public sealed class GpuControlSlider
     {
@@ -4267,6 +4542,107 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             : result.Message;
     }
 
+    // --- Drive health (read-only Windows Storage provider snapshot) -----------
+
+    public ObservableCollection<StorageDeviceHealthV1> StorageHealthDevices { get; } = [];
+
+    private string _storageHealthStatus = "Read-only drive identity, OS health status, and reliability counters (temperature, wear, power-on hours) where the drive reports them. RigPilot has no storage write path.";
+
+    public string StorageHealthStatus
+    {
+        get => _storageHealthStatus;
+        private set => Set(ref _storageHealthStatus, value);
+    }
+
+    public bool HasStorageHealthDevices => StorageHealthDevices.Count > 0;
+
+    private AsyncCommand? _readStorageHealthCommand;
+    public ICommand ReadStorageHealthCommand => _readStorageHealthCommand ??= new AsyncCommand(
+        _ => ReadStorageHealthCoreAsync(),
+        _ => IsServiceOnline,
+        ReportError);
+
+    private async Task ReadStorageHealthCoreAsync()
+    {
+        if (!IsServiceOnline)
+        {
+            StorageHealthStatus = "Drive health requires the RigPilot service.";
+            return;
+        }
+
+        StorageHealthStatus = "Reading the Windows Storage provider…";
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetStorageHealth),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        StorageHealthReportV1 report = IpcJson.FromElement<StorageHealthReportV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty storage health report.");
+        StorageHealthDevices.Clear();
+        foreach (StorageDeviceHealthV1 device in report.Devices)
+        {
+            StorageHealthDevices.Add(device);
+        }
+
+        StorageHealthStatus = report.Message;
+        OnPropertyChanged(nameof(HasStorageHealthDevices));
+    }
+
+    // --- Profile sharing (export/import as JSON) ------------------------------
+
+    private ProfileCardDisplay? _selectedProfileForExport;
+
+    public ProfileCardDisplay? SelectedProfileForExport
+    {
+        get => _selectedProfileForExport;
+        set => Set(ref _selectedProfileForExport, value);
+    }
+
+    /// <summary>
+    /// Serializes the selected profile's V2 record for sharing, or returns
+    /// null with an explanatory notice when the selection has no typed V2
+    /// content to share.
+    /// </summary>
+    public string? BuildSelectedProfileExport()
+    {
+        if (SelectedProfileForExport is not ProfileCardDisplay card)
+        {
+            ShowNotice("Select a profile to export first.", "Warning");
+            return null;
+        }
+
+        if (!_suiteProfilesById.TryGetValue(card.Profile.Id, out ProfileV2? profile)
+            || profile.HardwareActions.Count == 0)
+        {
+            ShowNotice("That profile has no typed hardware actions to share. Generated power presets are machine-specific.", "Warning");
+            return null;
+        }
+
+        return ProfileShareFile.Export(profile, AppVersion);
+    }
+
+    /// <summary>
+    /// Imports a shared profile file: renamed, re-identified, stripped of
+    /// machine-local references, forced Experimental, then saved through the
+    /// normal service path. Applying it later still requires the Experimental
+    /// acknowledgement, exact-device confirmation, and per-action bounds
+    /// clamping against this machine's discovered capabilities.
+    /// </summary>
+    public async Task ImportSharedProfileAsync(string json)
+    {
+        ProfileV2 profile = ProfileShareFile.Import(json);
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.SaveProfileV2,
+                profile,
+                _status?.StateRevision,
+                Guid.NewGuid().ToString("N")),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        UpdateStateRevision(response);
+        await RefreshAsync(full: true, userInitiated: false);
+        ShowNotice($"Imported '{profile.Name}' as an Experimental profile. Review it before applying; every action is clamped to this machine's bounds.", "Success");
+    }
+
     public string BuildMonitoringCsv()
     {
         System.Text.StringBuilder output = new();
@@ -4345,6 +4721,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _disposed = true;
         _refreshTimer.Dispose();
         _desktopOsd.Dispose();
+        _ambientCancellation?.Cancel();
+        _ambientCancellation?.Dispose();
         _lifetime.Cancel();
         _lifetime.Dispose();
         DisposeLocalCoordinator();
@@ -7868,6 +8246,173 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             IsBusy = false;
         }
+    }
+
+    // --- Screen-ambient lighting (user-session, explicit start/stop) ----------
+    // Samples the primary display into a 32×18 thumbnail each tick and writes
+    // edge-zone colours to every OpenRGB controller. The thumbnail never leaves
+    // process memory; only LED colour values reach the local OpenRGB socket.
+
+    private const int AmbientTickMilliseconds = 150;
+
+    private CancellationTokenSource? _ambientCancellation;
+    private Task? _ambientLoop;
+    private string _ambientStatus = "Extends what is on your primary screen onto your RGB devices through the OpenRGB bridge. The screen sample stays in memory only — nothing is saved, logged, or uploaded.";
+    private bool _ambientRunning;
+
+    public string AmbientStatus
+    {
+        get => _ambientStatus;
+        private set => Set(ref _ambientStatus, value);
+    }
+
+    public bool AmbientRunning
+    {
+        get => _ambientRunning;
+        private set
+        {
+            Set(ref _ambientRunning, value);
+            _startAmbientCommand?.RaiseCanExecuteChanged();
+            _stopAmbientCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private RelayCommand? _startAmbientCommand;
+    public ICommand StartAmbientLightingCommand => _startAmbientCommand ??= new RelayCommand(
+        _ => StartAmbientLighting(),
+        _ => !AmbientRunning);
+
+    private RelayCommand? _stopAmbientCommand;
+    public ICommand StopAmbientLightingCommand => _stopAmbientCommand ??= new RelayCommand(
+        _ => StopAmbientLighting(),
+        _ => AmbientRunning);
+
+    public void StartAmbientLighting()
+    {
+        if (AmbientRunning)
+        {
+            return;
+        }
+
+        if (!OpenRgbEnabled || !OpenRgbConnected)
+        {
+            ShowNotice("Connect to the local OpenRGB SDK server first (Lighting page).", "Warning");
+            return;
+        }
+
+        if (HasLightingConflict)
+        {
+            ShowNotice(LightingConflictReason, "Warning");
+            return;
+        }
+
+        if (!TryParseOpenRgbInputs(out _, out int brightness))
+        {
+            brightness = 100;
+        }
+
+        _ambientCancellation = new CancellationTokenSource();
+        CancellationToken token = _ambientCancellation.Token;
+        AmbientRunning = true;
+        AmbientStatus = "Screen-ambient lighting is running. The primary display's edge colours are mirrored onto every OpenRGB controller.";
+        _ambientLoop = Task.Run(() => RunAmbientLoopAsync(brightness, token), token);
+    }
+
+    public void StopAmbientLighting()
+    {
+        _ambientCancellation?.Cancel();
+        _ambientCancellation = null;
+        AmbientRunning = false;
+        AmbientStatus = "Screen-ambient lighting stopped. OpenRGB (or its own effects) owns the devices again.";
+    }
+
+    private async Task RunAmbientLoopAsync(int brightness, CancellationToken token)
+    {
+        try
+        {
+            OpenRgbSdkClient client = new();
+            await using OpenRgbSdkClient.OpenRgbAmbientSession session = await client.OpenAmbientSessionAsync(token);
+            using PeriodicTimer timer = new(TimeSpan.FromMilliseconds(AmbientTickMilliseconds));
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                byte[] pixels = ScreenAmbientSampler.CapturePrimaryThumbnail();
+                uint[] zones = ScreenAmbientSampler.ComputeEdgeZones(
+                    pixels, ScreenAmbientSampler.SampleWidth, ScreenAmbientSampler.SampleHeight, brightness);
+                await session.WriteFrameAsync(ledCount => ScreenAmbientSampler.MapZonesToLeds(zones, ledCount), token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal stop.
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                AmbientRunning = false;
+                AmbientStatus = $"Screen-ambient lighting stopped: {exception.Message}";
+            });
+        }
+    }
+
+    // --- Native AURA lighting (RigPilot in-house adapter) ---------------------
+
+    private AsyncCommand? _applyAuraLightingCommand;
+
+    public ICommand ApplyAuraLightingCommand => _applyAuraLightingCommand ??= new AsyncCommand(
+        parameter => ApplyAuraLightingAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    public async Task ApplyAuraLightingAsync(bool turnOff)
+    {
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.SetAuraLighting,
+                new AuraLightingRequestV1(
+                    AuraLightingRequestV1.CurrentSchemaVersion,
+                    OpenRgbColour,
+                    turnOff,
+                    ConfirmExperimental: true,
+                    AuraLightingRequestV1.ExactDeviceId)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        AuraLightingResultV1 result = IpcJson.FromElement<AuraLightingResultV1>(response.Payload)
+            ?? throw new InvalidDataException("The service returned an empty AURA lighting result.");
+        ShowNotice(result.Message, result.Outcome == KrakenLightingOutcome.WriteIssued ? "Success" : "Warning");
+    }
+
+    // --- Native Razer Chroma lighting (official REST SDK) ---------------------
+
+    private string _razerChromaStatus = "Applies a static colour to every Razer Chroma device — the Lian Li O11 Razer Edition, keyboards, mice, and headsets — through Razer's official Chroma SDK. Needs Razer Synapse running.";
+
+    public System.Windows.Input.ICommand ApplyRazerChromaCommand { get; }
+
+    public string RazerChromaStatus
+    {
+        get => _razerChromaStatus;
+        private set => Set(ref _razerChromaStatus, value);
+    }
+
+    private async Task ApplyRazerChromaAsync()
+    {
+        if (!TryParseOpenRgbInputs(out string colour, out int brightness))
+        {
+            RazerChromaStatus = "Use a #RRGGBB colour and brightness from 0 to 100%.";
+            return;
+        }
+
+        RazerChromaStatus = "Applying via the Razer Chroma SDK…";
+        ChromaRestClient client = new();
+        ChromaConnectionResult result = await client.SetStaticColourAsync(colour, brightness, _lifetime.Token);
+        RazerChromaStatus = result.Message;
+        ShowNotice(result.Message, result.Connected ? "Success" : "Warning");
     }
 
     private bool TryParseOpenRgbInputs(out string colour, out int brightness)

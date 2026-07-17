@@ -115,6 +115,72 @@ public sealed class OpenRgbSdkClient(
             $"Applied the '{colourwayId}' colourway at {brightnessPercent}% to {session.Controllers.Count(item => item.LedCount > 0)} controller(s).");
     }
 
+    /// <summary>
+    /// Opens a persistent session for the screen-ambient loop: one loopback
+    /// connection, custom mode selected once per controller, then repeated
+    /// per-LED frames without reconnecting. Disposing the session closes the
+    /// connection; OpenRGB then owns its devices again.
+    /// </summary>
+    public async Task<OpenRgbAmbientSession> OpenAmbientSessionAsync(CancellationToken cancellationToken)
+    {
+        OpenRgbSession session = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            foreach (OpenRgbController controller in session.Controllers.Where(item => item.LedCount > 0))
+            {
+                await WritePacketAsync(
+                    session.Stream, controller.Id, SetCustomMode, ReadOnlyMemory<byte>.Empty, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
+        return new OpenRgbAmbientSession(session);
+    }
+
+    /// <summary>Persistent frame-writing session used only by the ambient loop.</summary>
+    public sealed class OpenRgbAmbientSession : IAsyncDisposable
+    {
+        private readonly OpenRgbSession _session;
+
+        internal OpenRgbAmbientSession(OpenRgbSession session) => _session = session;
+
+        public IReadOnlyList<OpenRgbController> Controllers => _session.Controllers;
+
+        /// <summary>
+        /// Writes one frame to every controller. The callback supplies the
+        /// per-LED colours (packed R | G&lt;&lt;8 | B&lt;&lt;16, the OpenRGB
+        /// wire order) for a given LED count.
+        /// </summary>
+        public async Task WriteFrameAsync(Func<int, uint[]> frameForLedCount, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(frameForLedCount);
+            foreach (OpenRgbController controller in _session.Controllers.Where(item => item.LedCount > 0))
+            {
+                uint[] frame = frameForLedCount(controller.LedCount);
+                if (frame.Length < controller.LedCount)
+                {
+                    throw new InvalidDataException("The ambient frame is shorter than the controller's LED count.");
+                }
+
+                byte[] payload = new byte[checked(6 + (controller.LedCount * 4))];
+                BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, 4), (uint)payload.Length);
+                BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4, 2), checked((ushort)controller.LedCount));
+                for (int index = 0; index < controller.LedCount; index++)
+                {
+                    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(6 + (index * 4), 4), frame[index]);
+                }
+
+                await WritePacketAsync(_session.Stream, controller.Id, UpdateLeds, payload, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        public ValueTask DisposeAsync() => _session.DisposeAsync();
+    }
+
     private async Task<OpenRgbSession> ConnectAsync(CancellationToken cancellationToken)
     {
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -377,7 +443,7 @@ public sealed class OpenRgbSdkClient(
 
     private sealed record Packet(uint DeviceId, uint Id, byte[] Payload);
 
-    private sealed class OpenRgbSession(
+    internal sealed class OpenRgbSession(
         TcpClient client,
         NetworkStream stream,
         int protocolVersion,

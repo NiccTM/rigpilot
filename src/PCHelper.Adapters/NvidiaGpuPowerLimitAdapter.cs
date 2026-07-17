@@ -59,7 +59,7 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
         "NVIDIA GPU power limit (Experimental)",
-        "0.4.0-alpha",
+        "0.5.0-alpha",
         "NVIDIA display driver",
         "NVIDIA display driver exposing power-management limit constraints",
         AdapterExecutionContext.SystemService,

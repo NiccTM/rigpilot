@@ -97,7 +97,7 @@ public sealed class FileSensorAdapter : IHardwareAdapter
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
         "File-backed sensors",
-        "0.4.0-alpha",
+        "0.5.0-alpha",
         "None (local text files)",
         "None",
         AdapterExecutionContext.SystemService,

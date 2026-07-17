@@ -2,7 +2,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "0.4.0-alpha",
+    [string]$Version = "0.5.0-alpha",
     [string]$OutputDirectory,
     [string]$SigningCertificateThumbprint,
     [string]$TimestampServer = "https://timestamp.digicert.com",

@@ -18,7 +18,7 @@ public sealed class WindowsPeripheralInventoryAdapter : IHardwareAdapter
     public AdapterManifest Manifest { get; } = new(
         "windows.peripheral-inventory",
         "Windows peripheral inventory",
-        "0.4.0-alpha",
+        "0.5.0-alpha",
         "GPL-3.0-only",
         null,
         AdapterExecutionContext.SystemService,

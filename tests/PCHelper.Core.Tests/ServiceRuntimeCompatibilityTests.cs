@@ -11,11 +11,11 @@ public sealed class ServiceRuntimeCompatibilityTests
         HandshakeResponseV2 handshake = new(
             ProtocolConstants.Version,
             ProtocolConstants.LegacyReadOnlyVersion,
-            "0.4.0-alpha",
+            "0.5.0-alpha",
             17,
             ServiceRuntimeFeatures.AdvertisedByCurrentService);
 
-        ServiceRuntimeCompatibilityV1 result = ServiceRuntimeCompatibility.Evaluate("0.4.2-alpha", handshake);
+        ServiceRuntimeCompatibilityV1 result = ServiceRuntimeCompatibility.Evaluate("0.5.2-alpha", handshake);
 
         Assert.Equal(ServiceCompatibilityState.Ready, result.State);
         Assert.True(result.CanUseServiceWrites);
@@ -28,11 +28,11 @@ public sealed class ServiceRuntimeCompatibilityTests
         HandshakeResponseV2 handshake = new(
             ProtocolConstants.Version,
             ProtocolConstants.LegacyReadOnlyVersion,
-            "0.4.0-alpha",
+            "0.5.0-alpha",
             17,
             [ServiceRuntimeFeatures.ServiceStatus, ServiceRuntimeFeatures.CapabilityV2]);
 
-        ServiceRuntimeCompatibilityV1 result = ServiceRuntimeCompatibility.Evaluate("0.4.0-alpha", handshake);
+        ServiceRuntimeCompatibilityV1 result = ServiceRuntimeCompatibility.Evaluate("0.5.0-alpha", handshake);
 
         Assert.Equal(ServiceCompatibilityState.UpgradeRequired, result.State);
         Assert.False(result.CanUseServiceWrites);
@@ -44,7 +44,7 @@ public sealed class ServiceRuntimeCompatibilityTests
     public void LegacyHandshakePreservesReadOnlyClassificationOnly()
     {
         ServiceRuntimeCompatibilityV1 result = ServiceRuntimeCompatibility.EvaluateLegacy(
-            "0.4.0-alpha",
+            "0.5.0-alpha",
             new HandshakeResponse(ProtocolConstants.LegacyReadOnlyVersion, "0.3.0-alpha", 9));
 
         Assert.Equal(ServiceCompatibilityState.ReadOnly, result.State);

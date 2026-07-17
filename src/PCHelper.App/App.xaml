@@ -184,6 +184,60 @@
       </Setter>
     </Style>
 
+    <!-- iOS-style slider: a thin rounded track whose left side fills with the
+         accent colour, and a round white thumb with a soft shadow. -->
+    <Style TargetType="Slider">
+      <Setter Property="Height" Value="26" />
+      <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusVisualStyle}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Slider">
+            <Grid VerticalAlignment="Center">
+              <Border Height="5" CornerRadius="2.5" Background="{StaticResource SurfacePressedBrush}" />
+              <Track x:Name="PART_Track">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="{x:Static Slider.DecreaseLarge}" Focusable="False">
+                    <RepeatButton.Template>
+                      <ControlTemplate TargetType="RepeatButton">
+                        <Border Height="5" CornerRadius="2.5" Background="{StaticResource AccentBrush}" Margin="0,0,-2,0" />
+                      </ControlTemplate>
+                    </RepeatButton.Template>
+                  </RepeatButton>
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="{x:Static Slider.IncreaseLarge}" Focusable="False">
+                    <RepeatButton.Template>
+                      <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent" Height="26" />
+                      </ControlTemplate>
+                    </RepeatButton.Template>
+                  </RepeatButton>
+                </Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Width="20" Height="20" Focusable="False">
+                    <Thumb.Template>
+                      <ControlTemplate TargetType="Thumb">
+                        <Ellipse Fill="#F5F5F7" Stroke="#22000000" StrokeThickness="0.5">
+                          <Ellipse.Effect>
+                            <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="1.5" Direction="270" Opacity="0.45" />
+                          </Ellipse.Effect>
+                        </Ellipse>
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="EyebrowStyle" TargetType="TextBlock">
       <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
       <Setter Property="FontSize" Value="11" />

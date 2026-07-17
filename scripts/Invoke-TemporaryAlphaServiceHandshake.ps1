@@ -282,7 +282,7 @@ if (-not (Test-Path -LiteralPath $payload -PathType Container)) {
 }
 
 # Contract validation occurs before any service configuration change.
-& $testPayloadScript -PayloadRoot $payload -ExpectedProductVersion "0.4.0"
+& $testPayloadScript -PayloadRoot $payload -ExpectedProductVersion "0.5.0"
 
 $appProcess = Get-Process -Name "PCHelper.App" -ErrorAction SilentlyContinue
 if ($null -ne $appProcess) {
@@ -314,7 +314,7 @@ $report = [ordered]@{
 try {
     New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
     Copy-Item -LiteralPath $payload -Destination $stagePayload -Recurse -Force
-    & $testPayloadScript -PayloadRoot $stagePayload -ExpectedProductVersion "0.4.0"
+    & $testPayloadScript -PayloadRoot $stagePayload -ExpectedProductVersion "0.5.0"
 
     $acl = & icacls.exe $stageRoot
     if (-not ($acl | Where-Object { $_ -match 'SYSTEM:.*\(F\)' })) {

@@ -882,6 +882,24 @@
 
             <Grid x:Name="AdvancedProfileTools" Style="{StaticResource AdvancedOnlyPanelStyle}">
               <StackPanel>
+            <Border Style="{StaticResource CardStyle}">
+              <StackPanel>
+                <TextBlock Text="Share profiles" Style="{StaticResource CardTitleStyle}" />
+                <TextBlock Text="Export a profile as a JSON file to share, or import one someone shared with you. Files carry typed actions and safety limits only — never scripts or machine identity. Every import is renamed, forced Experimental, and clamped to this machine's bounds on apply." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,12" />
+                <WrapPanel>
+                  <ComboBox MinWidth="220" Margin="0,0,8,8" ItemsSource="{Binding ProfileCards}" SelectedItem="{Binding SelectedProfileForExport}"
+                            automation:AutomationProperties.Name="Profile to export" automation:AutomationProperties.AutomationId="Profiles.ExportSelection">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate><TextBlock Text="{Binding Name}" /></DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <Button Content="Export profile" Click="ExportProfile_Click" Margin="0,0,8,8"
+                          automation:AutomationProperties.Name="Export selected profile to a file" automation:AutomationProperties.AutomationId="Profiles.ExportProfile" />
+                  <Button Content="Import shared profile" Click="ImportProfile_Click" Margin="0,0,8,8"
+                          automation:AutomationProperties.Name="Import a shared profile file" automation:AutomationProperties.AutomationId="Profiles.ImportProfile" />
+                </WrapPanel>
+              </StackPanel>
+            </Border>
             <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="360">
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
@@ -1016,8 +1034,29 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,12,0,0">
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="190" />
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="135" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="AIO pump (Kraken X3)" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Slider x:Name="PumpSlider" Grid.Column="1" Minimum="60" Maximum="100"
+                            Value="{Binding KrakenPumpDutyTarget, Mode=TwoWay}" IsSnapToTickEnabled="True" TickFrequency="1"
+                            VerticalAlignment="Center" Margin="10,0"
+                            ToolTip="Hard floor 60% — the pump can be slowed for noise but never below the safety floor and never stopped. Read back from the cooler's own status stream."
+                            automation:AutomationProperties.Name="AIO pump duty" />
+                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,10,0"
+                               Text="{Binding Value, ElementName=PumpSlider, Mode=OneWay, StringFormat={}{0:0} %}" />
+                    <Button Grid.Column="3" Content="Apply" Command="{Binding SetKrakenPumpCommand}"
+                            automation:AutomationProperties.Name="Apply AIO pump duty" />
+                  </Grid>
+                </Border>
+                <TextBlock Text="{Binding KrakenPumpStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,6,0,0" />
                 <WrapPanel Margin="0,14,0,0">
-                  <Button Content="Automatic mode (CPU/GPU curve)" Command="{Binding EnableCaseFansAutoModeCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                  <Button Content="Automatic mode (CPU/GPU curve)" Command="{Binding EnableCaseFansAutoModeCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" x:Name="CaseFansAutoModeButton"
                           ToolTip="Binds every writable fan output to the maximum of CPU and GPU temperature through the service graph engine: 50% safety floor, full speed at 85 °C, stale sensors command maximum cooling. Pump and CPU-fan protections always hold."
                           automation:AutomationProperties.Name="Enable automatic temperature curve for case fans"
                           automation:AutomationProperties.AutomationId="Cooling.EnableCaseFansAutoMode" />
@@ -1575,6 +1614,23 @@
                 </Grid>
                 <TextBlock Text="{Binding OperationMessage}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                 <TextBlock Text="Sliders appear when the service reports the GPU control families. Turn on Hardware control in the header to apply; turning it off returns everything to vendor defaults." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,10,0,0" />
+                <Border Style="{StaticResource InsetCardStyle}" Margin="0,14,0,0">
+                  <StackPanel>
+                    <TextBlock Text="Guided undervolt" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding UndervoltStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,4,0,10" automation:AutomationProperties.AutomationId="Performance.UndervoltStatus" />
+                    <WrapPanel>
+                      <Button Content="Quiet (−25% power)" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="quiet" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                              ToolTip="Sets the GPU power limit to 75% of the vendor default. Biggest heat and noise reduction; a small FPS cost is possible in power-hungry titles."
+                              automation:AutomationProperties.Name="Apply quiet undervolt preset" automation:AutomationProperties.AutomationId="Performance.UndervoltQuiet" />
+                      <Button Content="Efficient (−15% power)" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="efficient" Margin="0,0,8,8"
+                              ToolTip="Sets the GPU power limit to 85% of the vendor default. Near-stock frame rates with noticeably less heat in most games."
+                              automation:AutomationProperties.Name="Apply efficient undervolt preset" automation:AutomationProperties.AutomationId="Performance.UndervoltEfficient" />
+                      <Button Content="Back to stock" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="stock" Margin="0,0,8,8"
+                              ToolTip="Restores the vendor default power limit."
+                              automation:AutomationProperties.Name="Restore stock power target" automation:AutomationProperties.AutomationId="Performance.UndervoltStock" />
+                    </WrapPanel>
+                  </StackPanel>
+                </Border>
               </StackPanel>
             </Border>
 
@@ -1736,6 +1792,16 @@
                     <Button Content="Turn lighting off" Command="{Binding TurnOffOpenRgbCommand}" Margin="0,0,8,8" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
+                  <TextBlock Text="SCREEN-AMBIENT LIGHTING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="{Binding AmbientStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.AmbientStatus" />
+                  <WrapPanel>
+                    <Button Content="Start screen ambience" Command="{Binding StartAmbientLightingCommand}" Margin="0,0,8,8"
+                            ToolTip="Mirrors the primary display's edge colours onto every OpenRGB controller. The screen sample is a 32×18 in-memory thumbnail — never saved, logged, or uploaded."
+                            automation:AutomationProperties.Name="Start screen-ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StartAmbient" />
+                    <Button Content="Stop" Command="{Binding StopAmbientLightingCommand}" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Stop screen-ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StopAmbient" />
+                  </WrapPanel>
+                  <Separator Margin="0,4" />
                   <TextBlock Text="NATIVE KRAKEN LIGHTING (RIGPILOT ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding KrakenLightingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingStatus" />
                   <WrapPanel>
@@ -1745,6 +1811,21 @@
                     <Button Content="Kraken lighting off" Command="{Binding ApplyKrakenLightingCommand}" CommandParameter="off" Margin="0,0,8,8"
                             automation:AutomationProperties.Name="Turn Kraken lighting off via native adapter" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingOff" />
                   </WrapPanel>
+                  <Separator Margin="0,4" />
+                  <TextBlock Text="NATIVE AURA LIGHTING (RIGPILOT ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <WrapPanel>
+                    <Button Content="Apply to Aura board" Command="{Binding ApplyAuraLightingCommand}" Margin="0,0,8,8"
+                            ToolTip="Writes the static colour to both addressable AURA headers through RigPilot's own contained HID adapter (clean-room documented protocol). Lighting only; confirm visually."
+                            automation:AutomationProperties.Name="Apply static colour to the AURA board via native adapter" />
+                    <Button Content="Aura lighting off" Command="{Binding ApplyAuraLightingCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn AURA lighting off via native adapter" />
+                  </WrapPanel>
+                  <Separator Margin="0,4" />
+                  <TextBlock Text="NATIVE RAZER CHROMA (OFFICIAL SDK)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="{Binding RazerChromaStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" />
+                  <Button Content="Apply to Razer Chroma" Command="{Binding ApplyRazerChromaCommand}" HorizontalAlignment="Left"
+                          ToolTip="Applies the static colour to every Razer Chroma device — the Lian Li O11 Razer Edition, keyboard, mouse, headset — through Razer's official Chroma SDK. Requires Razer Synapse with Chroma Connect running."
+                          automation:AutomationProperties.Name="Apply static colour to Razer Chroma devices" />
                 </StackPanel>
               </Border>
             </local:AdaptiveUniformGrid>
@@ -2221,6 +2302,40 @@
                   </StackPanel>
                   <Button Grid.Column="1" Content="Read cooler status" Command="{Binding ReadKrakenTelemetryCommand}" Margin="12,0,0,0" VerticalAlignment="Top" automation:AutomationProperties.Name="Read Kraken liquid cooler telemetry" automation:AutomationProperties.AutomationId="Devices.ReadKrakenTelemetry" />
                 </Grid>
+                <Grid Margin="0,12,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock Text="DRIVE HEALTH" Style="{StaticResource EyebrowStyle}" />
+                    <TextBlock Text="{Binding StorageHealthStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Devices.StorageHealthStatus" />
+                  </StackPanel>
+                  <Button Grid.Column="1" Content="Read drive health" Command="{Binding ReadStorageHealthCommand}" Margin="12,0,0,0" VerticalAlignment="Top" automation:AutomationProperties.Name="Read drive health from the Windows Storage provider" automation:AutomationProperties.AutomationId="Devices.ReadStorageHealth" />
+                </Grid>
+                <ItemsControl ItemsSource="{Binding StorageHealthDevices}" Margin="0,6,0,0" automation:AutomationProperties.Name="Drive health list" automation:AutomationProperties.AutomationId="Devices.StorageHealthList">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,9">
+                        <Grid>
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                          <StackPanel>
+                            <TextBlock Text="{Binding FriendlyName}" FontWeight="SemiBold" />
+                            <WrapPanel Margin="0,3,0,0">
+                              <TextBlock Text="{Binding MediaType}" Style="{StaticResource SubtleStyle}" Margin="0,0,10,0" />
+                              <TextBlock Text="{Binding BusType}" Style="{StaticResource SubtleStyle}" Margin="0,0,10,0" />
+                              <TextBlock Text="{Binding SizeGigabytes, StringFormat={}{0:0.#} GB}" Style="{StaticResource SubtleStyle}" Margin="0,0,10,0" />
+                              <TextBlock Text="{Binding TemperatureCelsius, StringFormat={}{0:0} °C, TargetNullValue=''}" Style="{StaticResource SubtleStyle}" Margin="0,0,10,0" />
+                              <TextBlock Text="{Binding WearPercent, StringFormat={}{0}% wear, TargetNullValue=''}" Style="{StaticResource SubtleStyle}" Margin="0,0,10,0" />
+                              <TextBlock Text="{Binding PowerOnHours, StringFormat={}{0:0} h on, TargetNullValue=''}" Style="{StaticResource SubtleStyle}" />
+                            </WrapPanel>
+                          </StackPanel>
+                          <TextBlock Grid.Column="1" Text="{Binding HealthStatus}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="10,0,0,0" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
                 <ItemsControl ItemsSource="{Binding HidDevices}" Margin="0,6,0,0" automation:AutomationProperties.Name="Connected peripherals list" automation:AutomationProperties.AutomationId="Devices.HidInventory">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
@@ -2620,6 +2735,17 @@
                   <TextBlock Text="Report previews remove identity, exact paths, serial numbers, and network inventory before saving." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,12,0,0" />
                 </StackPanel>
               </Border>
+              <Border Style="{StaticResource CardStyle}">
+                <StackPanel>
+                  <TextBlock Text="{loc:Loc Updates_CardTitle}" Style="{StaticResource CardTitleStyle}" />
+                  <TextBlock Text="{loc:Loc Updates_CardBody}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,12" />
+                  <TextBlock Text="{Binding UpdateCheckStatus}" TextWrapping="Wrap" Margin="0,0,0,10" automation:AutomationProperties.AutomationId="Diagnostics.UpdateStatus" />
+                  <WrapPanel>
+                    <Button Content="{loc:Loc Updates_CheckButton}" Command="{Binding CheckForUpdatesCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" automation:AutomationProperties.Name="Check for updates" automation:AutomationProperties.AutomationId="Diagnostics.CheckForUpdates" />
+                    <Button Content="{loc:Loc Updates_OpenReleaseButton}" Command="{Binding OpenReleasePageCommand}" Margin="0,0,8,8" automation:AutomationProperties.Name="Open release page in browser" automation:AutomationProperties.AutomationId="Diagnostics.OpenReleasePage" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
             </local:AdaptiveUniformGrid>
           </StackPanel>
         </ScrollViewer>
@@ -2657,6 +2783,46 @@
             <TextBlock Text="RigPilot" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Center" />
             <TextBlock Text="{Binding BusyMessage}" Style="{StaticResource MutedStyle}" TextAlignment="Center" TextWrapping="Wrap" Margin="0,7,0,15" />
             <ProgressBar IsIndeterminate="True" Height="4" Foreground="{StaticResource AccentBrush}" Background="{StaticResource BorderBrush}" />
+          </StackPanel>
+        </Border>
+      </Border>
+
+      <!-- One-time first-run tour. Hidden by default; only the real app startup
+           shows it (the deterministic snapshot host never does). It explains the
+           safety model — it grants and changes nothing. -->
+      <Border Grid.RowSpan="4" Background="#D90C1017" Panel.ZIndex="110" automation:AutomationProperties.AutomationId="Onboarding.Overlay" automation:AutomationProperties.Name="RigPilot first-run tour">
+        <Border.Style>
+          <Style TargetType="Border">
+            <Setter Property="Visibility" Value="Collapsed" />
+            <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingVisible}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+          </Style>
+        </Border.Style>
+        <Border Style="{StaticResource CardStyle}" Width="520" Padding="28" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0">
+          <StackPanel>
+            <TextBlock Text="{Binding OnboardingStepLabel}" Style="{StaticResource EyebrowStyle}" automation:AutomationProperties.AutomationId="Onboarding.StepLabel" />
+            <TextBlock Text="{Binding OnboardingTitle}" FontSize="22" FontWeight="Bold" Margin="0,6,0,10" automation:AutomationProperties.AutomationId="Onboarding.Title" />
+            <TextBlock Text="{Binding OnboardingBody}" TextWrapping="Wrap" LineHeight="21" automation:AutomationProperties.AutomationId="Onboarding.Body" />
+            <Grid Margin="0,22,0,0">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+              <Button Content="{loc:Loc Onboarding_Skip}" Command="{Binding OnboardingSkipCommand}" Style="{StaticResource GhostButtonStyle}" automation:AutomationProperties.Name="Skip first-run tour" automation:AutomationProperties.AutomationId="Onboarding.Skip" />
+              <Button Grid.Column="2" Content="{loc:Loc Onboarding_Back}" Command="{Binding OnboardingBackCommand}" Margin="0,0,8,0" automation:AutomationProperties.Name="Previous tour step" automation:AutomationProperties.AutomationId="Onboarding.Back" />
+              <Button Grid.Column="3" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding OnboardingNextCommand}" automation:AutomationProperties.Name="Next tour step" automation:AutomationProperties.AutomationId="Onboarding.Next">
+                <Button.Content>
+                  <TextBlock>
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock">
+                        <Setter Property="Text" Value="{loc:Loc Onboarding_Next}" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding IsOnboardingLastStep}" Value="True">
+                            <Setter Property="Text" Value="{loc:Loc Onboarding_Finish}" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
+                </Button.Content>
+              </Button>
+            </Grid>
           </StackPanel>
         </Border>
       </Border>

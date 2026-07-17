@@ -384,7 +384,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.DiscoverControllers => await DiscoverControllersAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.DiscoverHidInventory => await DiscoverHidInventoryAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.ReadKrakenTelemetry => await ReadKrakenTelemetryAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.GetStorageHealth => GetStorageHealth(request),
                 IpcCommand.SetKrakenLighting => await SetKrakenLightingAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetKrakenPumpDuty => await SetKrakenPumpDutyAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetAuraLighting => await SetAuraLightingAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StopConflictingProcesses => StopConflictingProcesses(request),
                 IpcCommand.ReadRyzenSmuFeasibility => await ReadRyzenSmuFeasibilityAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuFanControlArmed => await SetGpuFanControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
@@ -3286,6 +3289,14 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         return Success(request, result);
     }
 
+    private IpcResponse GetStorageHealth(IpcRequest request)
+    {
+        // Read-only Windows Storage provider snapshot (identity, health status,
+        // reliability counters). RigPilot has no storage write path; a provider
+        // failure is an explanatory report, not an error.
+        return Success(request, StorageHealthProbe.Read());
+    }
+
     private async Task<IpcResponse> ReadKrakenTelemetryAsync(IpcRequest request, CancellationToken cancellationToken)
     {
         // Read-only Kraken X3 liquid-cooler telemetry runs behind the same crash-isolated
@@ -3332,6 +3343,49 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ContainedKrakenLighting lighting = new(
             () => new AdapterHostControllerDiscoveryProcess("--set-kraken-rgb", argument));
         KrakenLightingResultV1 result = await lighting.WriteAsync(cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private async Task<IpcResponse> SetAuraLightingAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        // RigPilot's in-house AURA addressable lighting write. Experimental and
+        // double-confirmed; lighting registers only (no EEPROM/save), runs in
+        // the crash-contained Adapter Host child, no firmware read-back.
+        AuraLightingRequestV1 payload = IpcJson.FromElement<AuraLightingRequestV1>(request.Payload)
+            ?? throw new InvalidDataException("SetAuraLighting requires an AuraLightingRequestV1 payload.");
+        if (payload.Validate() is string refusal)
+        {
+            return Failure(request, "AURA_LIGHTING_NOT_CONFIRMED", refusal);
+        }
+
+        string argument = payload.TurnOff ? "off" : payload.Colour.Trim().TrimStart('#');
+        ContainedAuraLighting aura = new(
+            () => new AdapterHostControllerDiscoveryProcess("--set-aura-rgb", argument));
+        AuraLightingResultV1 result = await aura.WriteAsync(cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private async Task<IpcResponse> SetKrakenPumpDutyAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        // RigPilot's own native Kraken pump-duty write. Experimental and
+        // double-confirmed (explicit Experimental flag + exact device id).
+        // Pump speed is safety-critical, so the duty is hard-clamped to
+        // [60, 100]% at the request, the writer, and the report-builder layers
+        // — never below the floor, never stopped — the write runs in the
+        // crash-contained Adapter Host child, and the firmware status stream
+        // is read back before the result may claim verification.
+        KrakenPumpRequestV1 payload = IpcJson.FromElement<KrakenPumpRequestV1>(request.Payload)
+            ?? throw new InvalidDataException("SetKrakenPumpDuty requires a KrakenPumpRequestV1 payload.");
+        if (payload.Validate() is string refusal)
+        {
+            return Failure(request, "KRAKEN_PUMP_NOT_CONFIRMED", refusal);
+        }
+
+        ContainedKrakenPump pump = new(
+            () => new AdapterHostControllerDiscoveryProcess(
+                "--set-kraken-pump",
+                payload.DutyPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        KrakenPumpResultV1 result = await pump.WriteAsync(cancellationToken).ConfigureAwait(false);
         return Success(request, result);
     }
 
