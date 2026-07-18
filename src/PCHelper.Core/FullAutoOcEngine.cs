@@ -135,6 +135,7 @@ public static class FullAutoOcEngine
                 workloadStopError = exception;
             }
 
+            List<string> restorationFailureDetails = [];
             try
             {
                 await RestoreAndVerifyAsync(memoryCapability, memoryOriginal, memoryAdapter).ConfigureAwait(false);
@@ -142,6 +143,8 @@ public static class FullAutoOcEngine
             catch (Exception exception)
             {
                 restorationErrors.Add(exception);
+                restorationFailureDetails.Add(
+                    $"{memoryCapability.Name} ({memoryCapability.Id}): {exception.GetType().Name}: {exception.Message}");
             }
 
             try
@@ -151,12 +154,19 @@ public static class FullAutoOcEngine
             catch (Exception exception)
             {
                 restorationErrors.Add(exception);
+                restorationFailureDetails.Add(
+                    $"{coreCapability.Name} ({coreCapability.Id}): {exception.GetType().Name}: {exception.Message}");
             }
 
             if (restorationErrors.Count > 0)
             {
+                // The per-control reasons must live in the message: this string
+                // is what survives into the durable operation record, whereas
+                // the adapter trace is bounded in memory and is flushed by the
+                // service restart the failure message tells the operator to do.
                 restorationError = new HardwareOperationRecoveryException(
-                    $"Auto OC attempted both hardware restores, but could not prove {restorationErrors.Count} control state(s).",
+                    $"Auto OC attempted both hardware restores, but could not prove {restorationErrors.Count} control state(s). "
+                    + string.Join(" | ", restorationFailureDetails),
                     new AggregateException(restorationErrors));
             }
             else

@@ -182,20 +182,22 @@ public sealed class NvidiaGpuClockOffsetAdapter : IHardwareAdapter, IHardwareSta
             && prior >= bounds.MinimumKiloHertz
             && prior <= bounds.MaximumKiloHertz)
         {
-            await _transport.SetOffsetAsync(_domain, prior, cancellationToken).ConfigureAwait(false);
+            // Restore path: must succeed even after a disarm, or the machine is
+            // stranded at whatever offset tuning last applied.
+            await _transport.RestoreOffsetAsync(_domain, prior, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         // No captured prior offset (or it is no longer within the driver range):
         // return to stock clocks rather than leaving an unknown offset in place.
-        await _transport.SetOffsetAsync(_domain, GpuClockOffsetBounds.DefaultKiloHertz, cancellationToken).ConfigureAwait(false);
+        await _transport.RestoreOffsetAsync(_domain, GpuClockOffsetBounds.DefaultKiloHertz, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task ResetToDefaultAsync(string capabilityId, CancellationToken cancellationToken)
     {
         EnsureOwnedCapability(capabilityId);
         _ = await RequireBoundsAsync(cancellationToken).ConfigureAwait(false);
-        await _transport.SetOffsetAsync(_domain, GpuClockOffsetBounds.DefaultKiloHertz, cancellationToken).ConfigureAwait(false);
+        await _transport.RestoreOffsetAsync(_domain, GpuClockOffsetBounds.DefaultKiloHertz, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<HardwareStateVerification> VerifyDefaultStateAsync(

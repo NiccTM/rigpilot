@@ -82,6 +82,9 @@ public static class FullAutoOcV3Engine
         Exception? workloadStopError = null;
         List<HardwareStateVerification> restorationVerifications = [];
         List<Exception> restorationErrors = [];
+        // Which control each restoration failure belongs to. Without this the
+        // durable record can only say "3 controls failed" and not which ones.
+        List<string> restorationFailureDetails = [];
 
         try
         {
@@ -247,14 +250,25 @@ public static class FullAutoOcV3Engine
                 catch (Exception exception)
                 {
                     restorationErrors.Add(exception);
+                    restorationFailureDetails.Add(
+                        $"{stage.Capability.Name} ({stage.Capability.Id}): {exception.GetType().Name}: {exception.Message}");
                 }
             }
         }
 
         if (restorationErrors.Count > 0)
         {
+            // Name the controls and the exact reasons in the message itself.
+            // The inner AggregateException is retained for callers, but only
+            // this string reaches the durable operation record — and the
+            // adapter trace that would otherwise hold the detail is a bounded
+            // in-memory buffer that the recommended "restart the service"
+            // remedy flushes. Losing the cause of a RecoveryRequired at the
+            // moment the operator follows the instructions is the worst
+            // possible time to lose it.
             throw new HardwareOperationRecoveryException(
-                $"Auto OC V3 attempted every hardware restore but could not prove {restorationErrors.Count} control state(s).",
+                $"Auto OC V3 attempted every hardware restore but could not prove {restorationErrors.Count} control state(s). "
+                + string.Join(" | ", restorationFailureDetails),
                 new AggregateException(restorationErrors));
         }
         if (operationError is not null)

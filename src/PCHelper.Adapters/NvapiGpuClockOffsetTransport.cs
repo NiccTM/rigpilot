@@ -103,6 +103,28 @@ public sealed class NvapiGpuClockOffsetTransport : IGpuClockOffsetTransport, IDi
     public Task SetOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken)
     {
         EnsureWriteArmed();
+        return WriteOffsetAsync(domain, offsetKiloHertz, cancellationToken);
+    }
+
+    /// <summary>
+    /// Restores a captured offset without requiring an armed transport. Every
+    /// other guard — transport enabled, not disposed, editable P0 entry, driver
+    /// delta range — still applies; only the arm gate is bypassed, because a
+    /// restore returns hardware toward its prior state and refusing one leaves
+    /// the machine stranded in whatever state tuning last applied.
+    /// </summary>
+    public Task RestoreOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken)
+    {
+        if (!_enableWrites || _disposed)
+        {
+            throw new GpuClockSafetyException("The GPU clock-offset transport is not write-enabled.");
+        }
+
+        return WriteOffsetAsync(domain, offsetKiloHertz, cancellationToken);
+    }
+
+    private Task WriteOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken)
+    {
         IPerformanceStates20ClockEntry entry = FindP0Entry(domain)
             ?? throw new GpuClockSafetyException($"The NVIDIA driver exposes no editable P0 {domain} clock entry.");
         if (!entry.IsEditable)

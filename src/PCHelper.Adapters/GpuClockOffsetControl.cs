@@ -38,6 +38,21 @@ public interface IGpuClockOffsetTransport
     Task<GpuClockOffsetState> ReadStateAsync(GpuClockOffsetDomain domain, CancellationToken cancellationToken);
 
     Task SetOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Writes a previously captured offset (or stock) back, and is the only
+    /// write that does <b>not</b> require an armed transport.
+    ///
+    /// <para>Restoring must never be blocked by the arm gate. A restore can
+    /// only move hardware toward the state it was already in, so refusing one
+    /// strictly increases risk. Blocking it produced a genuine deadlock: after
+    /// a disarm, the rollback write was refused, the service could not prove a
+    /// default state, it entered RecoveryRequired and locked writes — which
+    /// left it still unable to restore. The adapter layer already exempts
+    /// rollback from its own arm check; this honours the same intent one layer
+    /// down. Bounds, editability, and range checks all still apply.</para>
+    /// </summary>
+    Task RestoreOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken);
 }
 
 /// <summary>Raised when a GPU clock-offset operation would violate a safety bound.</summary>
