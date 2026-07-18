@@ -118,9 +118,8 @@ public partial class App : System.Windows.Application, IDisposable, IAsyncDispos
         await _viewModel.InitialiseAsync();
         _viewModel.ShowOnboardingIfFirstRun();
 
-        // Quiet once-per-launch release check (user process only; rule 11 keeps
-        // all network access out of the service). Non-throwing by contract.
-        _ = _viewModel.CheckForUpdatesCoreAsync(noticeOnUpdate: true);
+        // Network access is user-initiated. The Diagnostics page exposes an
+        // explicit bounded update check; startup remains fully offline.
     }
 
     protected override void OnExit(ExitEventArgs e)

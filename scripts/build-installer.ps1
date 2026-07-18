@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "0.5.5",
+    [string]$Version,
     [string]$RuntimeInstaller,
     [switch]$SkipPublish,
     [switch]$SkipMsiBuild,
@@ -13,6 +13,9 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = & (Join-Path $PSScriptRoot "Get-ProductVersion.ps1") -IncludeSuffix
+}
 $localDotnet = Join-Path $HOME ".dotnet\dotnet.exe"
 $dotnet = if (Test-Path -LiteralPath $localDotnet) { $localDotnet } else { (Get-Command dotnet -ErrorAction Stop).Source }
 
@@ -40,6 +43,20 @@ function Sign-InstallerArtifact([string]$Path) {
         throw "Authenticode verification failed for $Path"
     }
 }
+
+function ConvertTo-InstallerVersion([string]$InputVersion) {
+    if ($InputVersion -notmatch '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)(?:[-+].*)?$') {
+        throw "Installer version must begin with three numeric components: $InputVersion"
+    }
+    foreach ($component in @($Matches.major, $Matches.minor, $Matches.patch)) {
+        if ([int64]$component -gt 255) {
+            throw "MSI version components must be in the range 0-255: $InputVersion"
+        }
+    }
+    return "$($Matches.major).$($Matches.minor).$($Matches.patch)"
+}
+
+$installerVersion = ConvertTo-InstallerVersion $Version
 
 if (-not $SkipPublish) {
     $publishArguments = @{ Version = $Version }
@@ -74,7 +91,7 @@ if (-not $SkipMsiBuild) {
     & $dotnet build $installerProject `
         --configuration Release `
         --no-restore `
-        -p:ProductVersion=$Version `
+        -p:ProductVersion=$installerVersion `
         -p:PublishDir=$publishDirectory `
         -p:OutputPath=$installerOutput
     if ($LASTEXITCODE -ne 0) {
@@ -105,7 +122,7 @@ if (-not [string]::IsNullOrWhiteSpace($RuntimeInstaller)) {
     & $dotnet build $bundleProject `
         --configuration Release `
         --no-restore `
-        -p:ProductVersion=$Version `
+        -p:ProductVersion=$installerVersion `
         -p:RuntimeInstaller=$runtimePath `
         -p:MsiPath=$msiPath `
         -p:OutputPath=$installerOutput

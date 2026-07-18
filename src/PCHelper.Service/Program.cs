@@ -2,6 +2,13 @@ using Microsoft.Extensions.Hosting.WindowsServices;
 using PCHelper.Core;
 using PCHelper.Service;
 
+if (args is ["--print-release-policy"])
+{
+    ReleaseTrustPolicy policy = ReleaseTrustPolicy.FromAssembly(typeof(PCHelperRuntime).Assembly);
+    Console.WriteLine($"publicUnsignedPreview={policy.PublicUnsignedPreview.ToString().ToLowerInvariant()};writesAllowed={policy.WritesAllowed.ToString().ToLowerInvariant()}");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--install-operators-group")
 {
     // Never fall through to the service host when invoked as a one-shot tool,

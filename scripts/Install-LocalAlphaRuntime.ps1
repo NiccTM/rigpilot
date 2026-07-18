@@ -30,6 +30,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $testPayloadScript = Join-Path $PSScriptRoot "Test-RuntimePayload.ps1"
+$expectedProductVersion = & (Join-Path $PSScriptRoot "Get-ProductVersion.ps1")
 $serviceName = "PCHelper"
 $serviceRegistryPath = "SYSTEM\CurrentControlSet\Services\$serviceName"
 $serviceDataRoot = Join-Path $env:ProgramData "PCHelper"
@@ -222,7 +223,7 @@ $payload = [System.IO.Path]::GetFullPath($PayloadRoot)
 if (-not (Test-Path -LiteralPath $payload -PathType Container)) {
     throw "Runtime payload does not exist: $payload"
 }
-& $testPayloadScript -PayloadRoot $payload -ExpectedProductVersion "0.5.5"
+& $testPayloadScript -PayloadRoot $payload -ExpectedProductVersion $expectedProductVersion
 
 if ($null -ne (Get-Process -Name "PCHelper.App" -ErrorAction SilentlyContinue)) {
     throw "Close the RigPilot dashboard before switching the service runtime."
@@ -239,7 +240,7 @@ if ($ReplaceExistingLocalAlpha) {
 }
 
 if ([string]::IsNullOrWhiteSpace($DeploymentRoot)) {
-    $DeploymentRoot = Join-Path $env:ProgramData ("RigPilot\LocalAlpha\0.5.5-alpha-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    $DeploymentRoot = Join-Path $env:ProgramData ("RigPilot\LocalAlpha\$expectedProductVersion-alpha-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 }
 $stageRoot = [System.IO.Path]::GetFullPath($DeploymentRoot)
 if (Test-Path -LiteralPath $stageRoot) {
@@ -277,7 +278,7 @@ $manifest = [ordered]@{
 try {
     New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
     Copy-Item -LiteralPath $payload -Destination $stagePayload -Recurse -Force
-    & $testPayloadScript -PayloadRoot $stagePayload -ExpectedProductVersion "0.5.5"
+    & $testPayloadScript -PayloadRoot $stagePayload -ExpectedProductVersion $expectedProductVersion
     if (-not (Test-Path -LiteralPath $alphaService -PathType Leaf) -or -not (Test-Path -LiteralPath $alphaCli -PathType Leaf)) {
         throw "Validated payload does not contain the required alpha service and CLI executables."
     }

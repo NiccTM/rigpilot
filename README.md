@@ -8,7 +8,7 @@ RigPilot is an open-source Windows control centre for desktop PCs. It provides a
 
 > **Brand continuity:** RigPilot is the public name. Existing `PCHelper` service, pipe, CLI, and `%ProgramData%\PCHelper` identifiers remain unchanged so existing installations, state, and permissions upgrade safely.
 
-The current workspace is a `0.4.0-alpha` development build. It adds commissioning, health/recovery, monitoring, gaming, lighting-layout, user-agent, and vendor-telemetry foundations, but is not a hardware-qualified release. Unqualified low-level controls are never presented as certified. A bounded adapter may expose an `Experimental` path only when it can prepare, apply, read back, roll back, and return to firmware/default control; the user must acknowledge both global and exact-device risk before an operation can start.
+The current source line is `0.5.5-alpha`. It includes service-owned transactional profiles, composite Auto OC, continuous cooling protection, exact-route RGB control, recovery journals, and crash-contained adapter hosts. It is not a hardware-qualified release. A bounded adapter may expose an `Experimental` path only when it can prepare, apply, read back when the device supports it, roll back, and return to firmware/default control; the user must acknowledge global and exact-device risk before an operation can start. An unsigned `0.5.5-preview.1` is deliberately build-locked to monitoring so it can be published without exposing service mutations.
 
 ## Current capabilities
 
@@ -59,22 +59,27 @@ The current workspace is a `0.4.0-alpha` development build. It adds commissionin
 - Redacted compatibility report generation and opt-in report API.
 - Headless `pchelper-cli probe --json`, `pchelper-cli trace --json`, `pchelper-cli operation [--id OPERATION_ID] --json`, and `pchelper-cli runtime-preflight --json` diagnostics, including `--local` to bypass an installed service during development. `scripts\Export-CaseFanCalibrationEvidence.ps1` normalizes one exact completed calibration as local read-only evidence and refuses to promote a no-stall result to restart-qualified.
 
-No qualified Ryzen 5800X or RTX 3090 clock/power endpoint is exposed yet. RTX 3090 and NCT6798D fan writes have controlled reference-system evidence, but remain `Experimental`. RTX 3090 restart verification was attempted and correctly rejected after inconsistent low-duty hysteresis and an 85.2 °C hotspot safety abort; zero-RPM remains disabled and the conservative unverified floor is 50%. Header identity, live emergency timing, suspend, reboot, uninstall, signed Game Bar installation, and multi-system evidence are incomplete. Active competing writers block every overlapping control. Identity-bound takeover, JavaScript effects, macro playback/recording, local desktop OSD, explicit PNG snapshots, OSD formatting, capture coordination, typed health/recovery, and update transactions have tested software paths. A health rule can enter safe mode, while an emergency-profile request waits for operator confirmation rather than silently writing hardware. Production competitor/startup mutation, RTSS output, WGC video capture, Media Foundation/WASAPI audio capture, vendor update installation, and any direct USB device protocol remain disabled until signed platform executors and physical tests exist. OpenRGB writes are delegated to an explicitly enabled local server. RigPilot never bundles WinRing0 and never asks users to disable Windows security features.
+The reference RTX 3090 and NCT6798D fan, GPU power/clock, Kraken, Aura, G.Skill DIMM, and Razer routes remain `Experimental` unless the public compatibility ledger says otherwise. Code-path tests and one-system observations do not qualify a product family. Active competing writers block overlapping controls; an unknown mutation result enters Recovery Required. RigPilot never bundles WinRing0, never raises voltage automatically, and never asks users to disable Windows security features.
 
-**Current motherboard-fan gate:** the `NCT6798D` Fan #1 LocalSystem Adapter Host no-write `Prepare` path now passes on this reference PC after the normal named-pipe client changed from `Identification` to `Impersonation`. A disposable LocalSystem `direct-prepare` diagnostic and a temporary alpha-service Adapter Host preflight both reported `Prepared=true` with `Apply`, `Verify`, `Rollback`, and `Reset` structurally false. A fresh matching unsigned `0.4.0-alpha` service is currently staged beneath `%ProgramData%\RigPilot\LocalAlpha` through normal UAC; the previous `0.3` service registry key, data snapshot, and a paired restore script are retained. This is a reversible development deployment, not a signed installer upgrade. One authorized Fan #1 identification pulse completed at 60% for two seconds: the live adapter trace recorded successful `Prepare`, `Apply`, `Verify`, and `ResetToDefault`, and the paired RPM sensor read about 1479 RPM after reset. A later bounded 100%-to-0% calibration completed with stable measurements, a 1959 RPM maximum, and successful rollback. The tach remained near 546 RPM even at the API's 0% command, so the controller/fan did not demonstrate a stop state; no restart duty or repeated restart verification exists. The `CASE_FAN_1` name is a persisted software alias, not physical-header proof. Commissioning remains incomplete and no curve is enabled. Fan #5 is persistently classified as `Pump` / `AIO_PUMP` with its matched RPM sensor, so service policy blocks every pump pulse, preflight, calibration, graph, profile, and tuning path pending exact pump qualification. Saving that policy sent no fan command.
+**Current motherboard-fan gate:** the effective minimum is the greater of 20% and the controller-reported or calibrated floor. A non-stopping output can use a measured nonzero curve; zero-RPM requires repeated stop/restart proof. CPU-fan and pump protections remain service-owned, and a saved alias is not physical-header evidence.
 
-The current source further separates a user-declared alias from a visually observed physical header, binds each calibration to its exact commissioning session, requires physical observation before a full calibration, and activates a graph only after a stable measured nonzero floor. A saved report can produce an inactive, exact-output CPU/GPU mixed profile with no zero-RPM point even after an app/service restart; application still requires the Experimental and exact-device acknowledgements. A zero-RPM graph point remains blocked until repeated restart verification passes. These source safeguards are tested but are not yet deployed into the temporary unsigned alpha service; restore the installed service before any further live work with `scripts\Restore-LocalAlphaRuntime.ps1` through normal UAC.
+The source separates a user-declared alias from a visually observed physical header, binds calibration to its exact commissioning session, and activates a graph only after a stable floor is measured. Profile apply, cooling, tuning, and hardware arming are serialized through service transactions; UI state is persisted only after the service reports the requested families verified.
 
 The current calibration has also been exported through the read-only evidence script. Its normalized outcome is `CompletedNoStallObservedAtMinimumCommand`: this describes the controller/fan behaviour at the API floor, not a failed rollback or a stop/restart pass. It predates the current adaptive schema and lacks a physical-header observation, so it is not promoted to a curve; repeat the full-range characterization only after the physical header is observed.
 
 The current one-system evidence is in `docs/qualification/reference-system.json`. Run `pchelper-cli qualification --ledger docs/qualification/reference-system.json` to evaluate the 18-system/two-independent-report release gate; it deliberately rejects this unsigned, incomplete reference record.
 
-A current local read-only NVML probe finds NVML 610.62, two RTX 3090 fan targets, and a 100-385 W power range. It exposes no setter, does not change the `ReadOnly` state, and does not qualify a clock, power, or voltage-frequency write path.
+Auto OC can screen bounded core and memory candidates through the contained workload host and rolls back on failed verification. Results remain provisional and exact-device-bound; no voltage increase is constructed. This software implementation does not by itself establish stability or qualify another GPU.
 
-Clarification: the source now contains the exact-identity Windows takeover executor, but its service-image Authenticode gate rejects every unsigned build before any process or startup mutation. Signed physical execution remains unqualified.
+Exact-identity takeover remains gated by service Authenticode and physical reset evidence. Unsigned public previews lock all service mutations, while unsigned local developer builds are clearly identified as non-release artifacts.
 
 See [docs/feature-status.md](docs/feature-status.md) for the exact implemented/partial matrix.
 See [docs/full-suite-plan-audit.md](docs/full-suite-plan-audit.md) for an item-by-item audit of the supplied full-suite plan and its remaining physical-release blockers.
+
+## Code signing policy and privacy
+
+- [Code signing policy](CODE_SIGNING.md)
+- [Privacy policy](PRIVACY.md)
 
 ## Build
 
@@ -101,7 +106,7 @@ $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\MSB
 Create a production Game Bar candidate only with a valid code-signing certificate. This produces and verifies a signed MSIX but does not install it:
 
 ```powershell
-.\scripts\build-gamebar.ps1 -Version 0.4.0-alpha -SigningCertificateThumbprint <certificate-thumbprint>
+.\scripts\build-gamebar.ps1 -Version 0.5.5-alpha -SigningCertificateThumbprint <certificate-thumbprint>
 ```
 
 Run a read-only local probe:
@@ -119,7 +124,7 @@ Check release gates without producing, installing, or modifying an update packag
 Verify that a published app, service, hosts, and CLI are one release line before WiX packages them:
 
 ```powershell
-.\scripts\Test-RuntimePayload.ps1 -PayloadRoot .\artifacts\publish -ExpectedProductVersion 0.4.0
+.\scripts\Test-RuntimePayload.ps1 -PayloadRoot .\artifacts\publish -ExpectedProductVersion 0.5.5-alpha
 & $dotnet run --project src/PCHelper.Cli -- runtime-preflight --json
 ```
 

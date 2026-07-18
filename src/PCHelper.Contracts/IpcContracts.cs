@@ -261,7 +261,9 @@ public sealed record ServiceStatus(
     string Message,
     bool RecoveryRequired = false,
     bool HardwareControlArmed = false,
-    CoolingRuntimeStatusV1? Cooling = null);
+    CoolingRuntimeStatusV1? Cooling = null,
+    bool ReleaseWritesLocked = false,
+    string? WriteLockReason = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter<CoolingRuntimeState>))]
 public enum CoolingRuntimeState

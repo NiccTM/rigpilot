@@ -21,6 +21,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private readonly ConcurrentDictionary<string, IpcResponse> _idempotentResponses = new(StringComparer.Ordinal);
     private readonly OwnershipLeaseManager _ownershipLeases = new();
     private readonly HealthRuleEngine _healthRuleEngine = new();
+    private readonly ReleaseTrustPolicy _releaseTrust = ReleaseTrustPolicy.FromAssembly(typeof(PCHelperRuntime).Assembly);
     private readonly string _serviceInstanceId = Guid.NewGuid().ToString("N");
     private readonly WindowsSystemHealthSignalProbe _healthSignalProbe = new();
     private SqliteStateStore? _store;
@@ -232,6 +233,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                     .ToArray()
             };
         }
+        if (!_releaseTrust.WritesAllowed)
+        {
+            snapshot = snapshot with
+            {
+                Warnings = snapshot.Warnings
+                    .Append(new DiagnosticWarning(
+                        "PUBLIC_PREVIEW_READ_ONLY",
+                        "Information",
+                        ReleaseTrustPolicy.WriteLockReason,
+                        "Install a signed RigPilot beta after verifying its signature and publisher."))
+                    .ToArray()
+            };
+        }
         await _snapshotGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -305,6 +319,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 request,
                 "NOT_AUTHORIZED",
                 "Hardware and profile changes require membership of the installed RigPilot operator group or an elevated session. Group membership added by the installer takes effect after you sign out and back in.");
+        }
+
+        if (_releaseTrust.GetMutationRejection(request.Command) is string releaseRejection)
+        {
+            return Failure(request, "PUBLIC_PREVIEW_READ_ONLY", releaseRejection);
         }
 
         if (IsMutatingCommand(request.Command) && _rollbackBlocked)
@@ -566,7 +585,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
     private ServiceStatus GetStatus()
     {
-        bool writesAvailable = !_rollbackBlocked;
+        bool writesAvailable = !_rollbackBlocked && _releaseTrust.WritesAllowed;
         CoolingRuntimeStatusV1 cooling = Volatile.Read(ref _coolingRuntimeStatus);
         bool coolingEmergency = cooling.State is CoolingRuntimeState.EmergencyMaximum or CoolingRuntimeState.RecoveryRequired;
         return new ServiceStatus(
@@ -578,12 +597,16 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             EmergencyMode: _rollbackBlocked || coolingEmergency,
             _rollbackBlocked
                 ? "RecoveryRequired: hardware writes are locked because default-state read-back did not complete."
-                : coolingEmergency
-                    ? cooling.Reason
-                    : "Service is healthy; Verified controls and explicitly confirmed Experimental controls can be written.",
+                : !_releaseTrust.WritesAllowed
+                    ? ReleaseTrustPolicy.WriteLockReason
+                    : coolingEmergency
+                        ? cooling.Reason
+                        : "Service is healthy; Verified controls and explicitly confirmed Experimental controls can be written.",
             RecoveryRequired: _rollbackBlocked,
             HardwareControlArmed: IsHardwareControlFullyArmed(),
-            Cooling: cooling);
+            Cooling: cooling,
+            ReleaseWritesLocked: !_releaseTrust.WritesAllowed,
+            WriteLockReason: _releaseTrust.WritesAllowed ? null : ReleaseTrustPolicy.WriteLockReason);
     }
 
     private bool IsHardwareControlFullyArmed()

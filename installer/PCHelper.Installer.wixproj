@@ -5,7 +5,7 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <Platform>x64</Platform>
     <NuGetLockFilePath>packages.installer.lock.json</NuGetLockFilePath>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">0.5.5</ProductVersion>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">$(VersionPrefix)</ProductVersion>
     <PublishDir Condition="'$(PublishDir)' == ''">$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)..\artifacts\publish'))</PublishDir>
     <DefineConstants>ProductVersion=$(ProductVersion);PublishDir=$(PublishDir)</DefineConstants>
     <SuppressValidation>false</SuppressValidation>

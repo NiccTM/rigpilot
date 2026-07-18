@@ -11,7 +11,7 @@
     <RuntimeIdentifiers Condition="'$(MSBuildProjectExtension)' == '.csproj'">win-x64</RuntimeIdentifiers>
     <Authors>RigPilot contributors</Authors>
     <Copyright>Copyright (c) RigPilot contributors</Copyright>
-    <RepositoryUrl>https://github.com/pchelper/pchelper</RepositoryUrl>
+    <RepositoryUrl>https://github.com/NiccTM/rigpilot</RepositoryUrl>
     <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
     <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.5.5</VersionPrefix>
     <VersionSuffix Condition="'$(VersionSuffix)' == ''">alpha</VersionSuffix>

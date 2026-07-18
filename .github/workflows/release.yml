@@ -8,7 +8,7 @@ on:
       version:
         description: SemVer without a leading v
         required: true
-        default: 0.2.0
+        default: 0.5.5-preview.1
       channel:
         description: Release channel
         required: true
@@ -16,7 +16,7 @@ on:
         options: [Nightly, Beta, Stable]
         default: Beta
       allow_unsigned:
-        description: Permit unsigned development artifacts; never use for public releases
+        description: Build an unsigned public preview with all service mutations locked
         required: true
         type: boolean
         default: false
@@ -32,6 +32,13 @@ jobs:
     env:
       SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
       SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORGANIZATION_ID: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+      SIGNPATH_RUNTIME_CONFIGURATION: ${{ vars.SIGNPATH_RUNTIME_CONFIGURATION }}
+      SIGNPATH_MSI_CONFIGURATION: ${{ vars.SIGNPATH_MSI_CONFIGURATION }}
+      SIGNPATH_BUNDLE_CONFIGURATION: ${{ vars.SIGNPATH_BUNDLE_CONFIGURATION }}
       ALLOW_UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_unsigned || 'false' }}
     steps:
       - uses: actions/checkout@v7
@@ -51,9 +58,31 @@ jobs:
         run: |
           $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.TrimStart('v') }
           if ($version -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw "Invalid release version: $version" }
-          $channel = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.channel }}' } elseif ($version -match 'nightly') { 'Nightly' } elseif ($version -match '(alpha|beta|rc)') { 'Beta' } else { 'Stable' }
+          $channel = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.channel }}' } elseif ($version -match 'nightly') { 'Nightly' } elseif ($version -match '(alpha|beta|preview|rc)') { 'Beta' } else { 'Stable' }
+          if ($env:ALLOW_UNSIGNED -eq 'true' -and $version -notmatch '-preview(?:\.|$)') {
+            throw 'Unsigned artifacts must use a preview SemVer and remain read-only.'
+          }
+          $signPathValues = @(
+            $env:SIGNPATH_API_TOKEN,
+            $env:SIGNPATH_ORGANIZATION_ID,
+            $env:SIGNPATH_PROJECT_SLUG,
+            $env:SIGNPATH_SIGNING_POLICY_SLUG,
+            $env:SIGNPATH_RUNTIME_CONFIGURATION,
+            $env:SIGNPATH_MSI_CONFIGURATION,
+            $env:SIGNPATH_BUNDLE_CONFIGURATION)
+          $signPathReady = @($signPathValues | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -eq 0
+          $signingMode = if ($env:ALLOW_UNSIGNED -eq 'true') {
+            'UnsignedPreview'
+          } elseif ($signPathReady) {
+            'SignPath'
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
+            'Pfx'
+          } else {
+            throw 'A signed release requires complete SignPath settings or the PFX fallback credentials.'
+          }
           "PRODUCT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "RELEASE_CHANNEL=$channel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIGNING_MODE=$signingMode" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Restore, build, and test
         shell: pwsh
@@ -80,12 +109,12 @@ jobs:
       - name: Require signing authority for releasable artifacts
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64) -and $env:ALLOW_UNSIGNED -ne 'true') {
-            throw 'Signing credentials are required. Use allow_unsigned only for private development artifacts.'
+          if ($env:SIGNING_MODE -notin 'SignPath', 'Pfx', 'UnsignedPreview') {
+            throw "Unsupported release signing mode: $env:SIGNING_MODE"
           }
 
       - name: Import release signing identity
-        if: env.SIGNING_CERTIFICATE_BASE64 != ''
+        if: env.SIGNING_MODE == 'Pfx'
         shell: pwsh
         run: |
           $pfx = Join-Path $env:RUNNER_TEMP 'pchelper-signing.pfx'
@@ -103,11 +132,58 @@ jobs:
       - name: Publish application payload
         shell: pwsh
         run: |
-          if ($env:ALLOW_UNSIGNED -eq 'true') {
-            ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION
-          } else {
+          if ($env:SIGNING_MODE -eq 'UnsignedPreview') {
+            ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION -LockServiceWrites
+          } elseif ($env:SIGNING_MODE -eq 'Pfx') {
             ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION -RequireSigning -SigningCertificateThumbprint $env:SIGNING_THUMBPRINT
+          } else {
+            ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION
           }
+
+      - name: Verify unsigned preview trust boundary
+        if: env.SIGNING_MODE == 'UnsignedPreview'
+        shell: pwsh
+        run: ./scripts/Test-RuntimePayload.ps1 -PayloadRoot artifacts/publish -ExpectedProductVersion $env:PRODUCT_VERSION -RequireServiceWritesLocked
+
+      - name: Upload runtime payload for SignPath
+        if: env.SIGNING_MODE == 'SignPath'
+        id: upload-signpath-runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: signpath-runtime-${{ env.PRODUCT_VERSION }}
+          path: artifacts/publish
+          if-no-files-found: error
+
+      - name: Sign runtime payload with SignPath
+        if: env.SIGNING_MODE == 'SignPath'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_RUNTIME_CONFIGURATION }}
+          github-artifact-id: ${{ steps.upload-signpath-runtime.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: artifacts/signpath-runtime-signed
+          parameters: |
+            version: ${{ toJSON(env.PRODUCT_VERSION) }}
+
+      - name: Install and verify SignPath runtime payload
+        if: env.SIGNING_MODE == 'SignPath'
+        shell: pwsh
+        run: |
+          $output = [IO.Path]::GetFullPath('artifacts/signpath-runtime-signed')
+          $allowedPrefix = $output.TrimEnd('\') + '\'
+          $contracts = @(Get-ChildItem -LiteralPath $output -Recurse -Filter runtime-contract.json -File)
+          if ($contracts.Count -ne 1) { throw "Expected one signed runtime contract, found $($contracts.Count)." }
+          $signedRoot = $contracts[0].Directory.FullName
+          if (-not ($signedRoot + '\').StartsWith($allowedPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Signed runtime output escaped its staging directory.' }
+          ./scripts/Update-RuntimeContract.ps1 -PayloadRoot $signedRoot -RequireSigning -Policy SignPathSignedRelease
+          $publish = [IO.Path]::GetFullPath('artifacts/publish')
+          if (-not $publish.StartsWith([IO.Path]::GetFullPath('artifacts') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Publish path escaped the artifact directory.' }
+          Remove-Item -LiteralPath $publish -Recurse -Force
+          Move-Item -LiteralPath $signedRoot -Destination $publish
 
       - name: Download and verify .NET Desktop Runtime
         shell: pwsh
@@ -116,37 +192,123 @@ jobs:
       - name: Build MSI
         shell: pwsh
         run: |
-          if ($env:ALLOW_UNSIGNED -eq 'true') {
-            ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish
-          } else {
+          if ($env:SIGNING_MODE -eq 'Pfx') {
             ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish -RequireSigning -SigningCertificateThumbprint $env:SIGNING_THUMBPRINT
+          } else {
+            ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish
           }
+
+      - name: Upload MSI for SignPath
+        if: env.SIGNING_MODE == 'SignPath'
+        id: upload-signpath-msi
+        uses: actions/upload-artifact@v7
+        with:
+          name: signpath-msi-${{ env.PRODUCT_VERSION }}
+          path: artifacts/installer/RigPilot.Installer.msi
+          if-no-files-found: error
+          archive: false
+
+      - name: Sign MSI with SignPath
+        if: env.SIGNING_MODE == 'SignPath'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_MSI_CONFIGURATION }}
+          github-artifact-id: ${{ steps.upload-signpath-msi.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: artifacts/signpath-msi-signed
+          parameters: |
+            version: ${{ toJSON(env.PRODUCT_VERSION) }}
+
+      - name: Install and verify SignPath MSI
+        if: env.SIGNING_MODE == 'SignPath'
+        shell: pwsh
+        run: |
+          $signed = @(Get-ChildItem artifacts/signpath-msi-signed -Recurse -Filter *.msi -File)
+          if ($signed.Count -ne 1) { throw "Expected one signed MSI, found $($signed.Count)." }
+          $signature = Get-AuthenticodeSignature -LiteralPath $signed[0].FullName
+          if ($signature.Status -ne 'Valid') { throw "SignPath MSI signature is $($signature.Status)." }
+          Copy-Item -LiteralPath $signed[0].FullName -Destination artifacts/installer/RigPilot.Installer.msi -Force
 
       - name: Build Burn bundle around signed MSI
         shell: pwsh
         run: |
           $runtime = Get-ChildItem artifacts\dependencies\windowsdesktop-runtime-10.*-win-x64.exe | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 -ExpandProperty FullName
-          if ($env:ALLOW_UNSIGNED -eq 'true') {
-            ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish -SkipMsiBuild -RuntimeInstaller $runtime
-          } else {
+          if ($env:SIGNING_MODE -eq 'Pfx') {
             ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish -SkipMsiBuild -RuntimeInstaller $runtime -RequireSigning -SigningCertificateThumbprint $env:SIGNING_THUMBPRINT
+          } else {
+            ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish -SkipMsiBuild -RuntimeInstaller $runtime
           }
+
+      - name: Upload bundle for SignPath
+        if: env.SIGNING_MODE == 'SignPath'
+        id: upload-signpath-bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: signpath-bundle-${{ env.PRODUCT_VERSION }}
+          path: artifacts/installer/RigPilot.Bundle.exe
+          if-no-files-found: error
+          archive: false
+
+      - name: Sign bundle with SignPath
+        if: env.SIGNING_MODE == 'SignPath'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_BUNDLE_CONFIGURATION }}
+          github-artifact-id: ${{ steps.upload-signpath-bundle.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: artifacts/signpath-bundle-signed
+          parameters: |
+            version: ${{ toJSON(env.PRODUCT_VERSION) }}
+
+      - name: Install and verify SignPath bundle
+        if: env.SIGNING_MODE == 'SignPath'
+        shell: pwsh
+        run: |
+          $signed = @(Get-ChildItem artifacts/signpath-bundle-signed -Recurse -Filter *.exe -File)
+          if ($signed.Count -ne 1) { throw "Expected one signed bundle, found $($signed.Count)." }
+          $signature = Get-AuthenticodeSignature -LiteralPath $signed[0].FullName
+          if ($signature.Status -ne 'Valid') { throw "SignPath bundle signature is $($signature.Status)." }
+          Copy-Item -LiteralPath $signed[0].FullName -Destination artifacts/installer/RigPilot.Bundle.exe -Force
+
+      - name: Verify signed release boundary
+        if: env.SIGNING_MODE != 'UnsignedPreview'
+        shell: pwsh
+        run: |
+          $contract = Get-Content artifacts/publish/runtime-contract.json -Raw | ConvertFrom-Json
+          foreach ($component in @($contract.components)) {
+            $path = Join-Path artifacts/publish ([string]$component.relativePath)
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -ne 'Valid') { throw "Runtime signature is not valid: $path ($($signature.Status))." }
+          }
+          foreach ($path in 'artifacts/installer/RigPilot.Installer.msi', 'artifacts/installer/RigPilot.Bundle.exe') {
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -ne 'Valid') { throw "Installer signature is not valid: $path ($($signature.Status))." }
+          }
+          ./scripts/Test-RuntimePayload.ps1 -PayloadRoot artifacts/publish -ExpectedProductVersion $env:PRODUCT_VERSION
 
       - name: Create release archive
         shell: pwsh
         run: |
           $release = 'artifacts\release'
           New-Item -ItemType Directory -Path $release -Force | Out-Null
-          Compress-Archive -Path artifacts\publish\* -DestinationPath "$release\PCHelper-$env:PRODUCT_VERSION-win-x64.zip" -CompressionLevel Optimal
-          Copy-Item artifacts\installer\PCHelper.Installer.msi "$release\PCHelper-$env:PRODUCT_VERSION-win-x64.msi"
-          Copy-Item artifacts\installer\PCHelper.Bundle.exe "$release\PCHelper-$env:PRODUCT_VERSION-setup.exe"
+          Compress-Archive -Path artifacts\publish\* -DestinationPath "$release\RigPilot-$env:PRODUCT_VERSION-win-x64.zip" -CompressionLevel Optimal
+          Copy-Item artifacts\installer\RigPilot.Installer.msi "$release\RigPilot-$env:PRODUCT_VERSION-win-x64.msi"
+          Copy-Item artifacts\installer\RigPilot.Bundle.exe "$release\RigPilot-$env:PRODUCT_VERSION-setup.exe"
 
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@v0
         with:
           path: artifacts/publish
           format: spdx-json
-          output-file: artifacts/release/PCHelper-${{ env.PRODUCT_VERSION }}.spdx.json
+          output-file: artifacts/release/RigPilot-${{ env.PRODUCT_VERSION }}.spdx.json
           upload-artifact: false
 
       - name: Generate checksums
@@ -161,7 +323,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: PCHelper-${{ env.PRODUCT_VERSION }}-${{ env.RELEASE_CHANNEL }}
+          name: RigPilot-${{ env.PRODUCT_VERSION }}-${{ env.RELEASE_CHANNEL }}
           path: artifacts/release/*
           if-no-files-found: error
 
@@ -170,4 +332,12 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" artifacts/release/* --draft --verify-tag --title "PC Helper $env:PRODUCT_VERSION ($env:RELEASE_CHANNEL)" --notes "Automated draft. Hardware write claims remain limited to COMPATIBILITY.md evidence."
+        run: |
+          $notes = @"
+          Automated draft. Hardware write claims remain limited to COMPATIBILITY.md evidence.
+
+          Unsigned previews are build-locked read-only. Signed releases require a manual signing approval.
+
+          [Code signing policy](https://github.com/NiccTM/rigpilot/blob/${{ github.sha }}/CODE_SIGNING.md) · [Privacy policy](https://github.com/NiccTM/rigpilot/blob/${{ github.sha }}/PRIVACY.md)
+          "@
+          gh release create "${{ github.ref_name }}" artifacts/release/* --draft --verify-tag --title "RigPilot $env:PRODUCT_VERSION ($env:RELEASE_CHANNEL)" --notes $notes

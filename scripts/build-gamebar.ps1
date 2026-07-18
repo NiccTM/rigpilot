@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "0.5.5-alpha",
+    [string]$Version,
     [Parameter(Mandatory)]
     [string]$SigningCertificateThumbprint,
     [string]$Publisher,
@@ -12,6 +12,9 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = & (Join-Path $PSScriptRoot "Get-ProductVersion.ps1") -IncludeSuffix
+}
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $repoRoot "artifacts\gamebar"
 }
