@@ -120,10 +120,11 @@ public static class RgbRoutingPolicy
             .Select(group => group.First())
             .OrderBy(endpoint => endpoint.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        string[] owners = GetLightingOwners(snapshot);
-        string[] dynamicLightingOwners = openRgbEnabled && openRgbConnected && openRgb.Length > 0
-            ? owners.Append("the connected local OpenRGB bridge").ToArray()
-            : owners;
+        IReadOnlyList<ConflictDescriptor> conflicts = snapshot?.Conflicts ?? [];
+        string[] broadOwners = OwnerNames(RgbConflictPolicy.FindBroadBlockingOwners(conflicts));
+        string[] dynamicPlaceholderOwners = openRgbEnabled && openRgbConnected && openRgb.Length > 0
+            ? broadOwners.Append("the connected local OpenRGB bridge").ToArray()
+            : broadOwners;
         List<RgbRouteAssessment> routes = [];
 
         if (dynamicLighting.Length == 0)
@@ -132,19 +133,26 @@ public static class RgbRoutingPolicy
                 "rgb:dynamic-lighting",
                 "Windows Dynamic Lighting",
                 "Windows HID LampArray",
-                dynamicLightingOwners.Length == 0 ? RgbRouteKind.WindowsDynamicLighting : RgbRouteKind.BlockedByOwner,
-                dynamicLightingOwners.Length == 0 ? RgbRouteState.SetupRequired : RgbRouteState.Blocked,
+                dynamicPlaceholderOwners.Length == 0 ? RgbRouteKind.WindowsDynamicLighting : RgbRouteKind.BlockedByOwner,
+                dynamicPlaceholderOwners.Length == 0 ? RgbRouteState.SetupRequired : RgbRouteState.Blocked,
                 0,
-                dynamicLightingOwners.Length == 0
+                dynamicPlaceholderOwners.Length == 0
                     ? "No HID LampArray endpoint has been reported by Windows yet. This open standard is the first choice for compatible peripherals and chassis devices."
-                    : OwnerSummary(dynamicLightingOwners),
-                dynamicLightingOwners.Length == 0
+                    : OwnerSummary(dynamicPlaceholderOwners),
+                dynamicPlaceholderOwners.Length == 0
                     ? "Probe Windows Dynamic Lighting after connecting or enabling a LampArray-compatible device."
                     : "Close or give control back from the listed lighting writer, then probe again."));
         }
         else
         {
-            routes.AddRange(dynamicLighting.Select(endpoint => BuildDynamicLightingRoute(endpoint, dynamicLightingOwners)));
+            routes.AddRange(dynamicLighting.Select(endpoint => BuildDynamicLightingRoute(
+                endpoint,
+                AddOpenRgbOwner(
+                    OwnerNames(RgbConflictPolicy.FindBlockingOwners(
+                        conflicts,
+                        endpoint.Name,
+                        endpoint.Manufacturer)),
+                    openRgbEnabled && openRgbConnected && openRgb.Length > 0))));
         }
 
         if (openRgb.Length == 0)
@@ -153,15 +161,15 @@ public static class RgbRoutingPolicy
                 "rgb:openrgb-local",
                 "Local OpenRGB server",
                 "OpenRGB",
-                owners.Length == 0 ? RgbRouteKind.OpenRgbBridge : RgbRouteKind.BlockedByOwner,
-                owners.Length > 0 ? RgbRouteState.Blocked : RgbRouteState.SetupRequired,
+                broadOwners.Length == 0 ? RgbRouteKind.OpenRgbBridge : RgbRouteKind.BlockedByOwner,
+                broadOwners.Length > 0 ? RgbRouteState.Blocked : RgbRouteState.SetupRequired,
                 0,
-                owners.Length > 0
-                    ? OwnerSummary(owners)
+                broadOwners.Length > 0
+                    ? OwnerSummary(broadOwners)
                     : openRgbEnabled
                         ? "The local SDK bridge is enabled but has not enumerated a controller in this session."
                         : "The optional local OpenRGB SDK bridge is disabled. RigPilot does not bundle or contact a remote OpenRGB server.",
-                owners.Length > 0
+                broadOwners.Length > 0
                     ? "Close or give control back from the listed lighting writer, then retry the local bridge."
                     : openRgbEnabled
                         ? "Start the user-installed OpenRGB SDK server on 127.0.0.1:6742, then test it here."
@@ -169,12 +177,19 @@ public static class RgbRoutingPolicy
         }
         else
         {
-            routes.AddRange(openRgb.Select(endpoint => BuildOpenRgbRoute(endpoint, owners, openRgbEnabled, openRgbConnected)));
+            routes.AddRange(openRgb.Select(endpoint => BuildOpenRgbRoute(
+                endpoint,
+                OwnerNames(RgbConflictPolicy.FindBlockingOwners(
+                    conflicts,
+                    endpoint.Name,
+                    endpoint.Manufacturer)),
+                openRgbEnabled,
+                openRgbConnected)));
         }
 
         if (snapshot is not null)
         {
-            routes.AddRange(BuildDirectInventoryRoutes(snapshot, owners));
+            routes.AddRange(BuildDirectInventoryRoutes(snapshot));
         }
 
         return routes
@@ -258,8 +273,7 @@ public static class RgbRoutingPolicy
     }
 
     private static IEnumerable<RgbRouteAssessment> BuildDirectInventoryRoutes(
-        HardwareSnapshot snapshot,
-        string[] owners)
+        HardwareSnapshot snapshot)
     {
         Dictionary<string, CapabilityDescriptor[]> capabilitiesByDevice = snapshot.Capabilities
             .Where(capability => capability.Domain == ControlDomain.Lighting)
@@ -272,7 +286,14 @@ public static class RgbRoutingPolicy
             .GroupBy(device => device.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .OrderBy(device => device.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(device => BuildDirectInventoryRoute(device, capabilitiesByDevice.GetValueOrDefault(device.Id, []), owners));
+            .Select(device => BuildDirectInventoryRoute(
+                device,
+                capabilitiesByDevice.GetValueOrDefault(device.Id, []),
+                OwnerNames(RgbConflictPolicy.FindBlockingOwners(
+                    snapshot.Conflicts,
+                    device.Name,
+                    device.Manufacturer,
+                    device.Model))));
     }
 
     private static bool IsRgbInventoryDevice(
@@ -380,14 +401,15 @@ public static class RgbRoutingPolicy
             "Prefer Windows Dynamic Lighting or the local OpenRGB bridge. For direct support, collect static-scene apply, read-back, reset, timeout, and ownership evidence for this exact controller." );
     }
 
-    private static string[] GetLightingOwners(HardwareSnapshot? snapshot) => snapshot?.Conflicts
-        .Where(conflict => conflict.IsRunning
-            && !string.Equals(conflict.Id, "openrgb", StringComparison.OrdinalIgnoreCase)
-            && conflict.ResourceFamilies.Contains("Lighting", StringComparer.OrdinalIgnoreCase))
+    private static string[] OwnerNames(IEnumerable<ConflictDescriptor> conflicts) => conflicts
         .Select(conflict => conflict.DisplayName)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .OrderBy(owner => owner, StringComparer.OrdinalIgnoreCase)
-        .ToArray() ?? [];
+        .ToArray();
+
+    private static string[] AddOpenRgbOwner(string[] owners, bool addOpenRgbOwner) => addOpenRgbOwner
+        ? owners.Append("the connected local OpenRGB bridge").ToArray()
+        : owners;
 
     private static string OwnerSummary(string[] owners) =>
         $"Lighting ownership is currently held by {string.Join(", ", owners)}. RigPilot will not send overlapping output.";

@@ -41,6 +41,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly Dictionary<string, CoolingGraphV1> _coolingGraphsById = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FanCalibrationV2> _fanCalibrationsByCapability = new(StringComparer.Ordinal);
     private readonly List<OpenRgbController> _openRgbControllers = [];
+    private readonly SemaphoreSlim _rgbMutationGate = new(1, 1);
     private readonly AsyncCommand _refreshCommand;
     private readonly AsyncCommand _applyProfileCommand;
     private readonly AsyncCommand _resetVerifiedCommand;
@@ -78,6 +79,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly AsyncCommand _removeMacroKeyPressCommand;
     private readonly AsyncCommand _saveMacroEditCommand;
     private readonly AsyncCommand _saveGameBundleCommand;
+    private readonly AsyncCommand _applyGameBundleCommand;
     private readonly AsyncCommand _showDesktopOsdCommand;
     private readonly AsyncCommand _hideDesktopOsdCommand;
     private readonly AsyncCommand _captureDesktopSnapshotCommand;
@@ -170,12 +172,16 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _openRgbColour = "#4EA1FF";
     private string _openRgbBrightnessText = "100";
     private int _openRgbControllerCount;
+    private bool _isRgbSyncRunning;
+    private string _rgbSyncStatus = "Sync everything uses each ready endpoint once and reports blocked or unverified routes separately.";
     private AutomationTriggerKind _newRuleTriggerKind = AutomationTriggerKind.Process;
     private ProfileV1? _newRuleProfile;
     private string _newRuleName = "Application profile";
     private string _newRuleTriggerValue = string.Empty;
     private string _newRulePriorityText = "100";
     private string _automationStatus = "No automation rules are active.";
+    private string _profileActivationStatus = "No profile bundle has been applied in this session.";
+    private string _gameBundleActivationStatus = "No game bundle has been applied in this session.";
     private string? _manualProfileId;
     private string? _pendingAutomationHotkey;
     private bool _automationEvaluating;
@@ -406,15 +412,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 "Info"));
         _probeOpenRgbCommand = new AsyncCommand(
             _ => ProbeOpenRgbCoreAsync(),
-            _ => OpenRgbEnabled && !HasLightingConflict,
+            _ => OpenRgbEnabled,
             ReportError);
         _applyOpenRgbCommand = new AsyncCommand(
             _ => ApplyOpenRgbCoreAsync(turnOff: false),
-            _ => OpenRgbEnabled && OpenRgbConnected && !HasLightingConflict && AreOpenRgbInputsValid,
+            _ => OpenRgbEnabled && OpenRgbConnected && HasReadyOpenRgbRoutes && AreOpenRgbInputsValid,
             ReportError);
         _turnOffOpenRgbCommand = new AsyncCommand(
             _ => ApplyOpenRgbCoreAsync(turnOff: true),
-            _ => OpenRgbEnabled && OpenRgbConnected && !HasLightingConflict,
+            _ => OpenRgbEnabled && OpenRgbConnected && HasReadyOpenRgbRoutes,
             ReportError);
         ApplyRazerChromaCommand = new AsyncCommand(
             _ => ApplyRazerChromaAsync(),
@@ -489,7 +495,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             ReportError);
         _applyDynamicLightingSceneCommand = new AsyncCommand(
             _ => ApplyDynamicLightingSceneCoreAsync(),
-            _ => SelectedLightingScene is not null && DynamicLightingDevices.Count > 0 && AreOpenRgbInputsValid && !HasDynamicLightingConflict,
+            _ => SelectedLightingScene is not null && HasReadyDynamicLightingRoutes && AreOpenRgbInputsValid,
             ReportError);
         _startMacroRecordingCommand = new AsyncCommand(
             _ => StartMacroRecordingCoreAsync(),
@@ -523,6 +529,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             _ => SaveGameBundleCoreAsync(),
             _ => IsUserAgentOnline && SelectedGame is not null,
             ReportError);
+        _applyGameBundleCommand = new AsyncCommand(
+            _ => ApplyGameBundleCoreAsync(),
+            _ => SelectedGame is not null,
+            ReportError,
+            _ => ShowNotice("Select a game before applying its bundle.", "Warning"));
         _showDesktopOsdCommand = new AsyncCommand(
             _ => ShowDesktopOsdCoreAsync(),
             _ => CanShowDesktopOsd,
@@ -783,6 +794,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public ObservableCollection<RgbRouteAssessment> RgbRouteAssessments { get; } = new BatchedObservableCollection<RgbRouteAssessment>();
 
+    public ObservableCollection<RgbApplyOutcome> LastRgbApplyOutcomes { get; } = new BatchedObservableCollection<RgbApplyOutcome>();
+
     public ObservableCollection<LightingZoneV1> DraftLightingZones { get; } = new BatchedObservableCollection<LightingZoneV1>();
 
     public ObservableCollection<MacroRecordingSessionV1> MacroRecordingSessions { get; } = new BatchedObservableCollection<MacroRecordingSessionV1>();
@@ -860,6 +873,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand SaveMacroEditCommand => _saveMacroEditCommand;
 
     public ICommand SaveGameBundleCommand => _saveGameBundleCommand;
+
+    public ICommand ApplyGameBundleCommand => _applyGameBundleCommand;
 
     public ICommand ShowDesktopOsdCommand => _showDesktopOsdCommand;
 
@@ -1665,9 +1680,44 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public int RgbBlockedRouteCount => RgbRouteAssessments.Count(route => route.State == RgbRouteState.Blocked);
 
+    public bool HasReadyOpenRgbRoutes => RgbRouteAssessments.Any(route =>
+        route.Route == RgbRouteKind.OpenRgbBridge && route.State == RgbRouteState.Ready);
+
+    public bool HasReadyDynamicLightingRoutes => RgbRouteAssessments.Any(route =>
+        route.Route == RgbRouteKind.WindowsDynamicLighting && route.State == RgbRouteState.Ready);
+
     public string RgbCompatibilitySummary => !HasRgbRouteAssessments
         ? "Waiting for RGB inventory and standard-bridge discovery."
         : $"{RgbReadyRouteCount} ready · {RgbSetupRouteCount} setup needed · {RgbReadOnlyRouteCount} direct qualification · {RgbBlockedRouteCount} blocked. Manufacturer recognition never enables a raw USB write by itself.";
+
+    public bool IsRgbSyncRunning
+    {
+        get => _isRgbSyncRunning;
+        private set
+        {
+            if (Set(ref _isRgbSyncRunning, value))
+            {
+                OnPropertyChanged(nameof(CanSyncAllRgb));
+                _syncAllRgbCommand?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool CanSyncAllRgb => AreOpenRgbInputsValid && !IsRgbSyncRunning;
+
+    public string RgbSyncStatus
+    {
+        get => _rgbSyncStatus;
+        private set => Set(ref _rgbSyncStatus, value);
+    }
+
+    public bool HasRgbApplyOutcomes => LastRgbApplyOutcomes.Count > 0;
+
+    public string ProfileActivationStatus
+    {
+        get => _profileActivationStatus;
+        private set => Set(ref _profileActivationStatus, value);
+    }
 
     public DynamicLightingDevice? SelectedDynamicLightingDevice
     {
@@ -2125,6 +2175,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged(nameof(SelectedGameCapturePreset));
             OnPropertyChanged(nameof(GameBundleSummary));
             _saveGameBundleCommand.RaiseCanExecuteChanged();
+            _applyGameBundleCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -2191,6 +2242,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     public string GameBundleSummary => SelectedGame is null
         ? "Select a local game to assign a profile, lighting scene, macro, OSD, and capture preset."
         : $"{SelectedGameProfile?.Name ?? "No profile"} · {SelectedGameLightingScene?.Name ?? "No scene"} · {SelectedGameMacro?.Name ?? "No macro"} · {SelectedGameOsdLayout?.Name ?? "No OSD"} · {SelectedGameCapturePreset?.Name ?? "No capture"}";
+
+    public string GameBundleActivationStatus
+    {
+        get => _gameBundleActivationStatus;
+        private set => Set(ref _gameBundleActivationStatus, value);
+    }
 
     public bool IsBusy
     {
@@ -3030,9 +3087,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             }
             else
             {
-                OpenRgbStatus = HasLightingConflict
+                OpenRgbStatus = HasBroadLightingConflict
                     ? LightingConflictReason
-                    : "Bridge enabled. Test the local SDK server before applying lighting.";
+                    : "Bridge enabled. Test the local SDK server; endpoint-specific owners will be skipped instead of blocking unrelated devices.";
                 RebuildRgbRouteAssessments();
             }
 
@@ -3151,6 +3208,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         && !string.Equals(conflict.Id, "openrgb", StringComparison.OrdinalIgnoreCase)
         && conflict.ResourceFamilies.Contains("Lighting", StringComparer.OrdinalIgnoreCase)) == true;
 
+    public bool HasBroadLightingConflict => RgbConflictPolicy.FindBroadBlockingOwners(
+        _snapshot?.Conflicts).Count > 0;
+
+    public bool HasScopedLightingConflict => HasLightingConflict && !HasBroadLightingConflict;
+
     public bool HasDynamicLightingConflict => HasLightingConflict
         || (OpenRgbEnabled && OpenRgbConnected && _openRgbControllers.Count > 0);
 
@@ -3166,7 +3228,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 .ToArray() ?? [];
             return owners.Length == 0
                 ? "No competing lighting writer detected."
-                : $"Lighting bridge blocked by {string.Join(", ", owners)}. RigPilot will not terminate another writer.";
+                : HasBroadLightingConflict
+                    ? $"Lighting output is broadly blocked by {string.Join(", ", owners)}. RigPilot will not terminate another writer."
+                    : $"Endpoint-specific owner detected: {string.Join(", ", owners)}. RigPilot skips only matching device families and can still apply unrelated ready routes.";
         }
     }
 
@@ -3638,7 +3702,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public async Task InitialiseAsync()
+    public async Task InitialiseAsync(bool startAutomaticRefresh = true)
     {
         BusyMessage = IsPortableMode
             ? Localization.L10n.Get("Portable_BusyMessage")
@@ -3652,7 +3716,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         finally
         {
             IsBusy = false;
-            if (!_disposed)
+            if (!_disposed && startAutomaticRefresh)
             {
                 _refreshTimer.Change(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
             }
@@ -5009,7 +5073,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             .OrderBy(health => health.Healthy ? 1 : 0)
             .ThenBy(health => health.AdapterId, StringComparer.OrdinalIgnoreCase)
             .Select(AdapterHealthDisplay.From), health => health.Name, StringComparer.Ordinal);
-        if (OpenRgbEnabled && HasLightingConflict)
+        if (OpenRgbEnabled && HasBroadLightingConflict)
         {
             OpenRgbStatus = LightingConflictReason;
         }
@@ -5537,15 +5601,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private void NotifyOpenRgbProperties()
     {
         OnPropertyChanged(nameof(HasLightingConflict));
+        OnPropertyChanged(nameof(HasBroadLightingConflict));
+        OnPropertyChanged(nameof(HasScopedLightingConflict));
         OnPropertyChanged(nameof(LightingConflictReason));
         OnPropertyChanged(nameof(HasDynamicLightingConflict));
         OnPropertyChanged(nameof(DynamicLightingConflictReason));
         OnPropertyChanged(nameof(OpenRgbConnectionLabel));
         OnPropertyChanged(nameof(AreOpenRgbInputsValid));
+        OnPropertyChanged(nameof(CanSyncAllRgb));
         _probeOpenRgbCommand.RaiseCanExecuteChanged();
         _applyOpenRgbCommand.RaiseCanExecuteChanged();
         _turnOffOpenRgbCommand.RaiseCanExecuteChanged();
         _applyDynamicLightingSceneCommand.RaiseCanExecuteChanged();
+        _syncAllRgbCommand?.RaiseCanExecuteChanged();
     }
 
     private void NotifyRgbRoutingProperties()
@@ -5555,7 +5623,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(RgbSetupRouteCount));
         OnPropertyChanged(nameof(RgbReadOnlyRouteCount));
         OnPropertyChanged(nameof(RgbBlockedRouteCount));
+        OnPropertyChanged(nameof(HasReadyOpenRgbRoutes));
+        OnPropertyChanged(nameof(HasReadyDynamicLightingRoutes));
         OnPropertyChanged(nameof(RgbCompatibilitySummary));
+        _applyOpenRgbCommand.RaiseCanExecuteChanged();
+        _turnOffOpenRgbCommand.RaiseCanExecuteChanged();
+        _applyDynamicLightingSceneCommand.RaiseCanExecuteChanged();
+        _syncAllRgbCommand?.RaiseCanExecuteChanged();
     }
 
     private void NotifyAutomationEditor()

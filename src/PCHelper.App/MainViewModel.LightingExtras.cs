@@ -24,6 +24,7 @@ public sealed partial class MainViewModel
     // process memory; only LED colour values reach the local OpenRGB socket.
 
     private const int AmbientTickMilliseconds = 150;
+    private static readonly TimeSpan RgbOperationTimeout = TimeSpan.FromSeconds(10);
 
     private CancellationTokenSource? _ambientCancellation;
     private Task? _ambientLoop;
@@ -332,102 +333,547 @@ public sealed partial class MainViewModel
         ShowNotice(result.Message, result.Outcome == KrakenLightingOutcome.WriteIssued ? "Success" : "Warning");
     }
 
-    // --- One-click sync: the chosen colour to every native device ------------
+    // --- One-click sync: route the chosen colour once per ready endpoint ------
 
     private AsyncCommand? _syncAllRgbCommand;
 
     public ICommand SyncAllRgbCommand => _syncAllRgbCommand ??= new AsyncCommand(
         parameter => SyncAllRgbAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
-        _ => CanRunHardwareAction(),
+        _ => CanSyncAllRgb,
         ReportError,
-        _ => ShowHardwareActionBlocked());
+        _ => ShowNotice(
+            IsRgbSyncRunning
+                ? "A lighting apply is already running. Wait for its per-route result."
+                : "Use a #RRGGBB colour and brightness from 0 to 100%.",
+            "Warning"));
 
-    /// <summary>
-    /// Applies the chosen colour to every RigPilot-native device in one click —
-    /// Kraken ring/logo, both Aura headers (which carries the ELV8 GPU holder),
-    /// the Trident Z RAM over SMBus, and the Razer case — each through its own
-    /// gated, crash-contained write path, with one combined outcome notice.
-    /// </summary>
     public async Task SyncAllRgbAsync(bool turnOff)
     {
-        if (!CanRunHardwareAction())
+        if (!TryParseOpenRgbInputs(out string colour, out int brightness))
         {
-            ShowHardwareActionBlocked();
+            ShowNotice("Use a #RRGGBB colour and brightness from 0 to 100%.", "Warning");
             return;
         }
 
-        List<NativeRgbSyncOutcome> outcomes = [];
-        async Task RunAsync(
-            string name,
-            IpcCommand command,
-            object payload,
-            Func<IpcResponse, (bool WriteIssued, string? Message)> inspect)
+        if (turnOff)
+        {
+            brightness = 0;
+        }
+
+        await ApplyUnifiedRgbAsync(
+            colour,
+            brightness,
+            turnOff,
+            scene: null,
+            useColourway: true,
+            operationLabel: turnOff ? "Lighting-off apply" : "Colour sync",
+            showNotice: true);
+    }
+
+    private async Task<IReadOnlyList<RgbApplyOutcome>> ApplyUnifiedRgbAsync(
+        string colour,
+        int brightness,
+        bool turnOff,
+        LightingSceneV1? scene,
+        bool useColourway,
+        string operationLabel,
+        bool showNotice)
+    {
+        await _rgbMutationGate.WaitAsync(_lifetime.Token);
+        IsRgbSyncRunning = true;
+        BusyMessage = operationLabel;
+        IsBusy = true;
+        try
+        {
+            if (AmbientRunning)
+            {
+                await StopAmbientLightingAsync();
+            }
+
+            List<RgbApplyOutcome> outcomes = [];
+            HashSet<string> reservedFamilies = new(StringComparer.OrdinalIgnoreCase);
+            bool openRgbActive = await ApplyReadyOpenRgbRoutesAsync(
+                colour,
+                brightness,
+                turnOff,
+                useColourway,
+                outcomes,
+                reservedFamilies);
+            if (!openRgbActive)
+            {
+                await ApplyReadyDynamicLightingRoutesAsync(
+                    colour,
+                    brightness,
+                    scene,
+                    outcomes,
+                    reservedFamilies);
+            }
+
+            await ApplyUncoveredNativeRgbRoutesAsync(
+                colour,
+                brightness,
+                turnOff,
+                outcomes,
+                reservedFamilies);
+            PublishRgbApplyOutcomes(operationLabel, outcomes, showNotice);
+            return outcomes;
+        }
+        finally
+        {
+            IsBusy = false;
+            IsRgbSyncRunning = false;
+            _rgbMutationGate.Release();
+        }
+    }
+
+    private async Task<(string Message, bool Warning)> ApplySavedLightingSceneAsync(
+        LightingSceneV1 scene,
+        string context)
+    {
+        if (!TryParseOpenRgbInputs(out string colour, out _))
+        {
+            return ($"{context} '{scene.Name}' was not applied because the current RGB colour is invalid.", true);
+        }
+
+        try
+        {
+            int brightness = (int)Math.Round(Math.Clamp(scene.BrightnessPercent, 0, 100));
+            IReadOnlyList<RgbApplyOutcome> outcomes = await ApplyUnifiedRgbAsync(
+                colour,
+                brightness,
+                turnOff: brightness == 0,
+                scene: scene,
+                useColourway: false,
+                operationLabel: $"{context} '{scene.Name}'",
+                showNotice: false);
+            int applied = outcomes.Count(outcome => outcome.Applied);
+            int unresolved = outcomes.Count(outcome => outcome.State is
+                RgbApplyState.Blocked or RgbApplyState.Failed or RgbApplyState.Unknown);
+            if (applied == 0)
+            {
+                return ($"{context} '{scene.Name}' reached no ready endpoint. {RgbSyncStatus}", true);
+            }
+
+            return unresolved == 0
+                ? ($"{context} '{scene.Name}' was issued to {applied} endpoint(s); visually confirm routes without read-back.", false)
+                : ($"{context} '{scene.Name}' was partially issued to {applied} endpoint(s). {RgbSyncStatus}", true);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return ($"{context} '{scene.Name}' failed independently: {exception.Message}", true);
+        }
+    }
+
+    private async Task<bool> ApplyReadyOpenRgbRoutesAsync(
+        string colour,
+        int brightness,
+        bool turnOff,
+        bool useColourway,
+        List<RgbApplyOutcome> outcomes,
+        HashSet<string> reservedFamilies)
+    {
+        if (!OpenRgbEnabled)
+        {
+            return false;
+        }
+
+        if (!OpenRgbConnected)
         {
             try
             {
-                IpcResponse response = await _client.SendAsync(
-                    NamedPipeRequestClient.CreateRequest(command, payload), _lifetime.Token);
-                (bool writeIssued, string? message) = inspect(response);
-                outcomes.Add(BuildNativeRgbSyncOutcome(name, response, writeIssued, message));
+                await EnsureOpenRgbServerRunningAsync(_lifetime.Token);
+                OpenRgbConnectionResult probe = await new OpenRgbSdkClient().ProbeAsync(_lifetime.Token);
+                SetOpenRgbControllers(probe.Controllers);
+                OpenRgbConnected = true;
+                OpenRgbStatus = probe.Message;
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                outcomes.Add(new NativeRgbSyncOutcome(
-                    name,
-                    Succeeded: false,
-                    $"{exception.GetType().Name}: {exception.Message}"));
+                OpenRgbConnected = false;
+                SetOpenRgbControllers([]);
+                OpenRgbStatus = $"Bridge discovery failed before any write: {exception.Message}";
+                outcomes.Add(new RgbApplyOutcome(
+                    "openrgb:discovery",
+                    "Local OpenRGB bridge",
+                    "openrgb",
+                    RgbApplyState.Failed,
+                    OpenRgbStatus));
+                return false;
             }
         }
 
-        static (bool WriteIssued, string? Message) KrakenResult(IpcResponse response)
+        RebuildRgbRouteAssessments();
+        List<(OpenRgbController Controller, string Family)> selected = [];
+        foreach (OpenRgbController controller in _openRgbControllers)
         {
-            KrakenLightingResultV1? result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload);
-            return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+            string family = RgbEndpointFamily.Resolve(controller.Name);
+            reservedFamilies.Add(family);
+            RgbRouteAssessment? route = RgbRouteAssessments.FirstOrDefault(
+                item => string.Equals(item.Id, $"openrgb:{controller.Id}", StringComparison.Ordinal));
+            if (route?.State == RgbRouteState.Ready && controller.LedCount > 0)
+            {
+                selected.Add((controller, family));
+                continue;
+            }
+
+            outcomes.Add(new RgbApplyOutcome(
+                $"openrgb:{controller.Id}",
+                controller.Name,
+                family,
+                route?.State == RgbRouteState.Blocked ? RgbApplyState.Blocked : RgbApplyState.Skipped,
+                route?.Summary ?? "The controller is not ready in the current OpenRGB session."));
         }
 
-        static (bool WriteIssued, string? Message) AuraResult(IpcResponse response)
+        if (selected.Count == 0)
         {
-            AuraLightingResultV1? result = IpcJson.FromElement<AuraLightingResultV1>(response.Payload);
-            return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+            return _openRgbControllers.Count > 0;
         }
 
-        static (bool WriteIssued, string? Message) DimmResult(IpcResponse response)
+        try
         {
-            DimmRgbResultV1? result = IpcJson.FromElement<DimmRgbResultV1>(response.Payload);
-            return (result?.WriteIssued == true, result?.Message);
+            OpenRgbSdkClient client = new();
+            uint[] selectedIds = selected.Select(item => item.Controller.Id).ToArray();
+            OpenRgbConnectionResult result = !useColourway || turnOff || SelectedColourway is null or { Id: "static" }
+                ? await client.SetStaticColourAsync(colour, brightness, selectedIds, _lifetime.Token)
+                : await client.SetColourwayAsync(SelectedColourway.Id, colour, brightness, selectedIds, _lifetime.Token);
+            SetOpenRgbControllers(result.Controllers);
+            OpenRgbConnected = true;
+            OpenRgbStatus = result.Message;
+            outcomes.AddRange(selected.Select(item => new RgbApplyOutcome(
+                $"openrgb:{item.Controller.Id}",
+                item.Controller.Name,
+                item.Family,
+                RgbApplyState.AppliedUnverified,
+                $"{result.Message} OpenRGB supplies no independent colour read-back; confirm this endpoint visually.")));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            bool failedBeforeWrite = IsPreWriteRgbFailure(exception.Message);
+            OpenRgbStatus = failedBeforeWrite
+                ? $"OpenRGB apply stopped before any lighting write: {exception.Message}"
+                : $"OpenRGB apply failed after mutation began: {exception.Message}";
+            RgbApplyState state = failedBeforeWrite
+                ? RgbApplyState.Failed
+                : RgbApplyState.Unknown;
+            outcomes.AddRange(selected.Select(item => new RgbApplyOutcome(
+                $"openrgb:{item.Controller.Id}",
+                item.Controller.Name,
+                item.Family,
+                state,
+                OpenRgbStatus)));
         }
 
-        static (bool WriteIssued, string? Message) RazerResult(IpcResponse response)
-        {
-            RazerRgbResultV1? result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload);
-            return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
-        }
-
-        await RunAsync("Kraken", IpcCommand.SetKrakenLighting,
-            new KrakenLightingRequestV1(KrakenLightingRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, KrakenLightingRequestV1.ExactDeviceId),
-            KrakenResult);
-        await RunAsync("Aura headers", IpcCommand.SetAuraLighting,
-            new AuraLightingRequestV1(AuraLightingRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, AuraLightingRequestV1.ExactDeviceId),
-            AuraResult);
-        await RunAsync("RAM", IpcCommand.SetDimmRgb,
-            new DimmRgbRequestV1(DimmRgbRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, DimmRgbRequestV1.ExactDeviceId),
-            DimmResult);
-        await RunAsync("Razer case", IpcCommand.SetRazerRgb,
-            new RazerRgbRequestV1(RazerRgbRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, RazerRgbRequestV1.ExactDeviceId),
-            RazerResult);
-
-        bool allOk = outcomes.All(outcome => outcome.Succeeded);
-        string summary = string.Join(
-            "; ",
-            outcomes.Select(outcome => outcome.Succeeded
-                ? $"{outcome.Name}: OK"
-                : $"{outcome.Name}: FAILED - {outcome.Message}"));
-        ShowNotice(
-            (turnOff ? "Lighting off: " : "Colour synced: ") + summary
-            + ". Lighting has no read-back on most devices — confirm visually.",
-            allOk ? "Success" : "Warning");
+        return true;
     }
 
+    private async Task ApplyReadyDynamicLightingRoutesAsync(
+        string colour,
+        int brightness,
+        LightingSceneV1? scene,
+        List<RgbApplyOutcome> outcomes,
+        HashSet<string> reservedFamilies)
+    {
+        try
+        {
+            IReadOnlyList<DynamicLightingDevice> devices = await DynamicLightingBridge
+                .ProbeAsync(_lifetime.Token)
+                .WaitAsync(RgbOperationTimeout, _lifetime.Token);
+            Replace(DynamicLightingDevices, devices, device => device.Id, StringComparer.OrdinalIgnoreCase);
+            OnPropertyChanged(nameof(DynamicLightingDeviceCount));
+            DynamicLightingStatus = devices.Count == 0
+                ? "Windows reported no LampArray-compatible devices."
+                : $"Windows reported {devices.Count} Dynamic Lighting device(s).";
+            RebuildRgbRouteAssessments();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            outcomes.Add(new RgbApplyOutcome(
+                "dynamic:discovery",
+                "Windows Dynamic Lighting",
+                "dynamic-lighting",
+                RgbApplyState.Failed,
+                $"Dynamic Lighting discovery failed before any write: {exception.Message}"));
+            return;
+        }
+
+        HashSet<string>? sceneDeviceIds = scene is { Zones.Count: > 0 }
+            ? scene.Zones.Select(zone => zone.DeviceId).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+        List<(DynamicLightingDevice Device, string Family)> selected = [];
+        foreach (DynamicLightingDevice device in DynamicLightingDevices)
+        {
+            string family = RgbEndpointFamily.Resolve(device.Name);
+            reservedFamilies.Add(family);
+            RgbRouteAssessment? route = RgbRouteAssessments.FirstOrDefault(
+                item => string.Equals(item.Id, $"dynamic:{device.Id}", StringComparison.Ordinal));
+            bool isSceneTarget = sceneDeviceIds is null || sceneDeviceIds.Contains(device.Id);
+            if (route?.State == RgbRouteState.Ready && device.LampCount > 0 && isSceneTarget)
+            {
+                selected.Add((device, family));
+                continue;
+            }
+
+            outcomes.Add(new RgbApplyOutcome(
+                $"dynamic:{device.Id}",
+                device.Name,
+                family,
+                route?.State == RgbRouteState.Blocked ? RgbApplyState.Blocked : RgbApplyState.Skipped,
+                !isSceneTarget
+                    ? "This endpoint is not part of the saved scene."
+                    : route?.Summary ?? "Windows did not expose this LampArray endpoint as ready."));
+        }
+
+        if (sceneDeviceIds is not null)
+        {
+            foreach (string missingId in sceneDeviceIds.Except(
+                DynamicLightingDevices.Select(device => device.Id),
+                StringComparer.OrdinalIgnoreCase))
+            {
+                outcomes.Add(new RgbApplyOutcome(
+                    $"dynamic:{missingId}",
+                    missingId,
+                    $"endpoint:{missingId}",
+                    RgbApplyState.Failed,
+                    "This saved-scene endpoint is not present in the current Windows LampArray inventory; no output was sent to it."));
+            }
+        }
+
+        if (selected.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            if (scene is { Zones.Count: > 0 })
+            {
+                HashSet<string> selectedIds = selected
+                    .Select(item => item.Device.Id)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                LightingSceneV1 routedScene = scene with
+                {
+                    Zones = scene.Zones.Where(zone => selectedIds.Contains(zone.DeviceId)).ToArray(),
+                    DisabledDeviceIds = scene.DisabledDeviceIds.Where(selectedIds.Contains).ToArray()
+                };
+                await DynamicLightingBridge
+                    .ApplyStaticSceneAsync(routedScene, colour, _lifetime.Token)
+                    .WaitAsync(RgbOperationTimeout, _lifetime.Token);
+            }
+            else
+            {
+                await DynamicLightingBridge
+                    .ApplyStaticColourAsync(
+                        selected.Select(item => item.Device.Id).ToArray(),
+                        colour,
+                        brightness,
+                        _lifetime.Token)
+                    .WaitAsync(RgbOperationTimeout, _lifetime.Token);
+            }
+            outcomes.AddRange(selected.Select(item => new RgbApplyOutcome(
+                $"dynamic:{item.Device.Id}",
+                item.Device.Name,
+                item.Family,
+                RgbApplyState.AppliedUnverified,
+                "Windows accepted the LampArray update, but no independent physical colour read-back is available.")));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            outcomes.AddRange(selected.Select(item => new RgbApplyOutcome(
+                $"dynamic:{item.Device.Id}",
+                item.Device.Name,
+                item.Family,
+                RgbApplyState.Unknown,
+                $"Dynamic Lighting failed after mutation began: {exception.Message}")));
+        }
+    }
+
+    private async Task ApplyUncoveredNativeRgbRoutesAsync(
+        string colour,
+        int brightness,
+        bool turnOff,
+        List<RgbApplyOutcome> outcomes,
+        HashSet<string> reservedFamilies)
+    {
+        string nativeColour = ScaleRgbHex(colour, brightness);
+        await ApplyNativeRgbRouteAsync(
+            "native:kraken",
+            "NZXT Kraken",
+            "nzxt-kraken",
+            IpcCommand.SetKrakenLighting,
+            new KrakenLightingRequestV1(KrakenLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, KrakenLightingRequestV1.ExactDeviceId),
+            response =>
+            {
+                KrakenLightingResultV1? result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload);
+                return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+            },
+            outcomes,
+            reservedFamilies);
+        await ApplyNativeRgbRouteAsync(
+            "native:aura",
+            "ASUS Aura headers",
+            "asus-aura",
+            IpcCommand.SetAuraLighting,
+            new AuraLightingRequestV1(AuraLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, AuraLightingRequestV1.ExactDeviceId),
+            response =>
+            {
+                AuraLightingResultV1? result = IpcJson.FromElement<AuraLightingResultV1>(response.Payload);
+                return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+            },
+            outcomes,
+            reservedFamilies);
+        await ApplyNativeRgbRouteAsync(
+            "native:dimm",
+            "G.Skill Trident Z RAM",
+            "dimm-rgb",
+            IpcCommand.SetDimmRgb,
+            new DimmRgbRequestV1(DimmRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, DimmRgbRequestV1.ExactDeviceId),
+            response =>
+            {
+                DimmRgbResultV1? result = IpcJson.FromElement<DimmRgbResultV1>(response.Payload);
+                return (result?.WriteIssued == true, result?.Message);
+            },
+            outcomes,
+            reservedFamilies);
+        await ApplyNativeRgbRouteAsync(
+            "native:razer",
+            "Razer Lian Li O11 case",
+            "razer-lianli",
+            IpcCommand.SetRazerRgb,
+            new RazerRgbRequestV1(RazerRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, RazerRgbRequestV1.ExactDeviceId),
+            response =>
+            {
+                RazerRgbResultV1? result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload);
+                return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+            },
+            outcomes,
+            reservedFamilies);
+    }
+
+    private async Task ApplyNativeRgbRouteAsync(
+        string routeId,
+        string name,
+        string family,
+        IpcCommand command,
+        object payload,
+        Func<IpcResponse, (bool WriteIssued, string? Message)> inspect,
+        List<RgbApplyOutcome> outcomes,
+        HashSet<string> reservedFamilies)
+    {
+        if (reservedFamilies.Contains(family))
+        {
+            outcomes.Add(new RgbApplyOutcome(
+                routeId,
+                name,
+                family,
+                RgbApplyState.Skipped,
+                "A standard bridge already owns this endpoint family, so the native writer was not called."));
+            return;
+        }
+
+        IReadOnlyList<ConflictDescriptor> owners = RgbConflictPolicy.FindBlockingOwners(
+            _snapshot?.Conflicts,
+            name);
+        if (owners.Count > 0)
+        {
+            outcomes.Add(new RgbApplyOutcome(
+                routeId,
+                name,
+                family,
+                RgbApplyState.Blocked,
+                $"Owned by {string.Join(", ", owners.Select(owner => owner.DisplayName))}; no native write was sent."));
+            return;
+        }
+
+        if (!CanRunHardwareAction())
+        {
+            outcomes.Add(new RgbApplyOutcome(
+                routeId,
+                name,
+                family,
+                RgbApplyState.Skipped,
+                CanUseServiceWrites
+                    ? "Turn on Hardware control to allow this exact-device native fallback."
+                    : GetServiceWriteBlockReason()));
+            return;
+        }
+
+        try
+        {
+            IpcResponse response = await _client.SendAsync(
+                NamedPipeRequestClient.CreateRequest(command, payload),
+                _lifetime.Token);
+            (bool writeIssued, string? deviceMessage) = inspect(response);
+            NativeRgbSyncOutcome native = BuildNativeRgbSyncOutcome(name, response, writeIssued, deviceMessage);
+            RgbApplyState state = native.Succeeded
+                ? RgbApplyState.AppliedUnverified
+                : IsUnknownRgbOutcome(native.Message)
+                    ? RgbApplyState.Unknown
+                    : string.Equals(response.ErrorCode, "RECOVERY_REQUIRED", StringComparison.OrdinalIgnoreCase)
+                        ? RgbApplyState.Blocked
+                        : RgbApplyState.Failed;
+            outcomes.Add(new RgbApplyOutcome(routeId, name, family, state, native.Message));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            outcomes.Add(new RgbApplyOutcome(
+                routeId,
+                name,
+                family,
+                RgbApplyState.Unknown,
+                $"The IPC operation ended without a final device result: {exception.Message}"));
+        }
+    }
+
+    private void PublishRgbApplyOutcomes(
+        string operationLabel,
+        IReadOnlyList<RgbApplyOutcome> outcomes,
+        bool showNotice)
+    {
+        Replace(LastRgbApplyOutcomes, outcomes, outcome => outcome.RouteId, StringComparer.Ordinal);
+        OnPropertyChanged(nameof(HasRgbApplyOutcomes));
+        int applied = outcomes.Count(outcome => outcome.Applied);
+        int blocked = outcomes.Count(outcome => outcome.State == RgbApplyState.Blocked);
+        int failed = outcomes.Count(outcome => outcome.State == RgbApplyState.Failed);
+        int unknown = outcomes.Count(outcome => outcome.State == RgbApplyState.Unknown);
+        int skipped = outcomes.Count(outcome => outcome.State == RgbApplyState.Skipped);
+        RgbSyncStatus = $"{operationLabel}: {applied} applied · {blocked} blocked · {failed} failed before write · {unknown} unknown · {skipped} skipped. Successful routes without hardware colour read-back still require visual confirmation.";
+        if (showNotice)
+        {
+            ShowNotice(RgbSyncStatus, applied > 0 && blocked + failed + unknown == 0 ? "Success" : "Warning");
+        }
+    }
+
+    private static bool IsUnknownRgbOutcome(string message) =>
+        message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("exceeded", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("without a final", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPreWriteRgbFailure(string message) =>
+        message.Contains("No lighting output was sent", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("before any lighting write", StringComparison.OrdinalIgnoreCase);
+
+    internal static string ScaleRgbHex(string colour, int brightnessPercent)
+    {
+        string text = colour.Trim().TrimStart('#');
+        if (text.Length != 6
+            || !uint.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint rgb))
+        {
+            throw new FormatException("Lighting colour must be a six-digit RGB hexadecimal value.");
+        }
+
+        double scale = Math.Clamp(brightnessPercent, 0, 100) / 100.0;
+        int red = (int)Math.Round((rgb >> 16 & 0xFF) * scale);
+        int green = (int)Math.Round((rgb >> 8 & 0xFF) * scale);
+        int blue = (int)Math.Round((rgb & 0xFF) * scale);
+        return $"#{red:X2}{green:X2}{blue:X2}";
+    }
+
+    /// <summary>
+    /// Uses the local OpenRGB bridge first, then Windows Dynamic Lighting, then
+    /// contained native fallbacks only for endpoint families not already owned
+    /// by a standard bridge. Every endpoint receives a truthful result.
+    /// </summary>
     internal static NativeRgbSyncOutcome BuildNativeRgbSyncOutcome(
         string name,
         IpcResponse response,

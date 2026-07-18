@@ -59,7 +59,11 @@ public sealed class UiAutomationSmokeTests
             Assert.Empty(root.GetProperty("errors").EnumerateArray());
             Assert.Equal(JsonValueKind.Object, root.GetProperty("featureReadiness").ValueKind);
             Assert.True(root.GetProperty("requiredAutomationIds").GetArrayLength() >= 20);
-            Assert.Equal(29, root.GetProperty("actionableHardwareControlIds").GetArrayLength());
+            JsonElement actionableControls = root.GetProperty("actionableHardwareControlIds");
+            Assert.Equal(30, actionableControls.GetArrayLength());
+            Assert.Contains(
+                actionableControls.EnumerateArray(),
+                item => string.Equals(item.GetString(), "Games.ApplyBundle", StringComparison.Ordinal));
             Assert.Equal(
                 root.GetProperty("interactiveControlCount").GetInt32(),
                 root.GetProperty("namedInteractiveControlCount").GetInt32());

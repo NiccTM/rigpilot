@@ -206,14 +206,84 @@ public sealed partial class MainViewModel
         ShowNotice($"Saved the per-game bundle for '{saved.Name}'.", "Success");
     }
 
+    private async Task ApplyGameBundleCoreAsync()
+    {
+        GameEntryV1 game = SelectedGame ?? throw new InvalidOperationException("Select a game first.");
+        List<string> results = [];
+        bool warning = false;
+
+        if (SelectedGameProfile is ProfileV1 profile)
+        {
+            if (_suiteProfilesById.TryGetValue(profile.Id, out ProfileV2? suiteProfile))
+            {
+                await ApplyProfileV2Async(
+                    suiteProfile,
+                    manualSelection: true,
+                    applyLinkedLighting: SelectedGameLightingScene is null,
+                    applyLinkedOsd: SelectedGameOsdLayout is null);
+            }
+            else
+            {
+                await ApplyProfileAsync(profile, manualSelection: true);
+            }
+
+            results.Add($"profile '{profile.Name}' committed");
+        }
+        else
+        {
+            results.Add("no hardware profile assigned");
+        }
+
+        if (SelectedGameLightingScene is LightingSceneV1 scene)
+        {
+            (string message, bool sceneWarning) = await ApplySavedLightingSceneAsync(scene, "Game scene");
+            warning |= sceneWarning;
+            results.Add(message);
+        }
+        else
+        {
+            results.Add("no lighting scene assigned");
+        }
+
+        if (SelectedGameOsdLayout is OsdLayoutV1 osdLayout)
+        {
+            try
+            {
+                SelectedDesktopOsdLayout = osdLayout;
+                ApplyDesktopOsdLayout(osdLayout);
+                results.Add($"OSD '{osdLayout.Name}' shown");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                warning = true;
+                results.Add($"OSD '{osdLayout.Name}' was not shown: {exception.Message}");
+            }
+        }
+
+        if (SelectedGameMacro is not null || SelectedGameCapturePreset is not null)
+        {
+            results.Add("macro and capture assignments remain explicit actions; bundle activation does not inject input or start recording");
+        }
+
+        GameBundleActivationStatus = $"{game.Name}: {string.Join("; ", results)}.";
+        ShowNotice(GameBundleActivationStatus, warning ? "Warning" : "Success");
+    }
+
     private Task ShowDesktopOsdCoreAsync()
+    {
+        OsdLayoutV1 layout = ResolveDesktopOsdLayout();
+        ApplyDesktopOsdLayout(layout);
+        ShowNotice("Desktop OSD is visible. Use Hide OSD to remove it.", "Success");
+        return Task.CompletedTask;
+    }
+
+    private void ApplyDesktopOsdLayout(OsdLayoutV1 layout)
     {
         if (_snapshot is null || _snapshot.Sensors.Count == 0)
         {
             throw new InvalidOperationException("Live sensor data is required before showing a desktop OSD.");
         }
 
-        OsdLayoutV1 layout = ResolveDesktopOsdLayout();
         OsdPresentationSettingsV1 presentation = TryBuildOsdPresentationSettings(out OsdPresentationSettingsV1 settings)
             ? settings
             : _osdPresentationSettings;
@@ -224,8 +294,6 @@ public sealed partial class MainViewModel
         _desktopOsd.Show(layout, _snapshot.Sensors, presentation);
         DesktopOsdStatus = $"Showing '{layout.Name}' as a local non-activating desktop overlay. It does not inject into games or write RTSS shared memory.";
         NotifyDesktopOsdProperties();
-        ShowNotice("Desktop OSD is visible. Use Hide OSD to remove it.", "Success");
-        return Task.CompletedTask;
     }
 
     private Task HideDesktopOsdCoreAsync()

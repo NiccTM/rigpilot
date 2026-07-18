@@ -41,7 +41,7 @@ public sealed class UiPresentationTests
         ProfileCardDisplay card = ProfileCardDisplay.From(profile, active: false);
 
         Assert.Equal("Stock-safe", card.StatusLabel);
-        Assert.Equal("No hardware writes in this build", card.ActionSummary);
+        Assert.Equal("No hardware or companion actions in this build", card.ActionSummary);
         Assert.False(card.IsActive);
     }
 
@@ -90,8 +90,37 @@ public sealed class UiPresentationTests
 
         ProfileCardDisplay card = ProfileCardDisplay.From(ProfileMigration.Downgrade(profile), active: false, suiteProfile: profile);
 
-        Assert.Equal("Calibrated cooling graph; apply manually", card.ActionSummary);
+        Assert.Equal("continuous cooling graph", card.ActionSummary);
         Assert.Equal("Experimental", card.StatusLabel);
+    }
+
+    [Fact]
+    public void ProfileCardListsCrossContextBundleParts()
+    {
+        ProfileV2 profile = new(
+            ProfileV2.CurrentSchemaVersion,
+            "bundle.performance",
+            "Performance bundle",
+            "Hardware, cooling, lighting, and OSD.",
+            [new ProfileAction("power", "windows.power", "windows.power.active-scheme", ControlValue.FromText("balanced"), true, 0)],
+            new SafetyLimits(),
+            CoolingGraphId: "cooling.performance",
+            LightingSceneId: "scene.performance",
+            OsdLayoutId: "osd.performance",
+            ManualOnlyActionIds: [],
+            AutomationReferences: [],
+            IsBuiltIn: false,
+            IsExperimental: false);
+
+        ProfileCardDisplay card = ProfileCardDisplay.From(
+            ProfileMigration.Downgrade(profile),
+            active: false,
+            suiteProfile: profile);
+
+        Assert.Contains("1 typed action", card.ActionSummary, StringComparison.Ordinal);
+        Assert.Contains("continuous cooling graph", card.ActionSummary, StringComparison.Ordinal);
+        Assert.Contains("user-session lighting scene", card.ActionSummary, StringComparison.Ordinal);
+        Assert.Contains("OSD layout", card.ActionSummary, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -139,6 +168,14 @@ public sealed class UiPresentationTests
             IsExperimental: true);
 
         Assert.False(MainViewModel.TryReadAutomaticCoolingMode(profile, out _));
+    }
+
+    [Fact]
+    public void ApplyGameBundleRemainsClickableWhenSelectionIsMissing()
+    {
+        using MainViewModel viewModel = new();
+
+        Assert.True(viewModel.ApplyGameBundleCommand.CanExecute(null));
     }
 
     [Fact]

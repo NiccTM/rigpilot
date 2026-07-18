@@ -830,6 +830,14 @@
               </Grid>
             </Border>
 
+            <Border Style="{StaticResource InsetCardStyle}" Margin="0,10,0,0">
+              <StackPanel>
+                <TextBlock Text="LAST BUNDLE ACTIVATION" Style="{StaticResource EyebrowStyle}" />
+                <TextBlock Text="{Binding ProfileActivationStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0"
+                           automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Profiles.ActivationStatus" />
+              </StackPanel>
+            </Border>
+
             <TextBlock Text="AVAILABLE PROFILES" Style="{StaticResource EyebrowStyle}" Margin="2,7,0,9" />
             <ItemsControl ItemsSource="{Binding ProfileCards}">
               <ItemsControl.ItemsPanel>
@@ -2083,7 +2091,7 @@
                     <Style TargetType="Border">
                       <Setter Property="Background" Value="{DynamicResource StateExperimentalBrush}" />
                       <Style.Triggers>
-                        <DataTrigger Binding="{Binding HasLightingConflict}" Value="True">
+                        <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
                           <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
                         </DataTrigger>
                       </Style.Triggers>
@@ -2098,7 +2106,7 @@
                         <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
                           <Setter Property="Content" Value="Experimental" />
                           <Style.Triggers>
-                            <DataTrigger Binding="{Binding HasLightingConflict}" Value="True">
+                            <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
                               <Setter Property="Content" Value="Blocked" />
                             </DataTrigger>
                           </Style.Triggers>
@@ -2157,13 +2165,40 @@
                   </WrapPanel>
                   <Separator Margin="0,4" />
                   <TextBlock Text="SYNC EVERYTHING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="{Binding RgbSyncStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8"
+                             automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.SyncStatus" />
                   <WrapPanel>
                     <Button Content="Sync colour to all devices" Command="{Binding SyncAllRgbCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
-                            ToolTip="One click: the chosen colour to the Kraken, both Aura headers (including the ELV8 GPU holder), the Trident Z RAM, and the Razer case — each through its own gated native path, with a combined result."
-                            automation:AutomationProperties.Name="Sync the chosen colour to every native RGB device" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgb" />
+                            ToolTip="Uses each ready route once: selective local OpenRGB first, Windows Dynamic Lighting next, then contained exact-device native fallbacks for uncovered families."
+                            automation:AutomationProperties.Name="Sync the chosen colour to every ready RGB route" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgb" />
                     <Button Content="All lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
-                            automation:AutomationProperties.Name="Turn every native RGB device off" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgbOff" />
+                            automation:AutomationProperties.Name="Turn every ready RGB route off" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgbOff" />
                   </WrapPanel>
+                  <ItemsControl ItemsSource="{Binding LastRgbApplyOutcomes}" Margin="0,2,0,2">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border Style="{StaticResource InsetCardStyle}" Margin="0,0,0,5">
+                          <StackPanel>
+                            <Grid>
+                              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                              <TextBlock Text="{Binding StateLabel}" HorizontalAlignment="Right" FontWeight="SemiBold">
+                                <TextBlock.Style>
+                                  <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                    <Style.Triggers>
+                                      <DataTrigger Binding="{Binding StateTone}" Value="Safe"><Setter Property="Foreground" Value="{StaticResource SafeBrush}" /></DataTrigger>
+                                      <DataTrigger Binding="{Binding StateTone}" Value="Critical"><Setter Property="Foreground" Value="{StaticResource CriticalBrush}" /></DataTrigger>
+                                    </Style.Triggers>
+                                  </Style>
+                                </TextBlock.Style>
+                              </TextBlock>
+                            </Grid>
+                            <TextBlock Text="{Binding Message}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
                   <Separator Margin="0,4" />
                   <TextBlock Text="KRAKEN COOLER" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding KrakenLightingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingStatus" />
@@ -2574,7 +2609,14 @@
                     <StackPanel Margin="0,0,8,9"><TextBlock Text="CAPTURE" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" /><ComboBox ItemsSource="{Binding CapturePresets}" SelectedItem="{Binding SelectedGameCapturePreset}" automation:AutomationProperties.Name="Capture preset for selected game" automation:AutomationProperties.AutomationId="Games.GameCapture"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox></StackPanel>
                   </local:AdaptiveUniformGrid>
                   <TextBlock Text="{Binding GameBundleSummary}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,10" />
-                  <Button Content="Save game bundle" Command="{Binding SaveGameBundleCommand}" Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" automation:AutomationProperties.AutomationId="Games.SaveBundle" />
+                  <TextBlock Text="{Binding GameBundleActivationStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,10"
+                             automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Games.BundleActivationStatus" />
+                  <WrapPanel>
+                    <Button Content="Save game bundle" Command="{Binding SaveGameBundleCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" automation:AutomationProperties.AutomationId="Games.SaveBundle" />
+                    <Button Content="Apply bundle now" Command="{Binding ApplyGameBundleCommand}" Margin="0,0,8,8"
+                            ToolTip="Commits the selected hardware profile, applies its explicit game lighting scene, and shows the assigned OSD. Macros and capture still require an explicit action."
+                            automation:AutomationProperties.AutomationId="Games.ApplyBundle" />
+                  </WrapPanel>
                 </StackPanel>
               </Border>
             </local:AdaptiveUniformGrid>
