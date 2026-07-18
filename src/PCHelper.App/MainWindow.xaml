@@ -1848,15 +1848,15 @@
                 <TextBlock Text="Sliders appear when the service reports the GPU control families. Turn on Hardware control in the header to apply; turning it off returns everything to vendor defaults." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,10,0,0" />
                 <Border Style="{StaticResource InsetCardStyle}" Margin="0,14,0,0">
                   <StackPanel>
-                    <TextBlock Text="Guided undervolt" FontWeight="SemiBold" />
+                    <TextBlock Text="Efficiency power target" FontWeight="SemiBold" />
                     <TextBlock Text="{Binding UndervoltStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,4,0,10" automation:AutomationProperties.AutomationId="Performance.UndervoltStatus" />
                     <WrapPanel>
                       <Button Content="Quiet (−25% power)" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="quiet" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                               ToolTip="Sets the GPU power limit to 75% of the vendor default. Biggest heat and noise reduction; a small FPS cost is possible in power-hungry titles."
-                              automation:AutomationProperties.Name="Apply quiet undervolt preset" automation:AutomationProperties.AutomationId="Performance.UndervoltQuiet" />
+                              automation:AutomationProperties.Name="Apply quiet efficiency power target" automation:AutomationProperties.AutomationId="Performance.UndervoltQuiet" />
                       <Button Content="Efficient (−15% power)" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="efficient" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                               ToolTip="Sets the GPU power limit to 85% of the vendor default. Near-stock frame rates with noticeably less heat in most games."
-                              automation:AutomationProperties.Name="Apply efficient undervolt preset" automation:AutomationProperties.AutomationId="Performance.UndervoltEfficient" />
+                              automation:AutomationProperties.Name="Apply efficient power target" automation:AutomationProperties.AutomationId="Performance.UndervoltEfficient" />
                       <Button Content="Back to stock" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="stock" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                               ToolTip="Restores the vendor default power limit."
                               automation:AutomationProperties.Name="Restore stock power target" automation:AutomationProperties.AutomationId="Performance.UndervoltStock" />

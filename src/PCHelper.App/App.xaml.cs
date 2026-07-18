@@ -337,7 +337,7 @@ public partial class App : System.Windows.Application, IDisposable, IAsyncDispos
         profileMenu.DropDown.BackColor = menu.BackColor;
         profileMenu.DropDown.ForeColor = menu.ForeColor;
 
-        // G-Helper-style quick access: the master switch and the undervolt
+        // G-Helper-style quick access: the master switch and efficiency power
         // presets are one click from the tray. Both run the exact same
         // acknowledged, transactional paths as the dashboard controls.
         Forms.ToolStripMenuItem hardwareControlItem = new("Hardware control", null, (_, _) =>
@@ -351,7 +351,7 @@ public partial class App : System.Windows.Application, IDisposable, IAsyncDispos
                 }
             }
         });
-        Forms.ToolStripMenuItem undervoltMenu = new("GPU undervolt");
+        Forms.ToolStripMenuItem undervoltMenu = new("GPU efficiency power target");
         Forms.ToolStripMenuItem undervoltQuiet = new("Quiet (\u221225% power)", null, async (_, _) => await _viewModel!.ApplyUndervoltPresetAsync(UndervoltPresets.Quiet));
         Forms.ToolStripMenuItem undervoltEfficient = new("Efficient (\u221215% power)", null, async (_, _) => await _viewModel!.ApplyUndervoltPresetAsync(UndervoltPresets.Efficient));
         Forms.ToolStripMenuItem undervoltStock = new("Back to stock", null, async (_, _) => await _viewModel!.ApplyUndervoltPresetAsync(UndervoltPresets.Stock));

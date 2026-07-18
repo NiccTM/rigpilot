@@ -735,7 +735,7 @@ public sealed partial class MainViewModel
         await RefreshAsync(full: true, userInitiated: false);
     }
 
-    // --- Guided undervolt (power-limit based; documented APIs only) -----------
+    // --- Efficiency power target (documented power-limit APIs only) -----------
 
     private string _undervoltStatus = "Lowers the GPU power target through the same transactional, read-back-verified path as the slider. Frame rates stay close to stock in most games while heat and fan noise drop. This is not a voltage-frequency curve editor.";
 
@@ -765,7 +765,7 @@ public sealed partial class MainViewModel
         double? target = UndervoltPresets.ComputeTargetWatts(power.Minimum, power.Maximum, power.Default, preset);
         if (target is not double watts)
         {
-            ShowNotice("That undervolt preset is not available for this GPU's reported power range.", "Warning");
+            ShowNotice("That efficiency power target is not available for this GPU's reported power range.", "Warning");
             return;
         }
 

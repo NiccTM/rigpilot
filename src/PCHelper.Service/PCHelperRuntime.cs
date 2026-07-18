@@ -1390,12 +1390,22 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ProfileV1 hardwareProfile = ProfileMigration.Downgrade(payload.Profile);
         IReadOnlyDictionary<string, CapabilityDescriptor> capabilities = capabilitiesV2
             .ToDictionary(pair => pair.Key, pair => pair.Value.Capability, StringComparer.Ordinal);
+        Func<CancellationToken, Task>? activateCooling = requestedCoolingGraph is null
+            ? null
+            : token => ReplaceActiveCoolingGraphTransactionAsync(requestedCoolingGraph, token);
+        IReadOnlyList<HardwareControlLeaseItemV1> coolingControls = requestedCoolingGraph is null
+            ? []
+            : requestedCoolingGraph.Graph.Outputs.Select(output => new HardwareControlLeaseItemV1(
+                capabilitiesV2[output.CapabilityId].Capability.AdapterId,
+                output.CapabilityId)).ToArray();
         (ProfileTransaction transaction, ProfileValidationResult legacyValidation) = await _engine!.ApplyAsync(
             hardwareProfile,
             capabilities,
             _engine.Revision,
             payload.ConfirmExperimental && unconfirmed.Length == 0,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            activateCooling,
+            coolingControls).ConfigureAwait(false);
         if (transaction.State == ProfileTransactionState.RecoveryRequired)
         {
             _rollbackBlocked = true;
@@ -1409,31 +1419,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         {
             return Failure(request, "PROFILE_REJECTED", transaction.Error ?? string.Join(" ", legacyValidation.Errors));
         }
-        string? coolingActivationError = await ConfigureActiveCoolingGraphAsync(
-            requestedCoolingGraph,
-            cancellationToken).ConfigureAwait(false);
-        if (coolingActivationError is null && requestedCoolingGraph is not null)
-        {
-            await _engine.RecordActiveControlsAsync(
-                payload.Profile.Id,
-                transaction.Id,
-                requestedCoolingGraph.Graph.Outputs.Select(output => new HardwareControlLeaseItemV1(
-                    capabilitiesV2[output.CapabilityId].Capability.AdapterId,
-                    output.CapabilityId)),
-                cancellationToken).ConfigureAwait(false);
-        }
         await _store!.SaveSuiteEntityAsync(
             SuiteEntityKind.ProfileV2,
             payload.Profile.Id,
             payload.Profile,
             cancellationToken).ConfigureAwait(false);
-        if (coolingActivationError is not null)
-        {
-            return Failure(
-                request,
-                "COOLING_GRAPH_ACTIVATION_FAILED",
-                $"The hardware profile committed, but its cooling graph was disabled and reset to firmware/default: {coolingActivationError}");
-        }
         return Success(request, new ApplyProfileResult(transaction, _engine.ActiveProfileId));
     }
 
@@ -4069,6 +4059,95 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
+    /// <summary>
+    /// Replaces the active graph as a verified pre-commit step of a hardware
+    /// profile transaction. A null profile graph never calls this method, so a
+    /// hardware-only profile preserves the independent base cooling policy.
+    /// </summary>
+    private async Task ReplaceActiveCoolingGraphTransactionAsync(
+        ActiveCoolingGraphRuntime requested,
+        CancellationToken cancellationToken)
+    {
+        await _coolingGraphGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        ActiveCoolingGraphRuntime? previous = _activeCoolingGraph;
+        HardwareSnapshot snapshot = GetSnapshot();
+        try
+        {
+            CoolingGraphRuntimeTick firstTick = requested.Runtime.Evaluate(
+                requested.Graph,
+                snapshot.Sensors,
+                requested.Calibrations,
+                requested.SafetyLimits.StalePollLimit,
+                snapshot.CapturedAt);
+            await ApplyCoolingGraphOutputsAsync(requested, snapshot, firstTick.Evaluation, cancellationToken).ConfigureAwait(false);
+
+            if (previous is not null)
+            {
+                HashSet<string> retainedOutputs = requested.Graph.Outputs
+                    .Select(output => output.CapabilityId)
+                    .ToHashSet(StringComparer.Ordinal);
+                await ResetCoolingGraphOutputsAsync(
+                    previous.Graph,
+                    snapshot,
+                    cancellationToken,
+                    retainedOutputs).ConfigureAwait(false);
+            }
+
+            _activeCoolingGraph = requested;
+        }
+        catch (Exception exception)
+        {
+            List<string> recoveryErrors = [];
+            try
+            {
+                await ResetCoolingGraphOutputsAsync(requested.Graph, snapshot, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception resetException)
+            {
+                recoveryErrors.Add($"new cooling policy reset failed: {resetException.Message}");
+            }
+
+            if (previous is not null)
+            {
+                try
+                {
+                    CoolingGraphRuntimeTick restoreTick = previous.Runtime.Evaluate(
+                        previous.Graph,
+                        snapshot.Sensors,
+                        previous.Calibrations,
+                        previous.SafetyLimits.StalePollLimit,
+                        snapshot.CapturedAt);
+                    await ApplyCoolingGraphOutputsAsync(previous, snapshot, restoreTick.Evaluation, CancellationToken.None).ConfigureAwait(false);
+                    _activeCoolingGraph = previous;
+                }
+                catch (Exception restoreException)
+                {
+                    recoveryErrors.Add($"previous cooling policy restore failed: {restoreException.Message}");
+                    _activeCoolingGraph = null;
+                }
+            }
+            else
+            {
+                _activeCoolingGraph = null;
+            }
+
+            if (recoveryErrors.Count > 0)
+            {
+                throw new HardwareStateUnknownException(
+                    "cooling-policy",
+                    "ReplaceActiveCoolingGraph",
+                    $"{exception.Message} Recovery errors: {string.Join("; ", recoveryErrors)}",
+                    exception);
+            }
+
+            throw;
+        }
+        finally
+        {
+            _coolingGraphGate.Release();
+        }
+    }
+
     private async Task TickCoolingGraphAsync(HardwareSnapshot snapshot, CancellationToken cancellationToken)
     {
         if (_rollbackBlocked || HasActiveOperation() || !await _coolingGraphGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
@@ -4209,11 +4288,17 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private async Task ResetCoolingGraphOutputsAsync(
         CoolingGraphV1 graph,
         HardwareSnapshot snapshot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<string>? excludedCapabilityIds = null)
     {
         List<string> errors = [];
         foreach (CoolingGraphOutputV1 output in graph.Outputs)
         {
+            if (excludedCapabilityIds?.Contains(output.CapabilityId) == true)
+            {
+                continue;
+            }
+
             try
             {
                 CapabilityDescriptor capability = snapshot.Capabilities.FirstOrDefault(item => item.Id == output.CapabilityId)
@@ -4222,7 +4307,20 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 {
                     throw new InvalidOperationException("Cooling output has no firmware/default reset path.");
                 }
-                await FindAdapter(capability.AdapterId).ResetToDefaultAsync(capability.Id, cancellationToken).ConfigureAwait(false);
+                IHardwareAdapter adapter = FindAdapter(capability.AdapterId);
+                await adapter.ResetToDefaultAsync(capability.Id, cancellationToken).ConfigureAwait(false);
+                if (adapter is not IHardwareStateVerifier verifier)
+                {
+                    throw new InvalidOperationException("Cooling output adapter does not support default-state read-back verification.");
+                }
+
+                HardwareStateVerification verification = await verifier
+                    .VerifyDefaultStateAsync(capability.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!verification.Success)
+                {
+                    throw new InvalidOperationException($"Default-state read-back failed: {verification.Message}");
+                }
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {

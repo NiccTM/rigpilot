@@ -22,7 +22,7 @@ public sealed partial class MainViewModel
 
     public ObservableCollection<BenchmarkHistoryEntryV1> BenchmarkHistoryEntries { get; } = new(BenchmarkHistory.Load());
 
-    private string _benchmarkCompareStatus = "Completed benchmark runs are recorded locally so the next run of the same game shows the change — e.g. after an undervolt preset.";
+    private string _benchmarkCompareStatus = "Completed benchmark runs are recorded locally so the next run of the same game shows the change — e.g. after an efficiency power-target change.";
 
     public string BenchmarkCompareStatus
     {
