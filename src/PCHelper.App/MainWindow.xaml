@@ -1876,6 +1876,10 @@
                           ToolTip="Temperature-biased GPU fan curve: ramps early and steeply, full speed at a lower temperature (78 °C)."
                           automation:AutomationProperties.Name="Enable cooling automatic GPU fan curve"
                           automation:AutomationProperties.AutomationId="Performance.GpuFanCooling" />
+                  <Button Content="Adaptive (pick for me)" Command="{Binding StartAdaptiveCoolingCommand}" CommandParameter="gpu" Style="{StaticResource HardwareModeButtonStyle}" Margin="0,0,8,8"
+                          ToolTip="Reads the current GPU temperature and picks Silent, Balanced, or Cooling, then keeps re-evaluating in the service — switching only after a sustained change, and escalating at once if the GPU gets hot or its sensor drops out."
+                          automation:AutomationProperties.Name="Enable adaptive automatic GPU fan curve chosen from live temperature"
+                          automation:AutomationProperties.AutomationId="Performance.GpuFanAdaptive" />
                 </WrapPanel>
                 <Grid Margin="0,2,0,0">
                   <TextBlock Text="{Binding OperationTitle}" FontWeight="SemiBold" />

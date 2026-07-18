@@ -173,7 +173,7 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter, IHardwareSta
             }
             DateTimeOffset now = DateTimeOffset.UtcNow;
             return TraverseHardware()
-                .SelectMany(hardware => hardware.Sensors.Select(sensor => ToSample(hardware, sensor, now)))
+                .SelectMany(hardware => hardware.Sensors.Select(sensor => ToSample(hardware, sensor, TimestampFor(hardware, now))))
                 .Where(sample => sample is not null)
                 .Cast<SensorSample>()
                 .ToArray();
@@ -399,6 +399,8 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter, IHardwareSta
             _probeUpdateAvailableForTelemetry = false;
             _knownControls.Clear();
             _knownControlCapabilities.Clear();
+            _hardwareUpdatedAt.Clear();
+            _infrequentUpdateTimestamp = 0;
         }
         finally
         {
@@ -433,16 +435,78 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter, IHardwareSta
         };
         _knownControls.Clear();
         _knownControlCapabilities.Clear();
+        _hardwareUpdatedAt.Clear();
+        _infrequentUpdateTimestamp = 0;
         _probeUpdateAvailableForTelemetry = false;
         _computer.Open();
         _lastError = null;
     }
 
+    /// <summary>
+    /// Subsystems whose backing reads are expensive and whose values do not
+    /// change meaningfully between control ticks. Storage in particular issues
+    /// SMART queries per drive; refreshing it on every telemetry tick dominated
+    /// capture time, which made every other sensor in the same snapshot appear
+    /// stale to the cooling engine's freshness gate.
+    /// </summary>
+    private static readonly HardwareType[] InfrequentlyUpdatedHardware =
+    [
+        HardwareType.Storage,
+        HardwareType.Network
+    ];
+
+    private static readonly TimeSpan InfrequentUpdateInterval = TimeSpan.FromSeconds(30);
+    private long _infrequentUpdateTimestamp;
+
+    /// <summary>
+    /// The moment each hardware subsystem last actually refreshed, so a sample
+    /// carries the age of the read that produced it rather than the age of the
+    /// traversal that collected it. Skipping an update must never make stale
+    /// data look fresh.
+    /// </summary>
+    private readonly Dictionary<string, DateTimeOffset> _hardwareUpdatedAt = new(StringComparer.Ordinal);
+
     private void UpdateHardware()
     {
         _probeUpdateAvailableForTelemetry = false;
-        _computer!.Accept(new UpdateVisitor());
+        bool includeInfrequent = _infrequentUpdateTimestamp == 0
+            || Stopwatch.GetElapsedTime(_infrequentUpdateTimestamp) >= InfrequentUpdateInterval;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (IHardware hardware in _computer!.Hardware)
+        {
+            if (!includeInfrequent && InfrequentlyUpdatedHardware.Contains(hardware.HardwareType))
+            {
+                continue;
+            }
+
+            UpdateHardwareTree(hardware, now);
+        }
+
+        if (includeInfrequent)
+        {
+            _infrequentUpdateTimestamp = Stopwatch.GetTimestamp();
+        }
     }
+
+    private void UpdateHardwareTree(IHardware hardware, DateTimeOffset now)
+    {
+        hardware.Update();
+        _hardwareUpdatedAt[hardware.Identifier.ToString()] = now;
+        foreach (IHardware sub in hardware.SubHardware)
+        {
+            UpdateHardwareTree(sub, now);
+        }
+    }
+
+    /// <summary>
+    /// The timestamp to report for a sample: when that subsystem last refreshed.
+    /// An unknown subsystem falls back to the collection time, which is the
+    /// behaviour before tiering and never claims data is older than it is.
+    /// </summary>
+    private DateTimeOffset TimestampFor(IHardware hardware, DateTimeOffset fallback) =>
+        _hardwareUpdatedAt.TryGetValue(hardware.Identifier.ToString(), out DateTimeOffset updated)
+            ? updated
+            : fallback;
 
     private bool TryConsumeProbeUpdate()
     {
