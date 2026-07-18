@@ -83,6 +83,29 @@ public sealed class ProfileValidatorTests
         Assert.Contains(result.Errors, error => error.Contains("voltage", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void ProfileCannotWeakenFixedCoolingSafetyLimits()
+    {
+        ProfileV1 profile = Profile(Action(required: false), experimental: false) with
+        {
+            SafetyLimits = new SafetyLimits(
+                FallbackCriticalTemperatureCelsius: 150,
+                StalePollLimit: 30,
+                EmergencyFanDutyPercent: 50,
+                AllowCpuFanStop: true,
+                AllowPumpStop: true)
+        };
+
+        ProfileValidationResult result = ProfileValidator.Validate(
+            profile,
+            new Dictionary<string, CapabilityDescriptor>(),
+            confirmExperimental: false);
+
+        Assert.False(result.Valid);
+        Assert.Contains(result.Errors, error => error.Contains("100%", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, error => error.Contains("CPU-fan", StringComparison.Ordinal));
+    }
+
     internal static ProfileAction Action(bool required) => new(
         "action-1",
         "test.adapter",

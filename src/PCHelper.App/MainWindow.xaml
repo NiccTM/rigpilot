@@ -1085,8 +1085,24 @@
                 </Border>
                 <Border Style="{StaticResource CardStyle}" Padding="18">
                   <StackPanel>
-                    <TextBlock Text="Always-on protection" Style="{StaticResource CardTitleStyle}" />
-                    <TextBlock Text="Three stale sensor polls request maximum cooling, firmware/default control, and a safety event. CPU fans and pumps cannot be stopped." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,7,0,0" />
+                    <Grid>
+                      <TextBlock Text="Continuous protection" Style="{StaticResource CardTitleStyle}" />
+                      <Border HorizontalAlignment="Right" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="{StaticResource RadiusBadge}" Padding="{StaticResource BadgePadding}">
+                        <TextBlock Text="{Binding CoolingProtectionStateLabel}">
+                          <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeTextStyle}">
+                              <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsCoolingProtectionActive}" Value="True"><Setter Property="Foreground" Value="{StaticResource SafeBrush}" /></DataTrigger>
+                                <DataTrigger Binding="{Binding IsCoolingProtectionEmergency}" Value="True"><Setter Property="Foreground" Value="{StaticResource WarningBrush}" /></DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </TextBlock.Style>
+                        </TextBlock>
+                      </Border>
+                    </Grid>
+                    <TextBlock Text="{Binding CoolingProtectionStatus}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,7,0,0" automation:AutomationProperties.LiveSetting="Polite" />
+                    <TextBlock Text="Critical temperature or sustained stale telemetry latches maximum duty. Three clean polls are required before the verified graph can ramp down; CPU fans and pumps cannot be stopped." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,7,0,0" />
                   </StackPanel>
                 </Border>
               </local:AdaptiveUniformGrid>
@@ -1283,9 +1299,9 @@
                   <StackPanel>
                     <TextBlock Text="Emergency policy" Style="{StaticResource CardTitleStyle}" />
                     <TextBlock Text="Fail-safe behaviour is fixed and cannot be weakened by a profile." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,5,0,13" />
-                    <Grid Margin="0,5"><Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="1" Foreground="{StaticResource AccentBrush}" FontWeight="Bold" /><TextBlock Grid.Column="1" Text="Three stale polls trigger 100% duty." /></Grid>
-                    <Grid Margin="0,5"><Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="2" Foreground="{StaticResource AccentBrush}" FontWeight="Bold" /><TextBlock Grid.Column="1" Text="Firmware/default control is requested." /></Grid>
-                    <Grid Margin="0,5"><Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="3" Foreground="{StaticResource AccentBrush}" FontWeight="Bold" /><TextBlock Grid.Column="1" Text="A safety event is raised and writes stop." /></Grid>
+                    <Grid Margin="0,5"><Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="1" Foreground="{StaticResource AccentBrush}" FontWeight="Bold" /><TextBlock Grid.Column="1" Text="Critical temperature or three stale polls latch hardware maximum duty." /></Grid>
+                    <Grid Margin="0,5"><Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="2" Foreground="{StaticResource AccentBrush}" FontWeight="Bold" /><TextBlock Grid.Column="1" Text="Three clean polls are required before the graph can ramp down." /></Grid>
+                    <Grid Margin="0,5"><Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="3" Foreground="{StaticResource AccentBrush}" FontWeight="Bold" /><TextBlock Grid.Column="1" Text="If maximum duty cannot be verified, firmware/default recovery runs and writes lock on failure." TextWrapping="Wrap" /></Grid>
                   </StackPanel>
                 </Border>
                 <Border x:Name="CoolingCommissioningWizard" Style="{StaticResource CardStyle}">

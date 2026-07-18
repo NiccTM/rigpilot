@@ -53,6 +53,8 @@ public static class ProfileV2Validator
             errors.Add("Profile ID and name are required.");
         }
 
+        SafetyLimitsValidator.Validate(profile.SafetyLimits, errors);
+
         if (profile.HardwareActions.Select(action => action.Id).Distinct(StringComparer.Ordinal).Count()
             != profile.HardwareActions.Count)
         {

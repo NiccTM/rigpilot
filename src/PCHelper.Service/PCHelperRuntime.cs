@@ -52,6 +52,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private CancellationTokenSource? _operationCancellation;
     private Task? _activeOperationTask;
     private ActiveCoolingGraphRuntime? _activeCoolingGraph;
+    private CoolingRuntimeStatusV1 _coolingRuntimeStatus = CoolingRuntimeStatusV1.Inactive(
+        "No service-owned cooling graph is active; firmware/default control is in effect.");
     private SafetyRecoveryStateV1 _safetyRecoveryState = new(
         SafetyRecoveryStateV1.CurrentSchemaVersion,
         SafetyRecoveryStateV1.DefaultId,
@@ -474,19 +476,28 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
         try
         {
-            await _coolingGraphGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            await _hardwareMutationGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
             try
             {
-                ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
-                _activeCoolingGraph = null;
-                if (active is not null && _coordinator is not null)
+                await _coolingGraphGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                try
                 {
-                    await ResetCoolingGraphOutputsAsync(active.Graph, GetSnapshot(), CancellationToken.None).ConfigureAwait(false);
+                    ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
+                    _activeCoolingGraph = null;
+                    if (active is not null && _coordinator is not null)
+                    {
+                        await ResetCoolingGraphOutputsAsync(active.Graph, GetSnapshot(), CancellationToken.None).ConfigureAwait(false);
+                    }
+                    PublishInactiveCoolingStatus("Service shutdown restored firmware/default cooling control.");
+                }
+                finally
+                {
+                    _coolingGraphGate.Release();
                 }
             }
             finally
             {
-                _coolingGraphGate.Release();
+                _hardwareMutationGate.Release();
             }
         }
         catch (Exception exception)
@@ -556,18 +567,23 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private ServiceStatus GetStatus()
     {
         bool writesAvailable = !_rollbackBlocked;
+        CoolingRuntimeStatusV1 cooling = Volatile.Read(ref _coolingRuntimeStatus);
+        bool coolingEmergency = cooling.State is CoolingRuntimeState.EmergencyMaximum or CoolingRuntimeState.RecoveryRequired;
         return new ServiceStatus(
             Version,
             _startedAt,
             CurrentRevision,
             _engine!.ActiveProfileId,
             writesAvailable,
-            EmergencyMode: _rollbackBlocked,
+            EmergencyMode: _rollbackBlocked || coolingEmergency,
             _rollbackBlocked
                 ? "RecoveryRequired: hardware writes are locked because default-state read-back did not complete."
-                : "Service is healthy; Verified controls and explicitly confirmed Experimental controls can be written.",
+                : coolingEmergency
+                    ? cooling.Reason
+                    : "Service is healthy; Verified controls and explicitly confirmed Experimental controls can be written.",
             RecoveryRequired: _rollbackBlocked,
-            HardwareControlArmed: IsHardwareControlFullyArmed());
+            HardwareControlArmed: IsHardwareControlFullyArmed(),
+            Cooling: cooling);
     }
 
     private bool IsHardwareControlFullyArmed()
@@ -4247,35 +4263,6 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         return new ActiveCoolingGraphRuntime(profileId, graph, selected, limits);
     }
 
-    private async Task<string?> ConfigureActiveCoolingGraphAsync(
-        ActiveCoolingGraphRuntime? requested,
-        CancellationToken cancellationToken)
-    {
-        await _coolingGraphGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            ActiveCoolingGraphRuntime? previous = _activeCoolingGraph;
-            _activeCoolingGraph = null;
-            if (previous is not null)
-            {
-                await ResetCoolingGraphOutputsAsync(previous.Graph, GetSnapshot(), cancellationToken).ConfigureAwait(false);
-            }
-
-            _activeCoolingGraph = requested;
-            return null;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            _activeCoolingGraph = null;
-            ServiceLog.CoolingGraphDeactivated(logger, exception);
-            return exception.Message;
-        }
-        finally
-        {
-            _coolingGraphGate.Release();
-        }
-    }
-
     /// <summary>
     /// Replaces the active graph as a verified pre-commit step of a hardware
     /// profile transaction. A null profile graph never calls this method, so a
@@ -4296,7 +4283,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 requested.Calibrations,
                 requested.SafetyLimits.StalePollLimit,
                 snapshot.CapturedAt);
-            await ApplyCoolingGraphOutputsAsync(requested, snapshot, firstTick.Evaluation, cancellationToken).ConfigureAwait(false);
+            CoolingSafetyDecision firstDecision = requested.Supervisor.Evaluate(
+                requested.Graph,
+                firstTick,
+                snapshot.Sensors,
+                requested.SafetyLimits,
+                snapshot.CapturedAt);
+            if (firstDecision.State == CoolingRuntimeState.EmergencyMaximum)
+            {
+                throw new InvalidOperationException(
+                    $"Cooling policy activation was refused before commit: {firstDecision.Reason}");
+            }
+
+            await ApplyCoolingGraphOutputsAsync(requested, snapshot, firstDecision.Evaluation, cancellationToken).ConfigureAwait(false);
 
             if (previous is not null)
             {
@@ -4311,6 +4310,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             }
 
             _activeCoolingGraph = requested;
+            PublishCoolingStatus(requested, firstDecision, firstTick);
         }
         catch (Exception exception)
         {
@@ -4334,8 +4334,15 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                         previous.Calibrations,
                         previous.SafetyLimits.StalePollLimit,
                         snapshot.CapturedAt);
-                    await ApplyCoolingGraphOutputsAsync(previous, snapshot, restoreTick.Evaluation, CancellationToken.None).ConfigureAwait(false);
+                    CoolingSafetyDecision restoreDecision = previous.Supervisor.Evaluate(
+                        previous.Graph,
+                        restoreTick,
+                        snapshot.Sensors,
+                        previous.SafetyLimits,
+                        snapshot.CapturedAt);
+                    await ApplyCoolingGraphOutputsAsync(previous, snapshot, restoreDecision.Evaluation, CancellationToken.None).ConfigureAwait(false);
                     _activeCoolingGraph = previous;
+                    PublishCoolingStatus(previous, restoreDecision, restoreTick);
                 }
                 catch (Exception restoreException)
                 {
@@ -4346,6 +4353,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             else
             {
                 _activeCoolingGraph = null;
+                PublishInactiveCoolingStatus("Cooling policy activation failed; no previous service-owned graph was active.");
             }
 
             if (recoveryErrors.Count > 0)
@@ -4367,13 +4375,35 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
     private async Task TickCoolingGraphAsync(HardwareSnapshot snapshot, CancellationToken cancellationToken)
     {
-        if (_rollbackBlocked || HasActiveOperation() || !await _coolingGraphGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+        if (_rollbackBlocked)
+        {
+            CoolingRuntimeStatusV1 current = Volatile.Read(ref _coolingRuntimeStatus);
+            if (current.State != CoolingRuntimeState.Inactive)
+            {
+                Volatile.Write(ref _coolingRuntimeStatus, current with
+                {
+                    State = CoolingRuntimeState.RecoveryRequired,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    Reason = "Cooling updates are blocked because hardware default-state recovery is required."
+                });
+            }
+            return;
+        }
+
+        if (!await _hardwareMutationGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
 
+        bool coolingGateHeld = false;
         try
         {
+            coolingGateHeld = await _coolingGraphGate.WaitAsync(0, cancellationToken).ConfigureAwait(false);
+            if (!coolingGateHeld)
+            {
+                return;
+            }
+
             ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
             if (active is null)
             {
@@ -4386,22 +4416,60 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 active.Calibrations,
                 active.SafetyLimits.StalePollLimit,
                 snapshot.CapturedAt);
+            CoolingSafetyDecision decision = active.Supervisor.Evaluate(
+                active.Graph,
+                tick,
+                snapshot.Sensors,
+                active.SafetyLimits,
+                snapshot.CapturedAt);
+            string? excludedCapabilityId = GetActiveCoolingOperationCapabilityId(snapshot);
+            if (decision.State == CoolingRuntimeState.EmergencyMaximum && excludedCapabilityId is not null)
+            {
+                RequestActiveOperationCancellation(excludedCapabilityId);
+            }
+
             try
             {
-                await ApplyCoolingGraphOutputsAsync(active, snapshot, tick.Evaluation, cancellationToken).ConfigureAwait(false);
-                if (tick.Evaluation.Emergency)
-                {
-                    await RecoverCoolingGraphAsync(active, snapshot, tick.Evaluation.Reason, cancellationToken).ConfigureAwait(false);
-                }
+                await ApplyCoolingGraphOutputsAsync(
+                    active,
+                    snapshot,
+                    decision.Evaluation,
+                    cancellationToken,
+                    excludedCapabilityId).ConfigureAwait(false);
+                PublishCoolingStatus(active, decision, tick, excludedCapabilityId);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                await RecoverCoolingGraphAsync(active, snapshot, exception.Message, cancellationToken).ConfigureAwait(false);
+                CoolingSafetyDecision forced = active.Supervisor.ForceEmergency(
+                    active.Graph,
+                    snapshot.CapturedAt,
+                    $"A cooling output update failed: {exception.Message}");
+                try
+                {
+                    await ApplyCoolingGraphOutputsAsync(
+                        active,
+                        snapshot,
+                        forced.Evaluation,
+                        CancellationToken.None,
+                        excludedCapabilityId).ConfigureAwait(false);
+                    PublishCoolingStatus(active, forced, tick, excludedCapabilityId);
+                }
+                catch (Exception maximumException)
+                {
+                    await RecoverCoolingGraphFailureAsync(
+                        active,
+                        snapshot,
+                        $"{forced.Reason} Maximum-cooling fallback also failed: {maximumException.Message}").ConfigureAwait(false);
+                }
             }
         }
         finally
         {
-            _coolingGraphGate.Release();
+            if (coolingGateHeld)
+            {
+                _coolingGraphGate.Release();
+            }
+            _hardwareMutationGate.Release();
         }
     }
 
@@ -4409,10 +4477,16 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ActiveCoolingGraphRuntime active,
         HardwareSnapshot snapshot,
         CoolingGraphEvaluation evaluation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? excludedCapabilityId = null)
     {
         foreach (CoolingGraphOutputV1 output in active.Graph.Outputs)
         {
+            if (string.Equals(output.CapabilityId, excludedCapabilityId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             if (!evaluation.OutputValues.TryGetValue(output.CapabilityId, out double target))
             {
                 throw new InvalidOperationException($"Cooling graph '{active.Graph.Id}' did not produce '{output.CapabilityId}'.");
@@ -4422,6 +4496,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 ?? throw new InvalidOperationException($"Cooling output '{output.CapabilityId}' is no longer available.");
             NumericRange range = capability.Range
                 ?? throw new InvalidOperationException($"Cooling output '{capability.Name}' no longer exposes numeric bounds.");
+            if (evaluation.Emergency)
+            {
+                // Emergency duty is fixed by the hardware capability, not by a
+                // profile's output cap; profiles cannot weaken maximum cooling.
+                target = range.Maximum;
+            }
             if (capability.State is not (CapabilityAccessState.Verified or CapabilityAccessState.Experimental)
                 || capability.Domain is not (ControlDomain.Cooling or ControlDomain.CoolingSafety)
                 || !capability.CanResetToDefault
@@ -4431,12 +4511,24 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 throw new InvalidOperationException($"Cooling output '{capability.Name}' no longer meets its active safety contract.");
             }
 
+            if (!evaluation.Emergency
+                && active.LastApplied.TryGetValue(capability.Id, out double applied)
+                && active.LastAppliedAt.TryGetValue(capability.Id, out DateTimeOffset appliedAt))
+            {
+                double seconds = Math.Max(0, (evaluation.Timestamp - appliedAt).TotalSeconds);
+                double maximumDelta = target >= applied
+                    ? output.StepUpPerSecond * seconds
+                    : output.StepDownPerSecond * seconds;
+                target = Math.Clamp(target, applied - maximumDelta, applied + maximumDelta);
+            }
+
             double threshold = Math.Max(0.25, range.Step / 2d);
             bool changed = !active.LastApplied.TryGetValue(capability.Id, out double previous)
                 || Math.Abs(previous - target) >= threshold;
             if (evaluation.Emergency || changed)
             {
                 await ApplyCoolingDutyAsync(active, capability, target, cancellationToken).ConfigureAwait(false);
+                active.LastAppliedAt[capability.Id] = evaluation.Timestamp;
             }
         }
     }
@@ -4466,41 +4558,113 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         active.LastApplied[capability.Id] = dutyPercent;
     }
 
-    private async Task RecoverCoolingGraphAsync(
+    private async Task RecoverCoolingGraphFailureAsync(
         ActiveCoolingGraphRuntime active,
         HardwareSnapshot snapshot,
-        string reason,
-        CancellationToken cancellationToken)
+        string reason)
     {
         List<string> errors = [];
-        foreach (CoolingGraphOutputV1 output in active.Graph.Outputs)
-        {
-            try
-            {
-                CapabilityDescriptor capability = snapshot.Capabilities.FirstOrDefault(item => item.Id == output.CapabilityId)
-                    ?? throw new InvalidOperationException("Cooling output disappeared.");
-                NumericRange range = capability.Range
-                    ?? throw new InvalidOperationException("Cooling output no longer exposes numeric bounds.");
-                await ApplyCoolingDutyAsync(active, capability, range.Maximum, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                errors.Add($"{output.CapabilityId}: maximum command failed ({exception.Message})");
-            }
-        }
-
         try
         {
-            await ResetCoolingGraphOutputsAsync(active.Graph, snapshot, cancellationToken).ConfigureAwait(false);
+            await ResetCoolingGraphOutputsAsync(active.Graph, snapshot, CancellationToken.None).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception)
         {
             errors.Add($"firmware/default recovery failed ({exception.Message})");
         }
 
         _activeCoolingGraph = null;
+        if (errors.Count > 0)
+        {
+            _rollbackBlocked = true;
+            Volatile.Write(ref _coolingRuntimeStatus, new CoolingRuntimeStatusV1(
+                CoolingRuntimeStatusV1.CurrentSchemaVersion,
+                active.ProfileId,
+                active.Graph.Id,
+                CoolingRuntimeState.RecoveryRequired,
+                DateTimeOffset.UtcNow,
+                active.Supervisor.EmergencySince,
+                new Dictionary<string, double>(active.LastApplied, StringComparer.Ordinal),
+                [],
+                new Dictionary<string, int>(),
+                $"RecoveryRequired: {reason} {string.Join("; ", errors)}"));
+        }
+        else
+        {
+            PublishInactiveCoolingStatus($"The active cooling writer failed; firmware/default control was restored and read back. {reason}");
+        }
         ServiceLog.CoolingGraphEmergency(logger, active.Graph.Id, reason, errors.Count == 0 ? null : string.Join("; ", errors));
     }
+
+    private string? GetActiveCoolingOperationCapabilityId(HardwareSnapshot snapshot)
+    {
+        HardwareOperationStatus? operation;
+        lock (_operationSync)
+        {
+            operation = _operationStatus is not null && IsActive(_operationStatus.State)
+                ? _operationStatus
+                : null;
+        }
+
+        return SelectCoolingOperationExclusion(operation, snapshot);
+    }
+
+    internal static string? SelectCoolingOperationExclusion(
+        HardwareOperationStatus? operation,
+        HardwareSnapshot snapshot)
+    {
+        if (operation is null || !IsActive(operation.State))
+        {
+            return null;
+        }
+
+        CapabilityDescriptor? capability = snapshot.Capabilities.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, operation.CapabilityId, StringComparison.Ordinal));
+        return capability?.Domain is ControlDomain.Cooling or ControlDomain.CoolingSafety
+            ? capability.Id
+            : null;
+    }
+
+    private void RequestActiveOperationCancellation(string capabilityId)
+    {
+        CancellationTokenSource? cancellation = null;
+        lock (_operationSync)
+        {
+            if (_operationStatus is not null
+                && IsActive(_operationStatus.State)
+                && string.Equals(_operationStatus.CapabilityId, capabilityId, StringComparison.Ordinal))
+            {
+                cancellation = _operationCancellation;
+            }
+        }
+
+        cancellation?.Cancel();
+    }
+
+    private void PublishCoolingStatus(
+        ActiveCoolingGraphRuntime active,
+        CoolingSafetyDecision decision,
+        CoolingGraphRuntimeTick tick,
+        string? excludedCapabilityId = null)
+    {
+        string reason = excludedCapabilityId is null
+            ? decision.Reason
+            : $"{decision.Reason} Output '{excludedCapabilityId}' is temporarily owned by an active cooling safety operation.";
+        Volatile.Write(ref _coolingRuntimeStatus, new CoolingRuntimeStatusV1(
+            CoolingRuntimeStatusV1.CurrentSchemaVersion,
+            active.ProfileId,
+            active.Graph.Id,
+            decision.State,
+            decision.Evaluation.Timestamp,
+            decision.State == CoolingRuntimeState.EmergencyMaximum ? decision.EmergencySince : null,
+            new Dictionary<string, double>(active.LastApplied, StringComparer.Ordinal),
+            tick.HeldSensorIds.OrderBy(id => id, StringComparer.Ordinal).ToArray(),
+            new Dictionary<string, int>(tick.StalePollCounts, StringComparer.Ordinal),
+            reason));
+    }
+
+    private void PublishInactiveCoolingStatus(string reason) =>
+        Volatile.Write(ref _coolingRuntimeStatus, CoolingRuntimeStatusV1.Inactive(reason));
 
     private async Task ResetCoolingGraphOutputsAsync(
         CoolingGraphV1 graph,
@@ -5035,7 +5199,9 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         public IReadOnlyDictionary<string, FanCalibrationV2> Calibrations { get; } = calibrations;
         public SafetyLimits SafetyLimits { get; } = safetyLimits;
         public CoolingGraphRuntime Runtime { get; } = new();
+        public CoolingSafetySupervisor Supervisor { get; } = new();
         public Dictionary<string, double> LastApplied { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, DateTimeOffset> LastAppliedAt { get; } = new(StringComparer.Ordinal);
     }
 
     private static HardwareSnapshot EmptySnapshot() => new(

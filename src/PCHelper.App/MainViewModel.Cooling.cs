@@ -18,6 +18,32 @@ namespace PCHelper.App;
 
 public sealed partial class MainViewModel
 {
+    public string CoolingProtectionStateLabel => _status?.Cooling?.State switch
+    {
+        CoolingRuntimeState.Normal => "GRAPH ACTIVE",
+        CoolingRuntimeState.SensorHold => "SENSOR HOLD",
+        CoolingRuntimeState.EmergencyMaximum => "MAXIMUM LATCHED",
+        CoolingRuntimeState.RecoveryRequired => "RECOVERY REQUIRED",
+        _ => "FIRMWARE CONTROL"
+    };
+
+    public string CoolingProtectionStatus => _status?.Cooling?.Reason
+        ?? "No service-owned cooling graph is active; firmware/default control is in effect.";
+
+    public bool IsCoolingProtectionActive => _status?.Cooling?.State is
+        CoolingRuntimeState.Normal or CoolingRuntimeState.SensorHold or CoolingRuntimeState.EmergencyMaximum;
+
+    public bool IsCoolingProtectionEmergency => _status?.Cooling?.State is
+        CoolingRuntimeState.EmergencyMaximum or CoolingRuntimeState.RecoveryRequired;
+
+    private void NotifyCoolingRuntimeProperties()
+    {
+        OnPropertyChanged(nameof(CoolingProtectionStateLabel));
+        OnPropertyChanged(nameof(CoolingProtectionStatus));
+        OnPropertyChanged(nameof(IsCoolingProtectionActive));
+        OnPropertyChanged(nameof(IsCoolingProtectionEmergency));
+    }
+
     private async Task RefreshFanCommissioningAsync(CancellationToken cancellationToken)
     {
         try

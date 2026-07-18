@@ -23,10 +23,7 @@ public static class ProfileValidator
             errors.Add("Profile ID and name are required.");
         }
 
-        if (profile.SafetyLimits.AllowAutomaticVoltageIncrease)
-        {
-            errors.Add("Automatic voltage increases are not allowed.");
-        }
+        SafetyLimitsValidator.Validate(profile.SafetyLimits, errors);
 
         foreach (IGrouping<string, ProfileAction> duplicate in profile.Actions.GroupBy(action => action.Id).Where(group => group.Count() > 1))
         {
@@ -127,6 +124,39 @@ public static class ProfileValidator
             {
                 errors.Add($"Action '{action.Id}' value {value} does not align to step {range.Step}.");
             }
+        }
+    }
+}
+
+internal static class SafetyLimitsValidator
+{
+    public static void Validate(SafetyLimits limits, List<string> errors)
+    {
+        if (!double.IsFinite(limits.FallbackCriticalTemperatureCelsius)
+            || limits.FallbackCriticalTemperatureCelsius is < 40 or > 110)
+        {
+            errors.Add("The fallback critical temperature must be between 40 and 110 °C.");
+        }
+
+        if (limits.StalePollLimit is < 1 or > 5)
+        {
+            errors.Add("The cooling stale-poll limit must be between one and five polls.");
+        }
+
+        if (!double.IsFinite(limits.EmergencyFanDutyPercent)
+            || Math.Abs(limits.EmergencyFanDutyPercent - 100) > 0.001)
+        {
+            errors.Add("Emergency cooling duty is fixed at 100% and cannot be weakened by a profile.");
+        }
+
+        if (limits.AllowAutomaticVoltageIncrease)
+        {
+            errors.Add("Automatic voltage increases are not allowed.");
+        }
+
+        if (limits.AllowCpuFanStop || limits.AllowPumpStop)
+        {
+            errors.Add("CPU-fan and pump stop protections cannot be disabled by a profile.");
         }
     }
 }

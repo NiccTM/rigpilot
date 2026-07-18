@@ -3963,6 +3963,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 EnsureSuccess(statusResponse);
                 _status = IpcJson.FromElement<ServiceStatus>(statusResponse.Payload)
                     ?? throw new InvalidDataException("Service returned an empty status response.");
+                NotifyCoolingRuntimeProperties();
                 if (_status.RecoveryRequired)
                 {
                     _hardwareControlArmedThisConnection = false;
@@ -4053,6 +4054,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             _hardwareControlArmAttemptedThisConnection = false;
             SetHardwareControlState(false);
             _status = null;
+            NotifyCoolingRuntimeProperties();
             _operation = null;
             NotifyOperationProperties();
             ServiceStatusText = _serviceCompatibility.State == ServiceCompatibilityState.Unavailable
