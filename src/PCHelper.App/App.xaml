@@ -2,6 +2,13 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Application.Resources>
+   <ResourceDictionary>
+    <!-- Merged first so the app dictionary's own entries below may reference
+         token keys with StaticResource; tokens reference app brushes only via
+         DynamicResource, so the order is safe in both directions. -->
+    <ResourceDictionary.MergedDictionaries>
+      <ResourceDictionary Source="Themes/RigPilot.Tokens.xaml" />
+    </ResourceDictionary.MergedDictionaries>
     <!-- Dark neutral surfaces keep live telemetry readable. Accent colours are
          reserved for focus, actions, and explicit status; colour never carries
          status without a text label or icon. The palette is deliberately
@@ -647,5 +654,6 @@
         </Trigger>
       </Style.Triggers>
     </Style>
+   </ResourceDictionary>
   </Application.Resources>
 </Application>

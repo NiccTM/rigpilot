@@ -228,11 +228,16 @@ public sealed record CapabilityDisplay(
             ? "No competing writer detected"
             : $"Blocked by {capability.ConflictOwner}";
         string nextSafeStep = GetNextSafeStep(capability);
+        // Blocked gets its own calm tone rather than sharing Critical with
+        // Faulted: a competing writer is a normal, recoverable situation
+        // (informational), and red stays reserved for genuine faults so it
+        // keeps its meaning.
         string tone = capability.State switch
         {
             CapabilityAccessState.Verified => "Safe",
             CapabilityAccessState.Experimental => "Warning",
-            CapabilityAccessState.Blocked or CapabilityAccessState.Faulted => "Critical",
+            CapabilityAccessState.Blocked => "Blocked",
+            CapabilityAccessState.Faulted => "Critical",
             _ => "Neutral"
         };
         // Friendlier state labels: an armable-but-disarmed control reads as

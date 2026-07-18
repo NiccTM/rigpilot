@@ -186,7 +186,9 @@ public sealed class UiPresentationTests
         Assert.Equal("Blocked by Fan Control", display.Owner);
         Assert.Equal(CapabilityAccessState.Blocked, display.AccessState);
         Assert.Contains("ownership workflow", display.NextSafeStep, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("Critical", display.StateTone);
+        // Blocked is informational (a competing writer, recoverable), not the
+        // Critical tone — red is reserved for Faulted so it keeps its meaning.
+        Assert.Equal("Blocked", display.StateTone);
     }
 
     [Fact]
