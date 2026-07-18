@@ -86,6 +86,21 @@ public static class CoolingGraphValidator
                     errors.Add($"Cooling output '{output.CapabilityId}' has invalid avoid band {band.Input}-{band.Output}.");
                 }
             }
+
+            if (!AreFinite(output.StopBelowPercent, output.StartPercent, output.StartHoldSeconds)
+                || output.StopBelowPercent < 0
+                || output.StartPercent < 0
+                || output.StartHoldSeconds < 0)
+            {
+                errors.Add($"Cooling output '{output.CapabilityId}' has invalid start/stop shaping values.");
+            }
+            else if (output.StopBelowPercent > 0
+                && !FanStartStopPolicy.IsStableConfiguration(
+                    CoolingGraphEngine.BuildStartStopOptions(output, calibratedRestartFloorPercent: 0, stoppingPermitted: true),
+                    out string startStopReason))
+            {
+                errors.Add($"Cooling output '{output.CapabilityId}': {startStopReason}");
+            }
         }
 
         if (graph.Outputs.Count == 0)
@@ -237,6 +252,7 @@ public static class CoolingGraphValidator
 public sealed class CoolingGraphEngine
 {
     private readonly object _sync = new();
+    private readonly Dictionary<string, FanStartStopState> _startStopStates = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Queue<TimedValue>> _history = new(StringComparer.Ordinal);
     private readonly Dictionary<string, NodeRuntimeState> _nodeStates = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TimedValue> _outputStates = new(StringComparer.Ordinal);
@@ -281,6 +297,14 @@ public sealed class CoolingGraphEngine
                 requested = EnforceCalibrationFloor(output, calibration, requested);
                 double slewed = Slew(output, requested, input.Timestamp);
                 slewed = EnforceCalibrationFloor(output, calibration, slewed);
+                // Start/stop shaping runs last, deliberately. A stop must reach
+                // a true 0% — below the calibration floor the earlier stages
+                // enforce — and both stopping and the restart boost must be
+                // immediate rather than slew-limited, or the boost is defeated
+                // by the ramp. Stopping is permitted only where calibration
+                // proved this exact fan restarts, so a protected output can
+                // never reach it.
+                slewed = ApplyStartStop(output, calibration, slewed, input.Timestamp);
                 outputs[output.CapabilityId] = slewed;
                 _outputStates[output.CapabilityId] = new TimedValue(input.Timestamp, slewed);
             }
@@ -355,6 +379,50 @@ public sealed class CoolingGraphEngine
         }
 
         return value;
+    }
+
+    internal static FanStartStopOptions BuildStartStopOptions(
+        CoolingGraphOutputV1 output,
+        double calibratedRestartFloorPercent,
+        bool stoppingPermitted) => new(
+            output.StartPercent,
+            TimeSpan.FromSeconds(output.StartHoldSeconds),
+            output.StopBelowPercent,
+            stoppingPermitted,
+            calibratedRestartFloorPercent);
+
+    /// <summary>
+    /// Applies zero-RPM idle and kickstart restart. Stopping requires both an
+    /// opt-in threshold and physical evidence that this exact fan restarts
+    /// (<see cref="FanCalibrationPolicy.SupportsVerifiedFanStop(FanCalibrationV2)"/>);
+    /// an output with no such calibration is never stopped, which is what keeps
+    /// pumps and CPU fans spinning regardless of configuration.
+    /// </summary>
+    private double ApplyStartStop(
+        CoolingGraphOutputV1 output,
+        FanCalibrationV2? calibration,
+        double duty,
+        DateTimeOffset timestamp)
+    {
+        bool stoppingPermitted = output.StopBelowPercent > 0
+            && calibration is not null
+            && FanCalibrationPolicy.SupportsVerifiedFanStop(calibration);
+        if (!stoppingPermitted)
+        {
+            _startStopStates.Remove(output.CapabilityId);
+            return duty;
+        }
+
+        FanStartStopOptions options = BuildStartStopOptions(
+            output,
+            calibration!.RestartDutyPercent ?? 0,
+            stoppingPermitted: true);
+        FanStartStopState state = _startStopStates.TryGetValue(output.CapabilityId, out FanStartStopState? existing)
+            ? existing
+            : FanStartStopState.Running;
+        FanStartStopDecision decision = FanStartStopPolicy.Evaluate(duty, state, options, timestamp);
+        _startStopStates[output.CapabilityId] = decision.State;
+        return decision.DutyPercent;
     }
 
     private double Average(CoolingGraphNodeV1 node, double value, DateTimeOffset timestamp)

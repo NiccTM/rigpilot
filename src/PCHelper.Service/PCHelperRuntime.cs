@@ -4717,6 +4717,132 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         return Success(request, await GetSafetyRecoveryStatusAsync(cancellationToken).ConfigureAwait(false));
     }
 
+    /// <summary>
+    /// Keeps an active automatic cooling profile tracking the machine instead of
+    /// staying on whichever curve was chosen at the moment the button was
+    /// pressed. Recognises the profile by the stable id the adaptive factory
+    /// emits, so this needs no new protocol surface: the dashboard applies an
+    /// automatic profile exactly as before and the service then owns it.
+    /// Switching is deliberately conservative — <see cref="AdaptiveCoolingController"/>
+    /// requires a sustained hold and a minimum dwell before changing curve, and
+    /// only bypasses both to escalate.
+    /// </summary>
+    private async Task TickAdaptiveCoolingAsync(HardwareSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        if (_rollbackBlocked)
+        {
+            return;
+        }
+
+        ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
+        if (active is null
+            || !active.ProfileId.StartsWith(AdaptiveProfileIdPrefix, StringComparison.Ordinal)
+            || !TryReadAdaptiveGraphIdentity(active.Graph, out string outputName, out CoolingCurveMode currentMode))
+        {
+            _adaptiveCooling = null;
+            return;
+        }
+
+        DateTimeOffset now = snapshot.CapturedAt;
+        AdaptiveCoolingState state = _adaptiveCooling is { } tracked
+            && string.Equals(tracked.ProfileId, active.ProfileId, StringComparison.Ordinal)
+            && tracked.State.ActiveMode == currentMode
+                ? tracked.State
+                : AdaptiveCoolingState.Start(currentMode, now);
+
+        (double? cpu, double? gpu, bool stale) = ReadAdaptiveTemperatures(snapshot, now);
+        AdaptiveCoolingDecision decision = AdaptiveCoolingController.Evaluate(state, cpu, gpu, stale, now);
+        _adaptiveCooling = new AdaptiveCoolingTracking(active.ProfileId, decision.State);
+        if (!decision.ShouldApply || decision.Mode == currentMode)
+        {
+            return;
+        }
+
+        try
+        {
+            CapabilityDescriptor[] outputs = [.. snapshot.Capabilities.Where(capability =>
+                active.Graph.Outputs.Any(output => string.Equals(output.CapabilityId, capability.Id, StringComparison.Ordinal)))];
+            if (outputs.Length == 0)
+            {
+                return;
+            }
+
+            AdaptiveCoolingProfileDraft draft = AdaptiveCoolingProfileFactory.CreateAutomaticMode(
+                outputs,
+                outputName,
+                snapshot.Sensors,
+                preferGpuSourceOnly: outputName.Contains("GPU", StringComparison.OrdinalIgnoreCase),
+                decision.Mode);
+            await _store!.SaveSuiteEntityAsync(
+                SuiteEntityKind.CoolingGraph, draft.Graph.Id, draft.Graph, cancellationToken).ConfigureAwait(false);
+            ActiveCoolingGraphRuntime replacement = await CreateActiveCoolingGraphAsync(
+                draft.Profile.Id, draft.Graph, draft.Profile.SafetyLimits, cancellationToken).ConfigureAwait(false);
+            await ReplaceActiveCoolingGraphTransactionAsync(replacement, cancellationToken).ConfigureAwait(false);
+            _adaptiveCooling = new AdaptiveCoolingTracking(draft.Profile.Id, decision.State);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // A failed mode switch must never disturb the curve already running:
+            // the previous graph stays active and the next tick retries.
+            ServiceLog.CoolingGraphDeactivated(logger, exception);
+        }
+    }
+
+    private const string AdaptiveProfileIdPrefix = "auto.profile.";
+
+    /// <summary>
+    /// Recovers the output-set name and the currently active curve mode from the
+    /// adaptive graph's generated name ("Case fans balanced mode").
+    /// </summary>
+    private static bool TryReadAdaptiveGraphIdentity(
+        CoolingGraphV1 graph,
+        out string outputName,
+        out CoolingCurveMode mode)
+    {
+        outputName = string.Empty;
+        mode = CoolingCurveMode.Balanced;
+        string[] parts = graph.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 3
+            || !string.Equals(parts[^1], "mode", StringComparison.OrdinalIgnoreCase)
+            || !Enum.TryParse(parts[^2], ignoreCase: true, out mode))
+        {
+            return false;
+        }
+
+        outputName = string.Join(' ', parts[..^2]);
+        return outputName.Length > 0;
+    }
+
+    /// <summary>
+    /// Current CPU-package and GPU-core temperatures, plus whether the readings
+    /// that exist are too old to trust. Absent readings are reported as absent,
+    /// never as cool — the controller escalates on both.
+    /// </summary>
+    private static (double? Cpu, double? Gpu, bool Stale) ReadAdaptiveTemperatures(
+        HardwareSnapshot snapshot,
+        DateTimeOffset now)
+    {
+        TimeSpan maximumAge = TimeSpan.FromSeconds(30);
+        double? Read(string name)
+        {
+            SensorSample? sample = snapshot.Sensors.FirstOrDefault(candidate =>
+                string.Equals(candidate.Unit, "°C", StringComparison.OrdinalIgnoreCase)
+                && candidate.Quality == SensorQuality.Good
+                && candidate.Value.HasValue
+                && candidate.Name.Contains(name, StringComparison.OrdinalIgnoreCase));
+            return sample?.Value;
+        }
+
+        bool stale = snapshot.Sensors
+            .Where(sample => string.Equals(sample.Unit, "°C", StringComparison.OrdinalIgnoreCase))
+            .Any(sample => now - sample.Timestamp > maximumAge);
+        return (Read("CPU Package"), Read("GPU Core"), stale);
+    }
+
+    private sealed record AdaptiveCoolingTracking(string ProfileId, AdaptiveCoolingState State);
+
+    private AdaptiveCoolingTracking? _adaptiveCooling;
+
     private async Task<ActiveCoolingGraphRuntime> CreateActiveCoolingGraphAsync(
         string profileId,
         CoolingGraphV1 graph,
@@ -4886,6 +5012,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
     private async Task TickCoolingGraphAsync(HardwareSnapshot snapshot, CancellationToken cancellationToken)
     {
+        // Continuous adaptive cooling runs before the cooling/mutation gates are
+        // taken: switching modes re-enters the activation transaction, which
+        // acquires the cooling gate itself, so deciding and swapping here keeps
+        // that path deadlock-free.
+        await TickAdaptiveCoolingAsync(snapshot, cancellationToken).ConfigureAwait(false);
+
         if (_rollbackBlocked)
         {
             CoolingRuntimeStatusV1 current = Volatile.Read(ref _coolingRuntimeStatus);

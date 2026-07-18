@@ -460,7 +460,14 @@ public sealed record CoolingGraphOutputV1(
     double Offset,
     double StepUpPerSecond,
     double StepDownPerSecond,
-    IReadOnlyList<CurvePoint> AvoidBands);
+    IReadOnlyList<CurvePoint> AvoidBands,
+    // Zero-RPM idle and kickstart restart. StopBelowPercent = 0 disables
+    // stopping entirely (the default), and stopping additionally requires the
+    // exact fan to carry verified stop/restart calibration evidence — a
+    // configured threshold alone never stops a fan.
+    double StopBelowPercent = 0,
+    double StartPercent = 0,
+    double StartHoldSeconds = 3);
 
 public sealed record CoolingGraphV1(
     int SchemaVersion,
