@@ -39,7 +39,7 @@ jobs:
       SIGNPATH_RUNTIME_CONFIGURATION: ${{ vars.SIGNPATH_RUNTIME_CONFIGURATION }}
       SIGNPATH_MSI_CONFIGURATION: ${{ vars.SIGNPATH_MSI_CONFIGURATION }}
       SIGNPATH_BUNDLE_CONFIGURATION: ${{ vars.SIGNPATH_BUNDLE_CONFIGURATION }}
-      ALLOW_UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_unsigned || 'false' }}
+      ALLOW_UNSIGNED: ${{ (github.event_name == 'workflow_dispatch' && inputs.allow_unsigned) || (startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-preview')) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v5
