@@ -391,6 +391,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.ResetHardware => await ResetHardwareAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StartCalibration => await StartCalibrationAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StartTune => await StartTuneAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.StartAutoOc => await StartAutoOcAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.AbortOperation => AbortOperation(request),
                 IpcCommand.GetOperationStatus => Success(request, GetOperationStatus()),
                 IpcCommand.GetOperationById => await GetOperationByIdAsync(request, cancellationToken).ConfigureAwait(false),
@@ -2363,6 +2364,137 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
+    private async Task<IpcResponse> StartAutoOcAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        if (_rollbackBlocked)
+        {
+            return Failure(request, "ROLLBACK_BLOCKED", "Auto OC is blocked until pending hardware recovery succeeds.");
+        }
+
+        EnsureExpectedRevision(request);
+        StartAutoOcV2Request payload = IpcJson.FromElement<StartAutoOcV2Request>(request.Payload)
+            ?? throw new InvalidDataException("StartAutoOc requires a StartAutoOcV2Request payload.");
+        if (payload.SchemaVersion != StartAutoOcV2Request.CurrentSchemaVersion
+            || !payload.ConfirmExperimental
+            || !payload.ConfirmDevice
+            || !string.Equals(payload.DeviceId, payload.WorkloadHost.TargetDeviceId, StringComparison.Ordinal))
+        {
+            return Failure(request, "AUTO_OC_NOT_CONFIRMED", "Auto OC requires Experimental and exact-device confirmation for the workload and both clock controls.");
+        }
+
+        HardwareSnapshot snapshot = GetSnapshot();
+        CapabilityDescriptor? core = snapshot.Capabilities.FirstOrDefault(capability =>
+            string.Equals(capability.Id, payload.CoreCapabilityId, StringComparison.Ordinal));
+        CapabilityDescriptor? memory = snapshot.Capabilities.FirstOrDefault(capability =>
+            string.Equals(capability.Id, payload.MemoryCapabilityId, StringComparison.Ordinal));
+        if (core is null
+            || memory is null
+            || !core.Id.StartsWith("gpuclock.core:", StringComparison.Ordinal)
+            || !memory.Id.StartsWith("gpuclock.memory:", StringComparison.Ordinal)
+            || !string.Equals(core.DeviceId, payload.DeviceId, StringComparison.Ordinal)
+            || !string.Equals(memory.DeviceId, payload.DeviceId, StringComparison.Ordinal)
+            || core.Range is null
+            || memory.Range is null)
+        {
+            return Failure(request, "AUTO_OC_TARGET_INVALID", "Auto OC requires the exact bounded core and memory clock controls on one GPU.");
+        }
+
+        StartTuneRequest coreRequest = CreateAutoOcTuneRequest(core, safetyMargin: 15);
+        StartTuneRequest memoryRequest = CreateAutoOcTuneRequest(memory, safetyMargin: 100);
+        HardwareOperationEligibility coreEligibility = HardwareOperationEligibilityEvaluator.ForTuning(
+            core, coreRequest.Plan, payload.ConfirmExperimental, payload.ConfirmDevice);
+        HardwareOperationEligibility memoryEligibility = HardwareOperationEligibilityEvaluator.ForTuning(
+            memory, memoryRequest.Plan, payload.ConfirmExperimental, payload.ConfirmDevice);
+        if (!coreEligibility.Eligible || !memoryEligibility.Eligible)
+        {
+            return Failure(
+                request,
+                "AUTO_OC_NOT_ELIGIBLE",
+                !coreEligibility.Eligible ? coreEligibility.Reason : memoryEligibility.Reason);
+        }
+
+        TuneSensorBindingV2 binding;
+        WorkloadHostController workload;
+        try
+        {
+            binding = GpuTuneSensorBindingResolver.Resolve(snapshot, payload.DeviceId);
+            workload = new WorkloadHostController(payload.WorkloadHost);
+            WorkloadHostStatusV1 ready = await workload.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            if (!ready.Ready || ready.Running || ready.Mode != AutoOcWorkloadMode.Stopped)
+            {
+                return Failure(request, "WORKLOAD_HOST_NOT_READY", ready.Error ?? "The workload host did not start in a clean stopped state.");
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Failure(request, "WORKLOAD_HOST_NOT_READY", exception.Message);
+        }
+
+        HardwareOperationStatus status = CreateOperationStatus(
+            HardwareOperationKind.AutoOc,
+            core,
+            "Full Auto OC is queued; the workload is stopped and no offset has been applied.");
+        if (!TryReserveOperation(status, out CancellationTokenSource? operationCancellation))
+        {
+            return Failure(request, "OPERATION_ACTIVE", "Another calibration or tuning operation is already active.");
+        }
+
+        try
+        {
+            await _store!.SaveOperationAsync(status, cancellationToken).ConfigureAwait(false);
+            Task task = RunAutoOcOperationAsync(
+                status.Id,
+                payload.DeviceId,
+                coreRequest,
+                core,
+                memoryRequest,
+                memory,
+                binding,
+                workload,
+                operationCancellation!);
+            RegisterOperationTask(status.Id, task);
+            return Success(request, status);
+        }
+        catch
+        {
+            ReleaseOperationReservation(status.Id);
+            try { await workload.StopAsync(CancellationToken.None).ConfigureAwait(false); } catch { }
+            throw;
+        }
+    }
+
+    private static StartTuneRequest CreateAutoOcTuneRequest(CapabilityDescriptor capability, double safetyMargin)
+    {
+        NumericRange range = capability.Range
+            ?? throw new InvalidOperationException("Auto OC target has no numeric bounds.");
+        TunePlan plan = new(
+            Guid.NewGuid().ToString("N"),
+            capability.DeviceId,
+            TuningObjective.Performance,
+            new Dictionary<string, TuneBounds>(StringComparer.Ordinal)
+            {
+                [capability.Id] = new TuneBounds(Math.Max(0, range.Minimum), range.Maximum, range.Step)
+            },
+            TimeSpan.FromMinutes(10),
+            TemperatureCeilingCelsius: 83,
+            PowerCeilingWatts: null,
+            Provisional: true,
+            SoakStartedAt: null,
+            ActiveUseRequired: TimeSpan.FromHours(10),
+            ColdBootsRequired: 3);
+        return new StartTuneRequest(
+            plan,
+            capability.Id,
+            TuneDirection.Maximize,
+            ConfirmExperimental: true,
+            ConfirmDevice: true,
+            CandidateScreeningTime: TimeSpan.FromSeconds(30),
+            MaximumCandidates: 12,
+            RefinementCandidates: 5,
+            SafetyMargin: safetyMargin,
+            ThermalHeadroomCelsius: 4);
+    }
+
     private IpcResponse AbortOperation(IpcRequest request)
     {
         EnsureExpectedRevision(request);
@@ -2670,6 +2802,89 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
+    private async Task RunAutoOcOperationAsync(
+        string operationId,
+        string deviceId,
+        StartTuneRequest coreRequest,
+        CapabilityDescriptor coreCapability,
+        StartTuneRequest memoryRequest,
+        CapabilityDescriptor memoryCapability,
+        TuneSensorBindingV2 binding,
+        WorkloadHostController workload,
+        CancellationTokenSource operationCancellation)
+    {
+        try
+        {
+            await TransitionOperationAsync(
+                operationId,
+                HardwareOperationState.Running,
+                "Exact-GPU workload host authenticated; capturing the prior core and memory state.").ConfigureAwait(false);
+            IHardwareAdapter coreAdapter = FindAdapter(coreCapability.AdapterId);
+            IHardwareAdapter memoryAdapter = FindAdapter(memoryCapability.AdapterId);
+            AutoOcResultV2 result = await FullAutoOcEngine.RunAsync(
+                deviceId,
+                coreRequest,
+                coreCapability,
+                coreAdapter,
+                memoryRequest,
+                memoryCapability,
+                memoryAdapter,
+                TimeSpan.FromMinutes(15),
+                mode => new RuntimeTuneScreeningMonitor(
+                    GetSnapshot,
+                    mode == AutoOcWorkloadMode.Memory ? memoryCapability : coreCapability,
+                    sensorBinding: binding,
+                    workload: workload,
+                    requiredWorkloadMode: mode,
+                    requiredAverageLoadPercent: 70),
+                workload,
+                (progress, message) => ReportOperationProgress(
+                    operationId,
+                    message.Contains("screen", StringComparison.OrdinalIgnoreCase)
+                        ? HardwareOperationState.Screening
+                        : HardwareOperationState.Running,
+                    progress,
+                    message),
+                operationCancellation.Token).ConfigureAwait(false);
+            if (result.GeneratedProfile is ProfileV2 generated
+                && result.AllRequestedFamiliesVerified
+                && result.PriorStateRestored
+                && result.HardwareStateKnown)
+            {
+                await _store!.SaveSuiteEntityAsync(
+                    SuiteEntityKind.ProfileV2,
+                    generated.Id,
+                    generated,
+                    CancellationToken.None).ConfigureAwait(false);
+                IncrementSuiteRevision();
+            }
+
+            await CompleteOperationAsync(
+                operationId,
+                result.Message,
+                calibrationResult: null,
+                tuneResult: null,
+                autoOcResult: result).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+        {
+            await AbortOperationAsync(operationId).ConfigureAwait(false);
+        }
+        catch (HardwareOperationRecoveryException exception)
+        {
+            _rollbackBlocked = true;
+            await FailOperationAsync(operationId, exception, recoveryRequired: true).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await FailOperationAsync(operationId, exception, recoveryRequired: false).ConfigureAwait(false);
+        }
+        finally
+        {
+            await FinishOperationTaskAsync(operationId, operationCancellation).ConfigureAwait(false);
+        }
+    }
+
     private HardwareOperationStatus? GetOperationStatus()
     {
         lock (_operationSync)
@@ -2791,7 +3006,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         string operationId,
         string message,
         FanCalibrationResult? calibrationResult,
-        TuneResult? tuneResult)
+        TuneResult? tuneResult,
+        AutoOcResultV2? autoOcResult = null)
     {
         HardwareOperationStatus status = UpdateOperation(
             operationId,
@@ -2803,6 +3019,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 Message = message,
                 CalibrationResult = calibrationResult,
                 TuneResult = tuneResult,
+                AutoOcResult = autoOcResult,
                 Error = null
             });
         await _store!.SaveOperationAsync(status, CancellationToken.None).ConfigureAwait(false);

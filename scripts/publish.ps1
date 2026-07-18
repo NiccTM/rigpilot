@@ -122,6 +122,7 @@ $projects = [ordered]@{
     "service" = "src\PCHelper.Service\PCHelper.Service.csproj"
     "adapter-host" = "src\PCHelper.AdapterHost\PCHelper.AdapterHost.csproj"
     "automation-host" = "src\PCHelper.AutomationHost\PCHelper.AutomationHost.csproj"
+    "workload-host" = "src\PCHelper.WorkloadHost\PCHelper.WorkloadHost.csproj"
     "effect-host" = "src\PCHelper.EffectHost\PCHelper.EffectHost.csproj"
     "cli" = "src\PCHelper.Cli\PCHelper.Cli.csproj"
 }
@@ -131,6 +132,7 @@ $runtimeExecutables = [ordered]@{
     "service" = "service\PCHelper.Service.exe"
     "adapter-host" = "adapter-host\PCHelper.AdapterHost.exe"
     "automation-host" = "automation-host\PCHelper.AutomationHost.exe"
+    "workload-host" = "workload-host\PCHelper.WorkloadHost.exe"
     "effect-host" = "effect-host\PCHelper.EffectHost.exe"
     "cli" = "cli\pchelper-cli.exe"
 }
@@ -219,6 +221,7 @@ $runtimeContract = [ordered]@{
         "capability-v2",
         "fan-commissioning",
         "fan-calibrations",
+        "auto-oc-workload-v1",
         "reliability",
         "adapter-trace",
         "cooling-output-roles"

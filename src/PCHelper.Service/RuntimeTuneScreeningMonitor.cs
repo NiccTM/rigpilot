@@ -9,13 +9,17 @@ internal sealed class RuntimeTuneScreeningMonitor(
     CapabilityDescriptor targetCapability,
     TimeProvider? timeProvider = null,
     Func<TimeSpan, CancellationToken, Task>? delay = null,
-    Func<DateTimeOffset, string?>? hardwareEventCheck = null) : ITuneScreeningMonitor
+    Func<DateTimeOffset, string?>? hardwareEventCheck = null,
+    TuneSensorBindingV2? sensorBinding = null,
+    IAutoOcWorkloadController? workload = null,
+    AutoOcWorkloadMode? requiredWorkloadMode = null,
+    double requiredAverageLoadPercent = 20) : ITuneScreeningMonitor
 {
     private readonly Func<HardwareSnapshot> _snapshotProvider = snapshotProvider;
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
     private readonly Func<DateTimeOffset, string?> _hardwareEventCheck = hardwareEventCheck ?? HardwareEventLog.FindRejectionSince;
-    private readonly double? _baselineClockMegahertz = BaselineClock(snapshotProvider(), targetCapability);
+    private readonly double? _baselineClockMegahertz = BaselineClock(snapshotProvider(), targetCapability, sensorBinding);
 
     public async Task<TuneScreeningResult> ScreenAsync(
         CapabilityDescriptor capability,
@@ -32,6 +36,24 @@ internal sealed class RuntimeTuneScreeningMonitor(
         do
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (workload is not null && requiredWorkloadMode is AutoOcWorkloadMode requiredMode)
+            {
+                WorkloadHostStatusV1 host = await workload.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+                if (!host.Authenticated
+                    || !host.Ready
+                    || !host.Running
+                    || host.Mode != requiredMode
+                    || host.MatchingHardwareAdapterCount != 1
+                    || _timeProvider.GetUtcNow() - host.HeartbeatAt > TimeSpan.FromSeconds(3))
+                {
+                    return Reject(
+                        host.Error ?? $"The exact-GPU workload host stopped responding in {requiredMode} mode.",
+                        temperatures,
+                        powers,
+                        clocks);
+                }
+            }
+
             HardwareSnapshot snapshot = _snapshotProvider();
             CapabilityDescriptor? current = snapshot.Capabilities.FirstOrDefault(
                 item => string.Equals(item.Id, capability.Id, StringComparison.Ordinal));
@@ -57,7 +79,8 @@ internal sealed class RuntimeTuneScreeningMonitor(
                     && now - sample.Timestamp <= TimeSpan.FromSeconds(3))
                 .ToArray();
             double[] currentTemperatures = good
-                .Where(sample => IsTemperature(sample.Unit))
+                .Where(sample => IsTemperature(sample.Unit)
+                    && (sensorBinding is null || sensorBinding.TemperatureSensorIds.Contains(sample.SensorId, StringComparer.Ordinal)))
                 .Select(sample => sample.Value!.Value)
                 .Where(value => value is > -20 and < 150)
                 .ToArray();
@@ -76,7 +99,7 @@ internal sealed class RuntimeTuneScreeningMonitor(
                     clocks);
             }
 
-            SensorSample[] related = RelatedSensors(snapshot, capability, good);
+            SensorSample[] related = RelatedSensors(snapshot, capability, good, sensorBinding);
             powers.AddRange(related.Where(sample => string.Equals(sample.Unit, "W", StringComparison.OrdinalIgnoreCase))
                 .Select(sample => sample.Value!.Value)
                 .Where(value => value >= 0));
@@ -84,8 +107,10 @@ internal sealed class RuntimeTuneScreeningMonitor(
                 .Select(sample => sample.Value!.Value)
                 .Where(value => value > 0));
             loads.AddRange(related.Where(sample => string.Equals(sample.Unit, "%", StringComparison.OrdinalIgnoreCase)
-                    && (sample.Name.Contains("load", StringComparison.OrdinalIgnoreCase)
-                        || sample.Name.Contains("util", StringComparison.OrdinalIgnoreCase)))
+                    && (sensorBinding is not null
+                        ? string.Equals(sample.SensorId, sensorBinding.UtilizationSensorId, StringComparison.Ordinal)
+                        : sample.Name.Contains("load", StringComparison.OrdinalIgnoreCase)
+                            || sample.Name.Contains("util", StringComparison.OrdinalIgnoreCase)))
                 .Select(sample => sample.Value!.Value)
                 .Where(value => value is >= 0 and <= 100));
 
@@ -117,10 +142,10 @@ internal sealed class RuntimeTuneScreeningMonitor(
         }
 
         if (capability.Domain is ControlDomain.Cpu or ControlDomain.Gpu
-            && (loads.Count == 0 || loads.Average() < 20))
+            && (loads.Count == 0 || loads.Average() < requiredAverageLoadPercent))
         {
             return Reject(
-                "The screening workload did not produce at least 20% measured device load; no stability claim was recorded.",
+                $"The screening workload did not produce at least {requiredAverageLoadPercent:0}% measured target-device load; no stability claim was recorded.",
                 temperatures,
                 powers,
                 clocks);
@@ -149,8 +174,20 @@ internal sealed class RuntimeTuneScreeningMonitor(
     private static SensorSample[] RelatedSensors(
         HardwareSnapshot snapshot,
         CapabilityDescriptor capability,
-        IReadOnlyList<SensorSample> good)
+        IReadOnlyList<SensorSample> good,
+        TuneSensorBindingV2? binding)
     {
+        if (binding is not null)
+        {
+            HashSet<string> sensorIds = binding.TemperatureSensorIds
+                .Append(binding.UtilizationSensorId)
+                .Append(binding.CoreClockSensorId)
+                .Append(binding.MemoryClockSensorId)
+                .Concat(binding.PowerSensorId is null ? [] : [binding.PowerSensorId])
+                .ToHashSet(StringComparer.Ordinal);
+            return good.Where(sample => sensorIds.Contains(sample.SensorId)).ToArray();
+        }
+
         HardwareDevice? target = snapshot.Devices.FirstOrDefault(
             device => string.Equals(device.Id, capability.DeviceId, StringComparison.Ordinal));
         HashSet<string> relatedIds = snapshot.Devices
@@ -161,15 +198,24 @@ internal sealed class RuntimeTuneScreeningMonitor(
         return good.Where(sample => relatedIds.Contains(sample.DeviceId)).ToArray();
     }
 
-    private static double? BaselineClock(HardwareSnapshot snapshot, CapabilityDescriptor capability)
+    private static double? BaselineClock(
+        HardwareSnapshot snapshot,
+        CapabilityDescriptor capability,
+        TuneSensorBindingV2? binding)
     {
         SensorSample[] good = snapshot.Sensors
             .Where(sample => sample.Quality == SensorQuality.Good
                 && sample.Value is double value
                 && double.IsFinite(value))
             .ToArray();
-        double[] clocks = RelatedSensors(snapshot, capability, good)
+        string? exactClock = binding is null
+            ? null
+            : capability.Id.StartsWith("gpuclock.memory:", StringComparison.Ordinal)
+                ? binding.MemoryClockSensorId
+                : binding.CoreClockSensorId;
+        double[] clocks = RelatedSensors(snapshot, capability, good, binding)
             .Where(sample => string.Equals(sample.Unit, "MHz", StringComparison.OrdinalIgnoreCase))
+            .Where(sample => exactClock is null || string.Equals(sample.SensorId, exactClock, StringComparison.Ordinal))
             .Select(sample => sample.Value!.Value)
             .Where(value => value > 0)
             .ToArray();
@@ -189,7 +235,6 @@ internal sealed class RuntimeTuneScreeningMonitor(
 
     private static bool IsTemperature(string unit) =>
         string.Equals(unit, "°C", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(unit, "°C", StringComparison.OrdinalIgnoreCase)
         || string.Equals(unit, "Celsius", StringComparison.OrdinalIgnoreCase);
 }
 

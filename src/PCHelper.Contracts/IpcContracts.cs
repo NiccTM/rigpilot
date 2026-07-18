@@ -31,6 +31,7 @@ public enum IpcCommand
     CancelFanCommissioning,
     RecoverFanCommissioning,
     StartTune,
+    StartAutoOc,
     AbortOperation,
     GetOperationStatus,
     GetOperationById,

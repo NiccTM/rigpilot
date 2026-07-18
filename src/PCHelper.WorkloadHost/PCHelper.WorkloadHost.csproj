@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>PCHelper.WorkloadHost</AssemblyName>
+    <Description>Isolated Direct3D 11 workload host for RigPilot GPU stability screening.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PCHelper.Contracts\PCHelper.Contracts.csproj" />
+    <ProjectReference Include="..\PCHelper.Ipc\PCHelper.Ipc.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Workload.hlsl" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
