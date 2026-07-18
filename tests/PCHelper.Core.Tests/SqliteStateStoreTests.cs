@@ -363,6 +363,67 @@ public sealed class SqliteStateStoreTests
         }
     }
 
+    [Fact]
+    public async Task PersistsRecoveryLeaseAndFindsLatestCommittedTransaction()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"pchelper-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await using SqliteStateStore store = new(Path.Combine(directory, "state.db"));
+            await store.InitializeAsync(CancellationToken.None);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            ProfileAction action = new("action", "adapter", "control", ControlValue.FromNumeric(50), true, 0);
+            ProfileTransaction committed = new(
+                "committed",
+                1,
+                "profile",
+                ProfileTransactionState.Committed,
+                now,
+                now,
+                [new PreparedAction(action, ControlValue.FromNumeric(0), now, "token")],
+                [],
+                null);
+            await store.SaveAsync(committed, CancellationToken.None);
+            HardwareControlLeaseV1 lease = new(
+                HardwareControlLeaseV1.CurrentSchemaVersion,
+                HardwareControlLeaseV1.DefaultId,
+                "instance",
+                "profile",
+                committed.Id,
+                [new HardwareControlLeaseItemV1("adapter", "control")],
+                now,
+                now,
+                CleanShutdown: false,
+                DefaultsVerified: false,
+                HardwareControlLeaseState.Active,
+                "active");
+            await store.SaveSuiteEntityAsync(
+                SuiteEntityKind.HardwareControlLease,
+                lease.Id,
+                lease,
+                CancellationToken.None);
+
+            ProfileTransaction? storedTransaction = await store.GetLatestCommittedAsync(CancellationToken.None);
+            Assert.NotNull(storedTransaction);
+            Assert.Equal(committed.Id, storedTransaction.Id);
+            Assert.Equal(committed.State, storedTransaction.State);
+            Assert.Equal("control", Assert.Single(storedTransaction.PreparedActions).Action.CapabilityId);
+            HardwareControlLeaseV1? storedLease = await store.GetSuiteEntityAsync<HardwareControlLeaseV1>(
+                SuiteEntityKind.HardwareControlLease,
+                lease.Id,
+                CancellationToken.None);
+            Assert.NotNull(storedLease);
+            Assert.Equal(lease.Id, storedLease.Id);
+            Assert.Equal(HardwareControlLeaseState.Active, storedLease.State);
+            Assert.Equal("control", Assert.Single(storedLease.Controls).CapabilityId);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static SensorSample Sample(DateTimeOffset timestamp, double value) => new(
         "sensor",
         "adapter",

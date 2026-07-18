@@ -1,5 +1,6 @@
 using PCHelper.Adapters;
 using PCHelper.Contracts;
+using PCHelper.Core;
 
 namespace PCHelper.Integration.Tests;
 
@@ -32,7 +33,7 @@ public sealed class VendorTelemetryAdapterTests
             if (capability.Id.StartsWith("nvml.fan:", StringComparison.Ordinal))
             {
                 Assert.NotNull(capability.Range);
-                Assert.True(capability.Range!.Minimum >= 50);
+                Assert.True(capability.Range!.Minimum >= AdaptiveCoolingProfileFactory.UncalibratedFloorDutyPercent);
             }
             if (capability.Id.StartsWith("nvml.fan-transport:", StringComparison.Ordinal))
             {

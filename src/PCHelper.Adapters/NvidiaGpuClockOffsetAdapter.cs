@@ -18,7 +18,7 @@ namespace PCHelper.Adapters;
 /// registration is a read-only card, so wiring the adapter in cannot by itself
 /// un-gate a write.
 /// </summary>
-public sealed class NvidiaGpuClockOffsetAdapter : IHardwareAdapter
+public sealed class NvidiaGpuClockOffsetAdapter : IHardwareAdapter, IHardwareStateVerifier
 {
     // One adapter instance per domain is registered, and the transaction engine
     // keys adapters by manifest id — so each domain MUST carry a distinct id.
@@ -196,6 +196,40 @@ public sealed class NvidiaGpuClockOffsetAdapter : IHardwareAdapter
         EnsureOwnedCapability(capabilityId);
         _ = await RequireBoundsAsync(cancellationToken).ConfigureAwait(false);
         await _transport.SetOffsetAsync(_domain, GpuClockOffsetBounds.DefaultKiloHertz, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<HardwareStateVerification> VerifyDefaultStateAsync(
+        string capabilityId,
+        CancellationToken cancellationToken)
+    {
+        EnsureOwnedCapability(capabilityId);
+        GpuClockOffsetState state = await _transport.ReadStateAsync(_domain, cancellationToken).ConfigureAwait(false);
+        bool success = state.CurrentKiloHertz is int observed
+            && Math.Abs((long)observed - GpuClockOffsetBounds.DefaultKiloHertz) <= VerifyToleranceKiloHertz;
+        return new HardwareStateVerification(
+            Manifest.Id,
+            capabilityId,
+            success,
+            state.CurrentKiloHertz is int value ? ControlValue.FromNumeric(ToMegaHertz(value)) : null,
+            success ? $"GPU {DomainLabel} clock read-back confirmed the stock offset." : $"GPU {DomainLabel} clock read-back did not confirm the stock offset.");
+    }
+
+    public async Task<HardwareStateVerification> VerifyRollbackStateAsync(
+        PreparedAction action,
+        CancellationToken cancellationToken)
+    {
+        EnsureOwnedCapability(action.Action.CapabilityId);
+        GpuClockOffsetState? prior = DeserializeRollback(action.AdapterToken);
+        int expected = prior?.CurrentKiloHertz ?? GpuClockOffsetBounds.DefaultKiloHertz;
+        GpuClockOffsetState actual = await _transport.ReadStateAsync(_domain, cancellationToken).ConfigureAwait(false);
+        bool success = actual.CurrentKiloHertz is int observed
+            && Math.Abs((long)observed - expected) <= VerifyToleranceKiloHertz;
+        return new HardwareStateVerification(
+            Manifest.Id,
+            action.Action.CapabilityId,
+            success,
+            actual.CurrentKiloHertz is int value ? ControlValue.FromNumeric(ToMegaHertz(value)) : null,
+            success ? $"GPU {DomainLabel} clock rollback state was read back." : $"GPU {DomainLabel} clock rollback read-back did not match the captured state.");
     }
 
     public async Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken)

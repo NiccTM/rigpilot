@@ -357,7 +357,7 @@ public sealed record ExperimentalControlDisplay(
         string readiness = protectedOutput
             ? $"Protected as {SplitWords(assignment?.Role.ToString() ?? "CPU/Pump")}; commissioning and fan-stop remain unavailable."
             : gpuCooling
-                ? "GPU fan validation is separate from chassis-header commissioning; the conservative floor remains in force."
+                ? "GPU fan validation is separate from chassis-header commissioning; the configured or controller-reported minimum remains in force."
                 : competingWriter
                     ? $"Blocked by {capability.ConflictOwner}; resolve ownership before any write workflow."
                     : !boundedResetPath
@@ -370,7 +370,7 @@ public sealed record ExperimentalControlDisplay(
         string nextSafeStep = protectedOutput
             ? "Keep the current safety role. A pump or CPU-fan output cannot use this commissioning path."
             : gpuCooling
-                ? "Keep the conservative GPU fan floor. Complete repeated direct restart validation before any lower floor is considered."
+                ? "Keep the configured or controller-reported GPU fan minimum. Complete repeated direct restart validation before any lower minimum is considered."
                 : competingWriter
                     ? "Review the exact competing writer in Devices; never terminate a process by name alone."
                     : !boundedResetPath
@@ -637,18 +637,26 @@ public sealed record AdapterTraceDisplay(
 internal sealed class AsyncCommand(
     Func<object?, Task> execute,
     Func<object?, bool>? canExecute = null,
-    Action<Exception>? onError = null) : ICommand
+    Action<Exception>? onError = null,
+    Action<object?>? onBlocked = null) : ICommand
 {
     private bool _executing;
 
     public event EventHandler? CanExecuteChanged;
 
-    public bool CanExecute(object? parameter) => !_executing && (canExecute?.Invoke(parameter) ?? true);
+    public bool CanExecute(object? parameter) =>
+        !_executing && (onBlocked is not null || (canExecute?.Invoke(parameter) ?? true));
 
     public async void Execute(object? parameter)
     {
-        if (!CanExecute(parameter))
+        if (_executing)
         {
+            return;
+        }
+
+        if (!(canExecute?.Invoke(parameter) ?? true))
+        {
+            onBlocked?.Invoke(parameter);
             return;
         }
 

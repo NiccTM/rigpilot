@@ -130,14 +130,13 @@ public static class AdaptiveCoolingProfileFactory
     }
 
     /// <summary>
-    /// One-click "Automatic mode": a conservative temperature→duty curve over
+    /// One-click "Automatic mode": a bounded temperature→duty curve over
     /// one or more writable cooling outputs that have NOT been calibrated.
-    /// Safety comes from construction instead of measurement: every output's
-    /// floor is the deterministic 50% safety floor (the established policy for
-    /// unverified fans — no fan stalls at half duty), the curve always reaches
+    /// Every output's floor is the greater of its controller-reported minimum
+    /// and the configured 20% uncalibrated-output floor. The curve always reaches
     /// the controller maximum for emergency headroom, and the graph runtime's
-    /// stale-sensor maximum-cooling behaviour applies unchanged. Pump and
-    /// CPU-fan role protections are enforced by the service on save and apply.
+    /// stale-sensor maximum-cooling behaviour applies unchanged. Pump and CPU-fan
+    /// role protections are enforced by the service on save and apply.
     /// </summary>
     public static AdaptiveCoolingProfileDraft CreateAutomaticMode(
         IReadOnlyList<CapabilityDescriptor> outputs,
@@ -201,10 +200,10 @@ public static class AdaptiveCoolingProfileFactory
                 throw new InvalidOperationException($"'{output.Name}' is not a numeric cooling control with bounds.");
             }
 
-            double floor = Math.Max(range.Minimum, ConservativeFloorDutyPercent);
+            double floor = Math.Max(range.Minimum, UncalibratedFloorDutyPercent);
             if (floor >= range.Maximum)
             {
-                throw new InvalidOperationException($"'{output.Name}' leaves no dynamic range above the {ConservativeFloorDutyPercent:0}% safety floor.");
+                throw new InvalidOperationException($"'{output.Name}' leaves no dynamic range above the {UncalibratedFloorDutyPercent:0}% uncalibrated-output floor.");
             }
 
             string curveNodeId = $"auto-curve-{graphOutputs.Count + 1}";
@@ -229,7 +228,7 @@ public static class AdaptiveCoolingProfileFactory
             ProfileV2.CurrentSchemaVersion,
             $"auto.profile.{token}",
             $"{name} {mode.ToString().ToLowerInvariant()} mode",
-            $"{mode} temperature curve with a {ConservativeFloorDutyPercent:0}% duty floor on every uncalibrated output; stale sensors command maximum cooling.",
+            $"{mode} temperature curve with a {UncalibratedFloorDutyPercent:0}% duty floor on every uncalibrated output; stale sensors command maximum cooling.",
             [],
             new SafetyLimits(),
             graph.Id,
@@ -242,8 +241,34 @@ public static class AdaptiveCoolingProfileFactory
         return new AdaptiveCoolingProfileDraft(graph, profile, [.. temperatureSources.Select(sample => sample.SensorId)]);
     }
 
-    /// <summary>The deterministic duty floor applied to uncalibrated automatic-mode outputs.</summary>
-    public const double ConservativeFloorDutyPercent = 50;
+    /// <summary>
+    /// The configured minimum duty for uncalibrated fan outputs. A higher
+    /// controller-reported minimum always takes precedence.
+    /// </summary>
+    public const double UncalibratedFloorDutyPercent = 20;
+
+    /// <summary>
+    /// Returns whether a duty graph can run without a fan calibration. This is
+    /// deliberately limited to the automatic-mode envelope: the controller must
+    /// expose bounded writes and reset, the graph must stay at or above both the
+    /// configured 20% floor and its reported minimum, and emergency cooling must
+    /// retain the controller's full reported maximum.
+    /// </summary>
+    public static bool CanActivateWithoutCalibration(
+        CapabilityDescriptor capability,
+        CoolingGraphOutputV1 output)
+    {
+        ArgumentNullException.ThrowIfNull(capability);
+        ArgumentNullException.ThrowIfNull(output);
+        return capability.Range is NumericRange range
+            && capability.CanResetToDefault
+            && capability.Domain is ControlDomain.Cooling or ControlDomain.CoolingSafety
+            && capability.ValueKind == ControlValueKind.Numeric
+            && output.Mode == FanOutputMode.DutyPercent
+            && output.Minimum >= Math.Max(range.Minimum, UncalibratedFloorDutyPercent) - 1e-6
+            && output.Maximum >= range.Maximum - 1e-6
+            && output.Maximum <= range.Maximum + 1e-6;
+    }
 
     private static AdaptiveCoolingProfileDraft CreateCore(
         CapabilityDescriptor output,

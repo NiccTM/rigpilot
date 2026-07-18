@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Reflection;
 using PCHelper.Contracts;
 using PCHelper.Ipc;
 using PCHelper.Service;
@@ -6,6 +8,27 @@ namespace PCHelper.Integration.Tests;
 
 public sealed class AdapterHostProxyTests
 {
+    [Fact]
+    public async Task TimedOutGenerationIsAtomicallyClearedAndTerminated()
+    {
+        await using AdapterHostProxy proxy = new();
+        using Process sleeper = Process.Start(new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            Arguments = "-NoProfile -Command Start-Sleep -Seconds 30"
+        }) ?? throw new InvalidOperationException("Test sleeper process did not start.");
+        int processId = sleeper.Id;
+        FieldInfo processField = typeof(AdapterHostProxy).GetField("_process", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(AdapterHostProxy).FullName, "_process");
+        processField.SetValue(proxy, sleeper);
+
+        await proxy.RecycleHostAsync(sleeper);
+
+        Assert.Null(processField.GetValue(proxy));
+        Assert.Throws<ArgumentException>(() => Process.GetProcessById(processId));
+    }
+
     [Fact]
     public async Task PrivateAdapterHostStartsProbesAndShutsDown()
     {

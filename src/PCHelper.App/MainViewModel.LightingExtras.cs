@@ -65,10 +65,11 @@ public sealed partial class MainViewModel
         _ => StartAmbientLighting(),
         _ => !AmbientRunning);
 
-    private RelayCommand? _stopAmbientCommand;
-    public ICommand StopAmbientLightingCommand => _stopAmbientCommand ??= new RelayCommand(
-        _ => StopAmbientLighting(),
-        _ => AmbientRunning);
+    private AsyncCommand? _stopAmbientCommand;
+    public ICommand StopAmbientLightingCommand => _stopAmbientCommand ??= new AsyncCommand(
+        _ => StopAmbientLightingAsync(),
+        _ => AmbientRunning,
+        ReportError);
 
     public void StartAmbientLighting()
     {
@@ -95,23 +96,98 @@ public sealed partial class MainViewModel
         }
 
         bool musicMode = AmbientMusicMode;
-        _ambientCancellation = new CancellationTokenSource();
-        CancellationToken token = _ambientCancellation.Token;
+        CancellationTokenSource cancellation = new();
+        _ambientCancellation = cancellation;
         AmbientRunning = true;
         AmbientStatus = musicMode
             ? "Music-reactive lighting is running. Your system's output audio spectrum drives every OpenRGB controller. Audio stays in memory; nothing is recorded."
             : "Screen-ambient lighting is running. The primary display's edge colours are mirrored onto every OpenRGB controller.";
-        _ambientLoop = Task.Run(() => musicMode
-            ? RunMusicLoopAsync(brightness, token)
-            : RunAmbientLoopAsync(brightness, token), token);
+        _ambientLoop = Task.Run(() => RunAmbientLightingLifetimeAsync(musicMode, brightness, cancellation));
     }
 
-    public void StopAmbientLighting()
+    public async Task StopAmbientLightingAsync()
     {
-        _ambientCancellation?.Cancel();
-        _ambientCancellation = null;
+        CancellationTokenSource? cancellation = _ambientCancellation;
+        Task? loop = _ambientLoop;
+        if (cancellation is null || loop is null)
+        {
+            AmbientRunning = false;
+            AmbientStatus = "Ambient lighting stopped. OpenRGB (or its own effects) owns the devices again.";
+            return;
+        }
+
+        CancellationToken token = cancellation.Token;
+        AmbientStatus = "Stopping ambient lighting and releasing OpenRGB…";
+        cancellation.Cancel();
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Task.Run can surface cancellation if shutdown races task startup.
+        }
+        finally
+        {
+            cancellation.Dispose();
+            if (ReferenceEquals(_ambientCancellation, cancellation))
+            {
+                _ambientCancellation = null;
+                _ambientLoop = null;
+            }
+        }
+
         AmbientRunning = false;
         AmbientStatus = "Ambient lighting stopped. OpenRGB (or its own effects) owns the devices again.";
+    }
+
+    private void CancelAmbientLightingForDisposal()
+    {
+        try
+        {
+            _ambientCancellation?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The background lifetime wrapper already released this run.
+        }
+    }
+
+    private async Task RunAmbientLightingLifetimeAsync(
+        bool musicMode,
+        int brightness,
+        CancellationTokenSource cancellation)
+    {
+        try
+        {
+            if (musicMode)
+            {
+                await RunMusicLoopAsync(brightness, cancellation.Token);
+            }
+            else
+            {
+                await RunAmbientLoopAsync(brightness, cancellation.Token);
+            }
+        }
+        finally
+        {
+            bool cancellationRequested = cancellation.IsCancellationRequested;
+            cancellation.Dispose();
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                if (!ReferenceEquals(_ambientCancellation, cancellation))
+                {
+                    return;
+                }
+
+                _ambientCancellation = null;
+                _ambientLoop = null;
+                if (!cancellationRequested)
+                {
+                    AmbientRunning = false;
+                }
+            });
+        }
     }
 
     private async Task RunAmbientLoopAsync(int brightness, CancellationToken token)
@@ -228,14 +304,15 @@ public sealed partial class MainViewModel
 
     public ICommand ApplyAuraLightingCommand => _applyAuraLightingCommand ??= new AsyncCommand(
         parameter => ApplyAuraLightingAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
 
     public async Task ApplyAuraLightingAsync(bool turnOff)
     {
-        if (!HardwareControlEnabled)
+        if (!CanRunHardwareAction())
         {
-            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            ShowHardwareActionBlocked();
             return;
         }
 
@@ -261,8 +338,9 @@ public sealed partial class MainViewModel
 
     public ICommand SyncAllRgbCommand => _syncAllRgbCommand ??= new AsyncCommand(
         parameter => SyncAllRgbAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
 
     /// <summary>
     /// Applies the chosen colour to every RigPilot-native device in one click —
@@ -272,48 +350,96 @@ public sealed partial class MainViewModel
     /// </summary>
     public async Task SyncAllRgbAsync(bool turnOff)
     {
-        if (!HardwareControlEnabled)
+        if (!CanRunHardwareAction())
         {
-            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            ShowHardwareActionBlocked();
             return;
         }
 
-        List<string> outcomes = [];
-        async Task RunAsync(string name, IpcCommand command, object payload, Func<IpcResponse, bool> succeeded)
+        List<NativeRgbSyncOutcome> outcomes = [];
+        async Task RunAsync(
+            string name,
+            IpcCommand command,
+            object payload,
+            Func<IpcResponse, (bool WriteIssued, string? Message)> inspect)
         {
             try
             {
                 IpcResponse response = await _client.SendAsync(
                     NamedPipeRequestClient.CreateRequest(command, payload), _lifetime.Token);
-                outcomes.Add(response.Success && succeeded(response) ? $"{name} ✓" : $"{name} ✗");
+                (bool writeIssued, string? message) = inspect(response);
+                outcomes.Add(BuildNativeRgbSyncOutcome(name, response, writeIssued, message));
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                outcomes.Add($"{name} ✗ ({exception.GetType().Name})");
+                outcomes.Add(new NativeRgbSyncOutcome(
+                    name,
+                    Succeeded: false,
+                    $"{exception.GetType().Name}: {exception.Message}"));
             }
         }
 
-        static bool LightingOk(IpcResponse response) =>
-            IpcJson.FromElement<KrakenLightingResultV1>(response.Payload)?.Outcome == KrakenLightingOutcome.WriteIssued;
+        static (bool WriteIssued, string? Message) KrakenResult(IpcResponse response)
+        {
+            KrakenLightingResultV1? result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload);
+            return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+        }
+
+        static (bool WriteIssued, string? Message) AuraResult(IpcResponse response)
+        {
+            AuraLightingResultV1? result = IpcJson.FromElement<AuraLightingResultV1>(response.Payload);
+            return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+        }
+
+        static (bool WriteIssued, string? Message) DimmResult(IpcResponse response)
+        {
+            DimmRgbResultV1? result = IpcJson.FromElement<DimmRgbResultV1>(response.Payload);
+            return (result?.WriteIssued == true, result?.Message);
+        }
+
+        static (bool WriteIssued, string? Message) RazerResult(IpcResponse response)
+        {
+            RazerRgbResultV1? result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload);
+            return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+        }
 
         await RunAsync("Kraken", IpcCommand.SetKrakenLighting,
             new KrakenLightingRequestV1(KrakenLightingRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, KrakenLightingRequestV1.ExactDeviceId),
-            LightingOk);
+            KrakenResult);
         await RunAsync("Aura headers", IpcCommand.SetAuraLighting,
             new AuraLightingRequestV1(AuraLightingRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, AuraLightingRequestV1.ExactDeviceId),
-            response => IpcJson.FromElement<AuraLightingResultV1>(response.Payload)?.Outcome == KrakenLightingOutcome.WriteIssued);
+            AuraResult);
         await RunAsync("RAM", IpcCommand.SetDimmRgb,
             new DimmRgbRequestV1(DimmRgbRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, DimmRgbRequestV1.ExactDeviceId),
-            response => IpcJson.FromElement<DimmRgbResultV1>(response.Payload)?.WriteIssued == true);
+            DimmResult);
         await RunAsync("Razer case", IpcCommand.SetRazerRgb,
             new RazerRgbRequestV1(RazerRgbRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, RazerRgbRequestV1.ExactDeviceId),
-            response => IpcJson.FromElement<RazerRgbResultV1>(response.Payload)?.Outcome == KrakenLightingOutcome.WriteIssued);
+            RazerResult);
 
-        bool allOk = outcomes.All(outcome => outcome.Contains('✓'));
+        bool allOk = outcomes.All(outcome => outcome.Succeeded);
+        string summary = string.Join(
+            "; ",
+            outcomes.Select(outcome => outcome.Succeeded
+                ? $"{outcome.Name}: OK"
+                : $"{outcome.Name}: FAILED - {outcome.Message}"));
         ShowNotice(
-            (turnOff ? "Lighting off: " : "Colour synced: ") + string.Join(", ", outcomes)
+            (turnOff ? "Lighting off: " : "Colour synced: ") + summary
             + ". Lighting has no read-back on most devices — confirm visually.",
             allOk ? "Success" : "Warning");
+    }
+
+    internal static NativeRgbSyncOutcome BuildNativeRgbSyncOutcome(
+        string name,
+        IpcResponse response,
+        bool writeIssued,
+        string? deviceMessage)
+    {
+        string detail = !response.Success && !string.IsNullOrWhiteSpace(response.Error)
+            ? response.Error
+            : !string.IsNullOrWhiteSpace(deviceMessage)
+                ? deviceMessage
+                : "The device returned no lighting result.";
+        return new NativeRgbSyncOutcome(name, response.Success && writeIssued, detail);
     }
 
     // --- GPU sag bracket (passive ARGB on one addressable header) -------------
@@ -344,14 +470,15 @@ public sealed partial class MainViewModel
 
     public ICommand ApplyGpuBracketCommand => _applyGpuBracketCommand ??= new AsyncCommand(
         parameter => ApplyGpuBracketAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
 
     public async Task ApplyGpuBracketAsync(bool turnOff)
     {
-        if (!HardwareControlEnabled)
+        if (!CanRunHardwareAction())
         {
-            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            ShowHardwareActionBlocked();
             return;
         }
 
@@ -378,14 +505,15 @@ public sealed partial class MainViewModel
 
     public ICommand ApplyDimmRgbCommand => _applyDimmRgbCommand ??= new AsyncCommand(
         parameter => ApplyDimmRgbAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
 
     public async Task ApplyDimmRgbAsync(bool turnOff)
     {
-        if (!HardwareControlEnabled)
+        if (!CanRunHardwareAction())
         {
-            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            ShowHardwareActionBlocked();
             return;
         }
 
@@ -411,14 +539,15 @@ public sealed partial class MainViewModel
 
     public ICommand ApplyRazerUsbCommand => _applyRazerUsbCommand ??= new AsyncCommand(
         parameter => ApplyRazerUsbAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
 
     public async Task ApplyRazerUsbAsync(bool turnOff)
     {
-        if (!HardwareControlEnabled)
+        if (!CanRunHardwareAction())
         {
-            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            ShowHardwareActionBlocked();
             return;
         }
 
@@ -465,3 +594,5 @@ public sealed partial class MainViewModel
         ShowNotice(result.Message, result.Connected ? "Success" : "Warning");
     }
 }
+
+internal sealed record NativeRgbSyncOutcome(string Name, bool Succeeded, string Message);

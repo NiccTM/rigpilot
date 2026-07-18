@@ -12,7 +12,7 @@ public sealed class NamedPipeRequestClient
     /// <summary>
     /// <paramref name="connectTimeout"/> bounds only reaching the service (kept
     /// short so a down service fails fast). <paramref name="operationTimeout"/>
-    /// bounds the request/response once connected, and defaults generously
+    /// bounds the request/response once connected, and defaults to 10 seconds
     /// because a transactional hardware apply — prepare, apply, read-back
     /// verify, and the service serialising rapid back-to-back writes on the
     /// same channel — can take several seconds. Sharing one short timeout for
@@ -22,7 +22,7 @@ public sealed class NamedPipeRequestClient
     {
         _pipeName = pipeName;
         _connectTimeout = connectTimeout ?? TimeSpan.FromSeconds(2);
-        _operationTimeout = operationTimeout ?? TimeSpan.FromSeconds(30);
+        _operationTimeout = operationTimeout ?? TimeSpan.FromSeconds(10);
     }
 
     public async Task<IpcResponse> SendAsync(IpcRequest request, CancellationToken cancellationToken)

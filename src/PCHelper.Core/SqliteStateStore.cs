@@ -154,6 +154,16 @@ public sealed class SqliteStateStore :
         return result is string json ? JsonSerializer.Deserialize<ProfileTransaction>(json, JsonDefaults.Options) : null;
     }
 
+    public async Task<ProfileTransaction?> GetLatestCommittedAsync(CancellationToken cancellationToken)
+    {
+        await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT json FROM profile_transactions WHERE state = $state ORDER BY updated_utc DESC LIMIT 1";
+        command.Parameters.AddWithValue("$state", ProfileTransactionState.Committed.ToString());
+        object? result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is string json ? JsonSerializer.Deserialize<ProfileTransaction>(json, JsonDefaults.Options) : null;
+    }
+
     public async Task ClearPendingAsync(string transactionId, CancellationToken cancellationToken)
     {
         await using SqliteConnection connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -655,6 +665,7 @@ public sealed class SqliteStateStore :
             SuiteEntityKind.AdapterPackInspection => typeof(AdapterPackInspection),
             SuiteEntityKind.TakeoverPlan => typeof(TakeoverPlanV1),
             SuiteEntityKind.TakeoverTransaction => typeof(TakeoverTransactionV1),
+            SuiteEntityKind.HardwareControlLease => typeof(HardwareControlLeaseV1),
             _ => throw new ArgumentOutOfRangeException(nameof(kind))
         };
         if (typeof(T) != expected)
@@ -715,7 +726,8 @@ public sealed class SqliteStateStore :
         ProfileTransactionState.Prepared or
         ProfileTransactionState.Applying or
         ProfileTransactionState.Verifying or
-        ProfileTransactionState.RollingBack;
+        ProfileTransactionState.RollingBack or
+        ProfileTransactionState.RecoveryRequired;
 
     private static bool IsPending(HardwareOperationState state) => state is
         HardwareOperationState.Pending or

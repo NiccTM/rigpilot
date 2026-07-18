@@ -9,7 +9,7 @@ namespace PCHelper.Adapters;
 /// containment before a future device pack can write to them. This adapter
 /// deliberately performs no HID or USB I/O.
 /// </summary>
-public sealed class WindowsPeripheralInventoryAdapter : IHardwareAdapter
+public sealed class WindowsPeripheralInventoryAdapter : IHardwareAdapter, IAdapterTopologyCachePolicy
 {
     private const string AsusAuraHardwareId = "VID_0B05&PID_18F3";
     private const string RazerHardwareId = "VID_1532&PID_0F13";
@@ -24,6 +24,8 @@ public sealed class WindowsPeripheralInventoryAdapter : IHardwareAdapter
         AdapterExecutionContext.SystemService,
         ["HID LampArray", "ASUS/ROG/TUF/Aura", "MSI/Mystic Light", "Gigabyte/AORUS/RGB Fusion", "ASRock/Polychrome", "EVGA/K|NGP|N", "ZOTAC/SPECTRA", "Sapphire/TriXX Glow", "PowerColor/DevilZone", "PNY/EPIC-X", "Palit/GameRock", "GALAX/KFA2", "Corsair", "Logitech", "Razer", "SteelSeries", "NZXT", "Cooler Master", "Lian Li", "Thermaltake", "G.Skill", "HyperX"],
         ["PeripheralInventoryReadOnly", "AuraReadOnly", "HidPackReadOnly"]);
+
+    public TimeSpan TopologyCacheDuration => TimeSpan.FromSeconds(30);
 
     public Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken)
     {

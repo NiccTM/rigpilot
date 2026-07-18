@@ -239,6 +239,8 @@ async Task<IpcResponse> HandleAsync(IpcRequest request, CancellationToken cancel
                     cancellationToken)),
             IpcCommand.AdapterRollback => await RollbackAsync(request, cancellationToken),
             IpcCommand.AdapterReset => await ResetAsync(request, cancellationToken),
+            IpcCommand.AdapterVerifyDefault => await VerifyDefaultAsync(request, cancellationToken),
+            IpcCommand.AdapterVerifyRollback => await VerifyRollbackAsync(request, cancellationToken),
             IpcCommand.AdapterHealth => await HealthAsync(request, cancellationToken),
             IpcCommand.AdapterDiagnostics => Diagnostics(request),
             IpcCommand.AdapterShutdown => Shutdown(request),
@@ -323,6 +325,28 @@ async Task<IpcResponse> ResetAsync(IpcRequest request, CancellationToken cancell
     AdapterResetRequest reset = Unwrap<AdapterResetRequest>(request);
     await coordinator.Adapters[0].ResetToDefaultAsync(reset.CapabilityId, cancellationToken);
     return Success(request, reset.CapabilityId);
+}
+
+async Task<IpcResponse> VerifyDefaultAsync(IpcRequest request, CancellationToken cancellationToken)
+{
+    AdapterDefaultVerificationRequest verification = Unwrap<AdapterDefaultVerificationRequest>(request);
+    if (coordinator.Adapters[0] is not IHardwareStateVerifier verifier)
+    {
+        throw new NotSupportedException("The hosted adapter cannot verify its default state.");
+    }
+
+    return Success(request, await verifier.VerifyDefaultStateAsync(verification.CapabilityId, cancellationToken));
+}
+
+async Task<IpcResponse> VerifyRollbackAsync(IpcRequest request, CancellationToken cancellationToken)
+{
+    AdapterRollbackVerificationRequest verification = Unwrap<AdapterRollbackVerificationRequest>(request);
+    if (coordinator.Adapters[0] is not IHardwareStateVerifier verifier)
+    {
+        throw new NotSupportedException("The hosted adapter cannot verify its rollback state.");
+    }
+
+    return Success(request, await verifier.VerifyRollbackStateAsync(verification.Action, cancellationToken));
 }
 
 IpcResponse Shutdown(IpcRequest request)

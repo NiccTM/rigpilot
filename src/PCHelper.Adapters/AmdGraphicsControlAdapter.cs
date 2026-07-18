@@ -14,11 +14,12 @@ namespace PCHelper.Adapters;
 /// is worse than not shipping it. See docs/qualification/cpu-tuning-and-intel-arc.md
 /// for the identical IGCL reasoning.
 /// </summary>
-public sealed class AmdGraphicsControlAdapter : IHardwareAdapter
+public sealed class AmdGraphicsControlAdapter : IHardwareAdapter, IAdapterTopologyCachePolicy
 {
     private const string AdapterId = "amd.adlx";
     private const string ControlLibraryName = "amdadlx64.dll";
     private const string InitEntryPoint = "ADLXInitialize";
+    private bool? _libraryPresent;
 
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
@@ -30,9 +31,12 @@ public sealed class AmdGraphicsControlAdapter : IHardwareAdapter
         ["AMD Radeon RX graphics with the AMD driver installed"],
         ["AmdGraphicsControlFeasibility", "GpuWritesSafetyLocked"]);
 
+    public TimeSpan TopologyCacheDuration => TimeSpan.FromSeconds(30);
+
     public Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken)
     {
         (bool libraryPresent, bool initPresent) = DetectControlLibrary();
+        _libraryPresent = libraryPresent;
         List<CapabilityDescriptor> capabilities = [];
 
         // Only surface a card when the AMD control library is actually present, so
@@ -82,7 +86,7 @@ public sealed class AmdGraphicsControlAdapter : IHardwareAdapter
 
     public Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
-        (bool libraryPresent, _) = DetectControlLibrary();
+        bool libraryPresent = _libraryPresent ?? DetectControlLibrary().LibraryPresent;
         return Task.FromResult(new AdapterHealth(
             AdapterId,
             true,

@@ -10,7 +10,7 @@ namespace PCHelper.Core;
 /// capability identities plus a coarse outcome; it never records values,
 /// device paths, or exception messages that could leak local identity data.
 /// </summary>
-public sealed class TraceableHardwareAdapter : IHardwareAdapter, ITraceableAdapter, IAdapterDiagnosticsProvider
+public sealed class TraceableHardwareAdapter : IHardwareAdapter, IHardwareStateVerifier, ITraceableAdapter, IAdapterDiagnosticsProvider, IAdapterTopologyCachePolicy
 {
     private const int DefaultCapacity = 512;
     private readonly IHardwareAdapter _inner;
@@ -28,6 +28,10 @@ public sealed class TraceableHardwareAdapter : IHardwareAdapter, ITraceableAdapt
     }
 
     public AdapterManifest Manifest => _inner.Manifest;
+
+    public TimeSpan TopologyCacheDuration => _inner is IAdapterTopologyCachePolicy policy
+        ? policy.TopologyCacheDuration
+        : TimeSpan.Zero;
 
     public Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken) =>
         RecordAsync("Probe", string.Empty, () => _inner.ProbeAsync(cancellationToken));
@@ -49,6 +53,26 @@ public sealed class TraceableHardwareAdapter : IHardwareAdapter, ITraceableAdapt
 
     public Task ResetToDefaultAsync(string capabilityId, CancellationToken cancellationToken) =>
         RecordAsync("ResetToDefault", capabilityId, () => _inner.ResetToDefaultAsync(capabilityId, cancellationToken));
+
+    public Task<HardwareStateVerification> VerifyDefaultStateAsync(string capabilityId, CancellationToken cancellationToken) =>
+        _inner is IHardwareStateVerifier verifier
+            ? RecordAsync("VerifyDefault", capabilityId, () => verifier.VerifyDefaultStateAsync(capabilityId, cancellationToken))
+            : Task.FromResult(new HardwareStateVerification(
+                Manifest.Id,
+                capabilityId,
+                false,
+                null,
+                "The adapter does not implement default-state read-back."));
+
+    public Task<HardwareStateVerification> VerifyRollbackStateAsync(PreparedAction action, CancellationToken cancellationToken) =>
+        _inner is IHardwareStateVerifier verifier
+            ? RecordAsync("VerifyRollback", action.Action.CapabilityId, () => verifier.VerifyRollbackStateAsync(action, cancellationToken))
+            : Task.FromResult(new HardwareStateVerification(
+                Manifest.Id,
+                action.Action.CapabilityId,
+                false,
+                null,
+                "The adapter does not implement rollback-state read-back."));
 
     public Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken) =>
         RecordAsync("GetHealth", string.Empty, () => _inner.GetHealthAsync(cancellationToken));

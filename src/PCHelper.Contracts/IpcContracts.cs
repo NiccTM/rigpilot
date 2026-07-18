@@ -145,7 +145,10 @@ public enum IpcCommand
     StopConflictingProcesses,
     GetStorageHealth,
     SetDimmRgb,
-    SetRazerRgb
+    SetRazerRgb,
+    SetHardwareControlArmed,
+    AdapterVerifyDefault,
+    AdapterVerifyRollback
 }
 
 public static class ProtocolConstants
@@ -221,6 +224,8 @@ public static class IpcCommandPolicy
         IpcCommand.AdapterProbe or
         IpcCommand.AdapterReadSensors or
         IpcCommand.AdapterVerify or
+        IpcCommand.AdapterVerifyDefault or
+        IpcCommand.AdapterVerifyRollback or
         IpcCommand.AdapterHealth or
         IpcCommand.AdapterDiagnostics;
 
@@ -252,7 +257,9 @@ public sealed record ServiceStatus(
     string? ActiveProfileId,
     bool WritesEnabled,
     bool EmergencyMode,
-    string Message);
+    string Message,
+    bool RecoveryRequired = false,
+    bool HardwareControlArmed = false);
 
 public sealed record ProfileValidationResult(
     bool Valid,
@@ -287,6 +294,10 @@ public sealed record InteractivePreflightEnvelope<T>(string SessionToken, T Payl
 
 public sealed record AdapterResetRequest(string CapabilityId);
 
+public sealed record AdapterRollbackVerificationRequest(PreparedAction Action);
+
+public sealed record AdapterDefaultVerificationRequest(string CapabilityId);
+
 public sealed record HandshakeRequest(string ClientName, string ClientVersion);
 
 public sealed record HandshakeResponse(int ProtocolVersion, string ServiceVersion, long StateRevision);
@@ -316,6 +327,26 @@ public sealed record SetGpuFanControlArmedRequest(
     bool Armed,
     bool ConfirmExperimental,
     IReadOnlyList<string> ConfirmedDeviceIds);
+
+public sealed record SetHardwareControlArmedRequest(
+    bool Armed,
+    bool ConfirmExperimental,
+    IReadOnlyList<string> ConfirmedDeviceIds);
+
+public sealed record HardwareControlFamilyResult(
+    string Family,
+    bool Available,
+    bool RequestedStateApplied,
+    bool ReadBackVerified,
+    bool RolledBack,
+    string Message);
+
+public sealed record HardwareControlTransactionResult(
+    bool Armed,
+    bool AllRequestedFamiliesVerified,
+    bool RecoveryRequired,
+    IReadOnlyList<HardwareControlFamilyResult> Families,
+    string Message);
 
 public sealed record GpuFanControlStatus(
     bool Available,

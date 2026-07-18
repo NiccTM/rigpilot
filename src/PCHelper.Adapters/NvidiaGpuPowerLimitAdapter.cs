@@ -15,7 +15,7 @@ namespace PCHelper.Adapters;
 /// armed via an acknowledged operator action; the default registration is a
 /// read-only card, so wiring the adapter in cannot by itself un-gate a write.
 /// </summary>
-public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter
+public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter, IHardwareStateVerifier
 {
     public const string AdapterId = "nvidia.gpupower";
     public const string CapabilityPrefix = "gpupower.limit:";
@@ -194,6 +194,42 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter
         EnsureOwnedCapability(capabilityId);
         GpuPowerLimitBounds bounds = await RequireBoundsAsync(cancellationToken).ConfigureAwait(false);
         await _transport.SetPowerLimitAsync(_channelId, bounds.DefaultMilliwatts, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<HardwareStateVerification> VerifyDefaultStateAsync(
+        string capabilityId,
+        CancellationToken cancellationToken)
+    {
+        EnsureOwnedCapability(capabilityId);
+        GpuPowerLimitBounds bounds = await RequireBoundsAsync(cancellationToken).ConfigureAwait(false);
+        GpuPowerLimitState state = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        bool success = state.CurrentMilliwatts is uint observed
+            && Math.Abs((long)observed - bounds.DefaultMilliwatts) <= VerifyToleranceMilliwatts;
+        return new HardwareStateVerification(
+            Manifest.Id,
+            capabilityId,
+            success,
+            state.CurrentMilliwatts is uint value ? ControlValue.FromNumeric(ToWatts(value)) : null,
+            success ? "GPU power-limit read-back matched the vendor default." : "GPU power-limit read-back did not match the vendor default.");
+    }
+
+    public async Task<HardwareStateVerification> VerifyRollbackStateAsync(
+        PreparedAction action,
+        CancellationToken cancellationToken)
+    {
+        EnsureOwnedCapability(action.Action.CapabilityId);
+        GpuPowerLimitBounds bounds = await RequireBoundsAsync(cancellationToken).ConfigureAwait(false);
+        GpuPowerLimitState? prior = DeserializeRollback(action.AdapterToken);
+        uint expected = prior?.CurrentMilliwatts ?? bounds.DefaultMilliwatts;
+        GpuPowerLimitState actual = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        bool success = actual.CurrentMilliwatts is uint observed
+            && Math.Abs((long)observed - expected) <= VerifyToleranceMilliwatts;
+        return new HardwareStateVerification(
+            Manifest.Id,
+            action.Action.CapabilityId,
+            success,
+            actual.CurrentMilliwatts is uint value ? ControlValue.FromNumeric(ToWatts(value)) : null,
+            success ? "GPU power-limit rollback state was read back." : "GPU power-limit rollback read-back did not match the captured state.");
     }
 
     public async Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken)

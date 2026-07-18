@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using PCHelper.Contracts;
+using PCHelper.Core;
 
 namespace PCHelper.Adapters;
 
@@ -9,7 +10,7 @@ namespace PCHelper.Adapters;
 /// power, or fan writes. Public NVML bounds are surfaced so a later,
 /// separately-qualified control adapter cannot guess values.
 /// </summary>
-public sealed class NvmlTelemetryAdapter : IHardwareAdapter
+public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCachePolicy
 {
     private const string AdapterId = "nvidia.nvml";
     private const uint TemperatureGpu = 0;
@@ -29,6 +30,8 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter
         AdapterExecutionContext.SystemService,
         ["NVIDIA GPU with installed NVML runtime"],
         ["Telemetry", "CoolingCapabilityDiscovery", "PowerCapabilityDiscovery", "ClockOffsetCapabilityDiscovery", "GpuWritesSafetyLocked"]);
+
+    public TimeSpan TopologyCacheDuration => TimeSpan.FromSeconds(30);
 
     public async Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken)
     {
@@ -257,14 +260,13 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter
         NvmlDevice device,
         string deviceId)
     {
-        const double ConservativeFanFloorPercent = 50;
         const string qualificationBlocker = "RigPilot discovered this public NVML range, but leaves it read-only until the exact GPU board and driver complete signed apply, read-back, default-reset, conflict, and physical safety qualification.";
 
         if (api.TryGetFanCount(device.Handle) is uint fanCount
             && fanCount is > 0 and <= 16
             && api.TryGetFanSpeedRange(device.Handle) is (uint fanMinimum, uint fanMaximum))
         {
-            double safeMinimum = Math.Max(ConservativeFanFloorPercent, fanMinimum);
+            double safeMinimum = Math.Max(AdaptiveCoolingProfileFactory.UncalibratedFloorDutyPercent, fanMinimum);
             double safeMaximum = Math.Min(100, fanMaximum);
             if (safeMinimum <= safeMaximum)
             {
@@ -283,7 +285,7 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter
                         RiskLevel.Critical,
                         EvidenceLevel.Detected,
                         null,
-                        $"NVML reports a {fanMinimum}-{fanMaximum}% controller range. The conservative {ConservativeFanFloorPercent}% floor remains in effect because restart validation is incomplete. {qualificationBlocker}",
+                        $"NVML reports a {fanMinimum}-{fanMaximum}% controller range. RigPilot's configured uncalibrated minimum is {AdaptiveCoolingProfileFactory.UncalibratedFloorDutyPercent:0}%; the effective minimum is {safeMinimum:0}% because a higher controller minimum takes precedence. {qualificationBlocker}",
                         CanResetToDefault: false,
                         Domain: ControlDomain.Cooling));
                 }

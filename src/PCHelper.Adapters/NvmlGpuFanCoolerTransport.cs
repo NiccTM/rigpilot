@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using PCHelper.Contracts;
+using PCHelper.Core;
 
 namespace PCHelper.Adapters;
 
@@ -23,8 +24,6 @@ namespace PCHelper.Adapters;
 public sealed class NvmlGpuFanCoolerTransport : IGpuFanCoolerTransport, IDisposable
 {
     public const string WriteOptInEnvironmentVariable = "PCHELPER_GPUFAN_REAL_TRANSPORT";
-    private const int ConservativeFloorPercent = 50;
-
     // NVML fan control policy values.
     private const uint FanPolicyThermal = 0; // driver automatic curve
     private const uint FanPolicyManual = 1;
@@ -134,7 +133,7 @@ public sealed class NvmlGpuFanCoolerTransport : IGpuFanCoolerTransport, IDisposa
             return Task.FromResult<GpuFanBounds?>(null);
         }
 
-        int floor = Math.Max(ConservativeFloorPercent, (int)minimum);
+        int floor = Math.Max((int)AdaptiveCoolingProfileFactory.UncalibratedFloorDutyPercent, (int)minimum);
         int ceiling = Math.Min(100, (int)maximum);
         return Task.FromResult<GpuFanBounds?>(new GpuFanBounds(floor, ceiling));
     }

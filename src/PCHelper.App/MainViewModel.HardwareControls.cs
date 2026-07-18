@@ -33,94 +33,197 @@ public sealed partial class MainViewModel
         "RigPilot",
         "control-preferences.json");
 
-    private bool _hardwareControlEnabled = ReadPersistedHardwareControlPreference();
+    private readonly SemaphoreSlim _hardwareControlCommandGate = new(1, 1);
+    private readonly AsyncCommand _toggleHardwareControlCommand;
+    private bool _hardwareControlPreferenceRequested = ReadPersistedHardwareControlPreference();
+    private bool _hardwareControlEnabled;
     private bool _hardwareControlArmedThisConnection;
+    private bool _hardwareControlArmAttemptedThisConnection;
+    private bool _isHardwareControlChanging;
 
-    public bool HardwareControlEnabled
+    public bool HardwareControlEnabled => _hardwareControlEnabled;
+
+    public bool IsHardwareControlChanging
     {
-        get => _hardwareControlEnabled;
-        set
+        get => _isHardwareControlChanging;
+        private set
         {
-            if (!Set(ref _hardwareControlEnabled, value))
+            if (!Set(ref _isHardwareControlChanging, value))
             {
                 return;
             }
 
             OnPropertyChanged(nameof(HardwareControlBadge));
-            PersistHardwareControlPreference(value);
-            _hardwareControlArmedThisConnection = false;
-            _applyGpuControlCommand.RaiseCanExecuteChanged();
-            _startGpuAutoOcCommand.RaiseCanExecuteChanged();
-            _enableGpuFanAutoModeCommand.RaiseCanExecuteChanged();
-            _enableCaseFansAutoModeCommand.RaiseCanExecuteChanged();
-            _ = ApplyHardwareControlSafelyAsync(value);
+            _toggleHardwareControlCommand.RaiseCanExecuteChanged();
+            RaiseHardwareControlCanExecuteChanged();
         }
     }
 
-    /// <summary>User-facing badge for the GPU controls card (On/Off, not True/False).</summary>
-    public string HardwareControlBadge => HardwareControlEnabled ? "Hardware control: On" : "Hardware control: Off";
+    public ICommand ToggleHardwareControlCommand => _toggleHardwareControlCommand;
 
-    private async Task ApplyHardwareControlSafelyAsync(bool enable)
+    /// <summary>User-facing badge for the GPU controls card (On/Off, not True/False).</summary>
+    public string HardwareControlBadge => IsHardwareControlChanging
+        ? "Hardware control: Verifying"
+        : HardwareControlEnabled ? "Hardware control: On" : "Hardware control: Off";
+
+    private bool CanRunHardwareAction(bool requireIdle = false) =>
+        CanUseServiceWrites
+        && HardwareControlEnabled
+        && !IsHardwareControlChanging
+        && (!requireIdle || !HasActiveOperation);
+
+    private void ShowHardwareActionBlocked(bool requireIdle = false)
+    {
+        string reason = !CanUseServiceWrites
+            ? GetServiceWriteBlockReason()
+            : !HardwareControlEnabled
+                ? "Turn on Hardware control in the header first."
+                : requireIdle && HasActiveOperation
+                    ? "Another hardware operation is active. Abort it and wait for restoration before starting a new operation."
+                    : "This hardware action is not available yet. Refresh the dashboard and review the device status.";
+        ShowNotice(reason, "Warning");
+    }
+
+    private string GetServiceWriteBlockReason()
+    {
+        if (IsPortableMode)
+        {
+            return "This action requires the RigPilot service; portable mode is read-only.";
+        }
+
+        if (!IsServiceOnline)
+        {
+            return "The RigPilot service is offline. Start or reconnect the service, then refresh the dashboard.";
+        }
+
+        if (_status?.RecoveryRequired == true)
+        {
+            return _status.Message;
+        }
+
+        return string.IsNullOrWhiteSpace(ServiceCompatibilityMessage)
+            ? "The connected RigPilot service cannot accept hardware writes. Update or restart the service, then refresh."
+            : ServiceCompatibilityMessage;
+    }
+
+    private Task ToggleHardwareControlAsync(object? _) =>
+        ApplyHardwareControlSafelyAsync(!HardwareControlEnabled, userInitiated: true);
+
+    private async Task ApplyHardwareControlSafelyAsync(bool enable, bool userInitiated = false)
     {
         try
         {
-            await ApplyHardwareControlAsync(enable);
+            await ApplyHardwareControlAsync(enable, userInitiated);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             ShowNotice($"Hardware control change failed: {exception.Message}", "Warning");
+            OnPropertyChanged(nameof(HardwareControlEnabled));
         }
     }
 
-    private async Task ApplyHardwareControlAsync(bool enable)
+    private async Task<bool> ApplyHardwareControlAsync(bool enable, bool userInitiated)
     {
-        if (!IsServiceOnline || _snapshot is null)
+        await _hardwareControlCommandGate.WaitAsync(_lifetime.Token);
+        try
         {
-            return;
-        }
-
-        (IpcCommand Command, string Prefix)[] families =
-        [
-            (IpcCommand.SetGpuFanControlArmed, "gpufan."),
-            (IpcCommand.SetGpuPowerLimitArmed, "gpupower."),
-            (IpcCommand.SetGpuClockOffsetArmed, "gpuclock.")
-        ];
-        int armed = 0;
-        foreach ((IpcCommand command, string prefix) in families)
-        {
-            string? deviceId = _snapshot.Capabilities
-                .FirstOrDefault(capability => capability.Id.StartsWith(prefix, StringComparison.Ordinal))
-                ?.DeviceId;
-            if (deviceId is null)
+            if (!IsServiceOnline || _snapshot is null || !CanUseServiceWrites)
             {
-                continue;
+                if (userInitiated)
+                {
+                    ShowNotice(GetServiceWriteBlockReason(), "Warning");
+                }
+                OnPropertyChanged(nameof(HardwareControlEnabled));
+                return false;
             }
 
-            IReadOnlyList<string> confirmed = [deviceId];
-            object payload = command switch
-            {
-                IpcCommand.SetGpuFanControlArmed => new SetGpuFanControlArmedRequest(enable, enable, confirmed),
-                IpcCommand.SetGpuPowerLimitArmed => new SetGpuPowerLimitArmedRequest(enable, enable, confirmed),
-                _ => new SetGpuClockOffsetArmedRequest(enable, enable, confirmed)
-            };
+            IsHardwareControlChanging = true;
+            string[] confirmedDeviceIds = _snapshot.Capabilities
+                .Where(capability => capability.Id.StartsWith("gpufan.", StringComparison.Ordinal)
+                    || capability.Id.StartsWith("gpupower.", StringComparison.Ordinal)
+                    || capability.Id.StartsWith("gpuclock.", StringComparison.Ordinal))
+                .Select(capability => capability.DeviceId)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
             IpcResponse response = await _client.SendAsync(
-                NamedPipeRequestClient.CreateRequest(command, payload),
+                NamedPipeRequestClient.CreateRequest(
+                    IpcCommand.SetHardwareControlArmed,
+                    new SetHardwareControlArmedRequest(enable, enable, confirmedDeviceIds)),
                 _lifetime.Token);
-            if (response.Success)
+            HardwareControlTransactionResult? result = IpcJson.FromElement<HardwareControlTransactionResult>(response.Payload);
+            if (result is null)
             {
-                armed++;
+                throw new InvalidOperationException(response.Error ?? "The service returned no hardware-control verification result.");
             }
-        }
 
-        _hardwareControlArmedThisConnection = enable && armed > 0;
-        if (armed > 0)
-        {
+            if (!ShouldCommitHardwareControlState(response.Success, result, enable))
+            {
+                _hardwareControlArmedThisConnection = false;
+                ShowNotice(result.Message, result.RecoveryRequired ? "Danger" : "Warning");
+                OnPropertyChanged(nameof(HardwareControlEnabled));
+                return false;
+            }
+
+            SetHardwareControlState(enable);
+            _hardwareControlPreferenceRequested = enable;
+            PersistHardwareControlPreference(enable);
+            _hardwareControlArmedThisConnection = enable;
             ShowNotice(enable
-                ? $"Hardware control enabled: {armed} GPU write famil{(armed == 1 ? "y" : "ies")} armed for this machine."
-                : "Hardware control disabled; vendor defaults restored.",
+                ? $"Hardware control enabled after {result.Families.Count} GPU family/families passed read-back."
+                : "Hardware control disabled after vendor/default state was restored and read back.",
                 "Success");
-            await RefreshAsync(full: true, userInitiated: false);
+            if (_refreshing)
+            {
+                // Initialisation arms after it has already fetched the
+                // read-only inventory. A nested RefreshAsync is intentionally
+                // discarded by the refresh guard, so replace only the snapshot
+                // here and let the outer refresh build the first UI frame from
+                // the newly armed descriptors.
+                IpcResponse snapshotResponse = await _client.SendAsync(
+                    NamedPipeRequestClient.CreateRequest(IpcCommand.GetInventory),
+                    _lifetime.Token);
+                EnsureSuccess(snapshotResponse);
+                _snapshot = IpcJson.FromElement<HardwareSnapshot>(snapshotResponse.Payload)
+                    ?? throw new InvalidDataException("Service returned an empty inventory response after hardware control changed.");
+            }
+            else
+            {
+                await RefreshAsync(full: true, userInitiated: false);
+            }
+            return true;
         }
+        finally
+        {
+            IsHardwareControlChanging = false;
+            _hardwareControlCommandGate.Release();
+        }
+    }
+
+    private void SetHardwareControlState(bool enabled)
+    {
+        if (!Set(ref _hardwareControlEnabled, enabled, nameof(HardwareControlEnabled)))
+        {
+            OnPropertyChanged(nameof(HardwareControlEnabled));
+        }
+        OnPropertyChanged(nameof(HardwareControlBadge));
+        RaiseHardwareControlCanExecuteChanged();
+    }
+
+    internal static bool ShouldCommitHardwareControlState(
+        bool responseSuccess,
+        HardwareControlTransactionResult result,
+        bool requestedArmed) =>
+        responseSuccess
+        && result.AllRequestedFamiliesVerified
+        && !result.RecoveryRequired
+        && result.Armed == requestedArmed;
+
+    private void RaiseHardwareControlCanExecuteChanged()
+    {
+        _applyGpuControlCommand.RaiseCanExecuteChanged();
+        _startGpuAutoOcCommand.RaiseCanExecuteChanged();
+        _enableGpuFanAutoModeCommand.RaiseCanExecuteChanged();
+        _enableCaseFansAutoModeCommand.RaiseCanExecuteChanged();
     }
 
     /// <summary>
@@ -203,6 +306,7 @@ public sealed partial class MainViewModel
                 && capability.Domain == ControlDomain.Cooling
                 && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
                 && capability.Range is NumericRange
+                && GetCoolingOutputAssignment(capability) is not { IsSafetyCritical: true }
                 // The NVML gpufan.duty slider owns the GPU cooler; LHM's own
                 // GPU-fan controls are the same physical fans via a second path.
                 && !capability.Id.Contains("/gpu-nvidia/", StringComparison.Ordinal))
@@ -247,9 +351,96 @@ public sealed partial class MainViewModel
 
     public ICommand EnableCaseFansAutoModeCommand => _enableCaseFansAutoModeCommand;
 
+    private enum AutomaticCoolingSelection
+    {
+        None,
+        Silent,
+        Balanced,
+        Cooling
+    }
+
+    private AutomaticCoolingSelection _caseFanSelection;
+    private AutomaticCoolingSelection _gpuFanSelection;
+
+    public bool IsCaseFanSilentSelected => _caseFanSelection == AutomaticCoolingSelection.Silent;
+
+    public bool IsCaseFanBalancedSelected => _caseFanSelection == AutomaticCoolingSelection.Balanced;
+
+    public bool IsCaseFanCoolingSelected => _caseFanSelection == AutomaticCoolingSelection.Cooling;
+
+    public bool IsGpuFanSilentSelected => _gpuFanSelection == AutomaticCoolingSelection.Silent;
+
+    public bool IsGpuFanBalancedSelected => _gpuFanSelection == AutomaticCoolingSelection.Balanced;
+
+    public bool IsGpuFanCoolingSelected => _gpuFanSelection == AutomaticCoolingSelection.Cooling;
+
+    private void SetAutomaticCoolingSelection(bool gpuFans, AutomaticCoolingSelection selection)
+    {
+        ref AutomaticCoolingSelection target = ref gpuFans ? ref _gpuFanSelection : ref _caseFanSelection;
+        if (target == selection)
+        {
+            return;
+        }
+
+        target = selection;
+        string prefix = gpuFans ? "IsGpuFan" : "IsCaseFan";
+        OnPropertyChanged($"{prefix}SilentSelected");
+        OnPropertyChanged($"{prefix}BalancedSelected");
+        OnPropertyChanged($"{prefix}CoolingSelected");
+    }
+
+    private void SynchronizeAutomaticCoolingSelection()
+    {
+        const string caseFanProfileId = "auto.profile.case-fans";
+        const string gpuFanProfileId = "auto.profile.gpu-fan";
+        string? activeProfileId = _status?.ActiveProfileId;
+        bool caseFansActive = string.Equals(activeProfileId, caseFanProfileId, StringComparison.Ordinal);
+        bool gpuFansActive = string.Equals(activeProfileId, gpuFanProfileId, StringComparison.Ordinal);
+
+        if (!caseFansActive)
+        {
+            SetAutomaticCoolingSelection(gpuFans: false, AutomaticCoolingSelection.None);
+        }
+        if (!gpuFansActive)
+        {
+            SetAutomaticCoolingSelection(gpuFans: true, AutomaticCoolingSelection.None);
+        }
+
+        if ((caseFansActive || gpuFansActive)
+            && _suiteProfilesById.TryGetValue(activeProfileId!, out ProfileV2? profile)
+            && TryReadAutomaticCoolingMode(profile, out CoolingCurveMode mode))
+        {
+            bool gpuFans = gpuFansActive;
+            SetAutomaticCoolingSelection(gpuFans, ToSelection(mode));
+        }
+    }
+
+    internal static bool TryReadAutomaticCoolingMode(ProfileV2 profile, out CoolingCurveMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        foreach (CoolingCurveMode candidate in Enum.GetValues<CoolingCurveMode>())
+        {
+            if (profile.Name.EndsWith($" {candidate.ToString().ToLowerInvariant()} mode", StringComparison.OrdinalIgnoreCase))
+            {
+                mode = candidate;
+                return true;
+            }
+        }
+
+        mode = default;
+        return false;
+    }
+
+    private static AutomaticCoolingSelection ToSelection(CoolingCurveMode mode) => mode switch
+    {
+        CoolingCurveMode.Silent => AutomaticCoolingSelection.Silent,
+        CoolingCurveMode.Cooling => AutomaticCoolingSelection.Cooling,
+        _ => AutomaticCoolingSelection.Balanced
+    };
+
     /// <summary>
-    /// One-click automatic cooling mode: builds and applies a conservative
-    /// temperature→duty graph (50% safety floor, full maximum for emergency
+    /// One-click automatic cooling mode: builds and applies a bounded
+    /// temperature→duty graph (20% uncalibrated floor, full maximum for emergency
     /// headroom) through the service graph engine, which keeps read-back
     /// verification and the stale-sensor → maximum-cooling protection. GPU mode
     /// binds the armed GPU fan to GPU temperature; case-fan mode binds every
@@ -303,8 +494,9 @@ public sealed partial class MainViewModel
 
     public ICommand StartAdaptiveCoolingCommand => _startAdaptiveCoolingCommand ??= new AsyncCommand(
         parameter => StartAdaptiveCoolingAsync(string.Equals(parameter as string, "gpu", StringComparison.OrdinalIgnoreCase)),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
 
     /// <summary>
     /// One-click adaptive cooling: reads the current CPU package and GPU core
@@ -337,8 +529,9 @@ public sealed partial class MainViewModel
 
     public ICommand StartFullAutoOcCommand => _startFullAutoOcCommand ??= new AsyncCommand(
         _ => StartFullAutoOcAsync(),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(requireIdle: true),
+        ReportError,
+        _ => ShowHardwareActionBlocked(requireIdle: true));
 
     public string FullAutoOcStatus
     {
@@ -355,8 +548,15 @@ public sealed partial class MainViewModel
     public async Task StartFullAutoOcAsync()
     {
         FullAutoOcStatus = "Core clock pass starting…";
-        await StartGpuAutoOcAsync();
-        HardwareOperationState? coreOutcome = await WaitForOperationAsync("core clock");
+        string? coreOperationId = await StartGpuClockAutoOcAsync(
+            "gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz);
+        if (coreOperationId is null)
+        {
+            FullAutoOcStatus = "The core pass did not start; the memory pass was not run.";
+            return;
+        }
+
+        HardwareOperationState? coreOutcome = await WaitForOperationAsync(coreOperationId, "core clock");
         if (coreOutcome != HardwareOperationState.Completed)
         {
             FullAutoOcStatus = $"Stopped after the core pass ({coreOutcome?.ToString() ?? "not started"}); the memory pass was not run.";
@@ -365,8 +565,11 @@ public sealed partial class MainViewModel
         }
 
         FullAutoOcStatus = "Core pass completed. Memory clock pass starting…";
-        await StartGpuMemoryAutoOcAsync();
-        HardwareOperationState? memoryOutcome = await WaitForOperationAsync("memory clock");
+        string? memoryOperationId = await StartGpuClockAutoOcAsync(
+            "gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz);
+        HardwareOperationState? memoryOutcome = memoryOperationId is null
+            ? null
+            : await WaitForOperationAsync(memoryOperationId, "memory clock");
         FullAutoOcStatus = memoryOutcome == HardwareOperationState.Completed
             ? "Full Auto OC finished: core and memory passes both completed with their safety margins applied. Run the benchmark on Games & tools to confirm the gain."
             : $"Core pass completed; the memory pass ended {memoryOutcome?.ToString() ?? "without starting"}.";
@@ -377,13 +580,14 @@ public sealed partial class MainViewModel
     /// Polls the service operation status until the current tune reaches a
     /// terminal state (bounded at 45 minutes — far beyond any screening run).
     /// </summary>
-    private async Task<HardwareOperationState?> WaitForOperationAsync(string label)
+    private async Task<HardwareOperationState?> WaitForOperationAsync(string operationId, string label)
     {
         DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(45);
-        HardwareOperationState? last = _operation?.State;
+        HardwareOperationState? last = null;
         while (DateTimeOffset.UtcNow < deadline)
         {
-            if (_operation is { } operation)
+            if (_operation is { } operation
+                && string.Equals(operation.Id, operationId, StringComparison.Ordinal))
             {
                 last = operation.State;
                 if (operation.State is not (HardwareOperationState.Pending or HardwareOperationState.Running or HardwareOperationState.Screening))
@@ -396,6 +600,11 @@ public sealed partial class MainViewModel
 
             await Task.Delay(TimeSpan.FromSeconds(5), _lifetime.Token);
             await RefreshAsync(full: false, userInitiated: false);
+            if (_operation is { } current
+                && !string.Equals(current.Id, operationId, StringComparison.Ordinal))
+            {
+                return null;
+            }
         }
 
         return last;
@@ -422,10 +631,17 @@ public sealed partial class MainViewModel
 
         CapabilityDescriptor[] candidates = [.. _snapshot.Capabilities.Where(IsFanOutput)];
         CapabilityDescriptor[] outputs = [.. candidates.Where(capability =>
-            capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified)];
+            capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified)
+            .Where(capability => gpuFans || GetCoolingOutputAssignment(capability) is not { IsSafetyCritical: true })];
         if (outputs.Length == 0)
         {
-            ShowNotice(DescribeUnavailableFanOutputs(candidates, gpuFans), "Warning");
+            bool onlyProtectedOutputs = !gpuFans
+                && candidates.Any(capability => GetCoolingOutputAssignment(capability) is { IsSafetyCritical: true });
+            ShowNotice(
+                onlyProtectedOutputs
+                    ? "No case-fan output is available. CPU-fan and pump outputs remain excluded from one-click case-fan modes."
+                    : DescribeUnavailableFanOutputs(candidates, gpuFans),
+                "Warning");
             return;
         }
 
@@ -465,8 +681,9 @@ public sealed partial class MainViewModel
                 Guid.NewGuid().ToString("N")),
             _lifetime.Token);
         EnsureSuccess(applyResponse);
+        SetAutomaticCoolingSelection(gpuFans, ToSelection(mode));
         ShowNotice(
-            $"{draft.Profile.Name} is active: {outputs.Length} output(s) follow the {mode} temperature curve with a {AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent:0}% floor. Stale sensors command maximum cooling.",
+            $"{draft.Profile.Name} is active: {outputs.Length} output(s) follow the {mode} temperature curve with a {AdaptiveCoolingProfileFactory.UncalibratedFloorDutyPercent:0}% floor (or each controller's higher reported minimum). Stale sensors command maximum cooling.",
             "Success");
         await RefreshAsync(full: true, userInitiated: false);
     }
@@ -531,8 +748,9 @@ public sealed partial class MainViewModel
     private AsyncCommand? _applyUndervoltPresetCommand;
     public ICommand ApplyUndervoltPresetCommand => _applyUndervoltPresetCommand ??= new AsyncCommand(
         parameter => ApplyUndervoltPresetAsync(parameter as string ?? string.Empty),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
 
     public async Task ApplyUndervoltPresetAsync(string preset)
     {
@@ -626,8 +844,9 @@ public sealed partial class MainViewModel
 
     public System.Windows.Input.ICommand StartGpuMemoryAutoOcCommand => _startGpuMemoryAutoOcCommand ??= new AsyncCommand(
         _ => StartGpuMemoryAutoOcAsync(),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(requireIdle: true),
+        ReportError,
+        _ => ShowHardwareActionBlocked(requireIdle: true));
 
     private AsyncCommand? _startGpuMemoryAutoOcCommand;
 
@@ -640,23 +859,23 @@ public sealed partial class MainViewModel
     /// display-reset aborts, rollback, boot sentinel). No voltage is touched.
     /// The Hardware-control switch supplies the acknowledgements.
     /// </summary>
-    public Task StartGpuAutoOcAsync() =>
-        StartGpuClockAutoOcAsync("gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz);
+    public async Task StartGpuAutoOcAsync() =>
+        _ = await StartGpuClockAutoOcAsync("gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz);
 
     /// <summary>
     /// One-click GPU memory auto-OC: the same refined climb/edge-find/back-off
     /// search applied to the armed memory clock offset. GDDR6X memory tuning is
     /// often the larger real-world gain on this class of card. Same safety gates.
     /// </summary>
-    public Task StartGpuMemoryAutoOcAsync() =>
-        StartGpuClockAutoOcAsync("gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz);
+    public async Task StartGpuMemoryAutoOcAsync() =>
+        _ = await StartGpuClockAutoOcAsync("gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz);
 
-    private async Task StartGpuClockAutoOcAsync(string capabilityPrefix, string label, double safetyMarginMhz)
+    private async Task<string?> StartGpuClockAutoOcAsync(string capabilityPrefix, string label, double safetyMarginMhz)
     {
         if (!HardwareControlEnabled)
         {
             ShowNotice("Turn on Hardware control in the header first.", "Warning");
-            return;
+            return null;
         }
 
         OperationTargetDisplay? target = TuneTargets.FirstOrDefault(
@@ -672,7 +891,7 @@ public sealed partial class MainViewModel
             ShowNotice(owner.Length > 0
                 ? $"{label} tuning is blocked by {owner}. Close the competing app (Diagnostics has a \"Close blockers\" button) or stop it, then refresh."
                 : $"The {label} target is not available on this system.", "Warning");
-            return;
+            return null;
         }
 
         SelectedTuneTarget = target;
@@ -681,14 +900,27 @@ public sealed partial class MainViewModel
         AdvancedWritesAcknowledged = true;
         TuneDeviceAcknowledged = true;
         await StartTuneCoreAsync(AutoOcRefinementCandidates, safetyMarginMhz, AutoOcThermalHeadroomCelsius);
+        return _operation?.Id;
     }
 
     private async Task EnsureHardwareControlArmedAsync()
     {
-        if (HardwareControlEnabled && !_hardwareControlArmedThisConnection)
+        if (_status is null || !CanUseServiceWrites)
         {
-            _hardwareControlArmedThisConnection = true; // set first so a failure does not retry every second
-            await ApplyHardwareControlSafelyAsync(true);
+            return;
+        }
+
+        if (_status.HardwareControlArmed == _hardwareControlPreferenceRequested)
+        {
+            _hardwareControlArmedThisConnection = _status.HardwareControlArmed;
+            SetHardwareControlState(_status.HardwareControlArmed);
+            return;
+        }
+
+        if (!_hardwareControlArmAttemptedThisConnection)
+        {
+            _hardwareControlArmAttemptedThisConnection = true;
+            await ApplyHardwareControlSafelyAsync(_hardwareControlPreferenceRequested);
         }
     }
 

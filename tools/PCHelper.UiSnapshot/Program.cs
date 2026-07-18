@@ -353,6 +353,11 @@ internal static class Program
             "Cooling.RestartCycles",
             "Cooling.StartCalibration",
             "Cooling.AbortCalibration",
+            "Cooling.ApplyPump",
+            "Cooling.CaseFansSilent",
+            "Cooling.EnableCaseFansAutoMode",
+            "Cooling.CaseFansCooling",
+            "Cooling.CaseFansAdaptive",
             "Cooling.CommissioningSession",
             "Cooling.HeaderName",
             "Cooling.ConfirmHeader",
@@ -381,8 +386,30 @@ internal static class Program
             "Performance.TuneObjective",
             "Performance.TemperatureCeiling",
             "Performance.PowerCeiling",
+            "Performance.StartTune",
+            "Performance.AutoOcCore",
+            "Performance.AutoOcMemory",
+            "Performance.FullAutoOc",
+            "Performance.GpuFanSilent",
+            "Performance.EnableGpuFanAutoMode",
+            "Performance.GpuFanCooling",
+            "Performance.UndervoltQuiet",
+            "Performance.UndervoltEfficient",
+            "Performance.UndervoltStock",
             "Lighting.OpenRgbColour",
             "Lighting.OpenRgbBrightness",
+            "Lighting.SyncAllRgb",
+            "Lighting.SyncAllRgbOff",
+            "Lighting.ApplyKrakenLighting",
+            "Lighting.KrakenLightingOff",
+            "Lighting.ApplyAura",
+            "Lighting.AuraOff",
+            "Lighting.ApplyGpuBracket",
+            "Lighting.GpuBracketOff",
+            "Lighting.ApplyDimmRgb",
+            "Lighting.DimmRgbOff",
+            "Lighting.ApplyRazerUsb",
+            "Lighting.RazerUsbOff",
             "Lighting.RouteMatrix",
             "Lighting.LayoutDevice",
             "Lighting.ZoneName",
@@ -438,6 +465,38 @@ internal static class Program
             "Devices.ExecuteTakeover",
             "Devices.ReleaseOwnership"
         ];
+        string[] actionableHardwareControlIds =
+        [
+            "Cooling.ApplyPump",
+            "Cooling.CaseFansSilent",
+            "Cooling.EnableCaseFansAutoMode",
+            "Cooling.CaseFansCooling",
+            "Cooling.CaseFansAdaptive",
+            "Cooling.StartCalibration",
+            "Cooling.AbortCalibration",
+            "Performance.StartTune",
+            "Performance.AutoOcCore",
+            "Performance.AutoOcMemory",
+            "Performance.FullAutoOc",
+            "Performance.GpuFanSilent",
+            "Performance.EnableGpuFanAutoMode",
+            "Performance.GpuFanCooling",
+            "Performance.UndervoltQuiet",
+            "Performance.UndervoltEfficient",
+            "Performance.UndervoltStock",
+            "Lighting.SyncAllRgb",
+            "Lighting.SyncAllRgbOff",
+            "Lighting.ApplyKrakenLighting",
+            "Lighting.KrakenLightingOff",
+            "Lighting.ApplyAura",
+            "Lighting.AuraOff",
+            "Lighting.ApplyGpuBracket",
+            "Lighting.GpuBracketOff",
+            "Lighting.ApplyDimmRgb",
+            "Lighting.DimmRgbOff",
+            "Lighting.ApplyRazerUsb",
+            "Lighting.RazerUsbOff"
+        ];
 
         FrameworkElement[] elements = Descendants(window).OfType<FrameworkElement>().ToArray();
         IReadOnlyDictionary<string, FrameworkElement> expectedPageByAutomationPrefix = new Dictionary<string, FrameworkElement>(StringComparer.Ordinal)
@@ -489,6 +548,19 @@ internal static class Program
                 && !Descendants(expectedPage.Value).OfType<FrameworkElement>().Contains(element))
             {
                 errors.Add($"Automation ID {id} is not on the expected {expectedPage.Key[..^1]} page.");
+            }
+        }
+
+        foreach (string id in actionableHardwareControlIds)
+        {
+            if (!byAutomationId.TryGetValue(id, out List<FrameworkElement>? matches) || matches.Count != 1)
+            {
+                continue;
+            }
+
+            if (matches[0] is not Control control || !control.IsEnabled)
+            {
+                errors.Add($"Hardware action {id} is greyed out instead of remaining actionable.");
             }
         }
 
@@ -550,6 +622,7 @@ internal static class Program
             DateTimeOffset.UtcNow,
             visitedPages,
             requiredAutomationIds,
+            actionableHardwareControlIds,
             elements.Length,
             interactive.Length,
             namedInteractive,
@@ -558,7 +631,32 @@ internal static class Program
             simpleSurfaceWorked,
             advancedSurfaceWorked,
             duplicateIds,
+            BuildFeatureReadiness(viewModel),
             errors);
+    }
+
+    private static FeatureReadinessReport BuildFeatureReadiness(MainViewModel viewModel)
+    {
+        bool HasAvailableTarget(string prefix) => viewModel.TuneTargets.Any(target =>
+            target.IsAvailable
+            && target.Descriptor.Id.StartsWith(prefix, StringComparison.Ordinal));
+        bool IsProtected(string capabilityId) => viewModel.CoolingOutputAssignments.Any(assignment =>
+            string.Equals(assignment.CapabilityId, capabilityId, StringComparison.Ordinal)
+            && assignment.IsSafetyCritical);
+        int caseFanOutputs = viewModel.FanControlSliders.Count(slider => !IsProtected(slider.CapabilityId));
+        int protectedOutputs = viewModel.CoolingOutputAssignments.Count(assignment => assignment.IsSafetyCritical);
+
+        return new FeatureReadinessReport(
+            viewModel.IsServiceOnline,
+            viewModel.CanUseServiceWrites,
+            viewModel.HardwareControlEnabled,
+            HasAvailableTarget("gpuclock.core:"),
+            HasAvailableTarget("gpuclock.memory:"),
+            HasAvailableTarget("gpufan.duty:"),
+            HasAvailableTarget("gpupower.limit:"),
+            caseFanOutputs,
+            protectedOutputs,
+            viewModel.ServiceCompatibilityMessage);
     }
 
     private static T Require<T>(FrameworkElement root, string name) where T : FrameworkElement =>
@@ -582,6 +680,7 @@ internal static class Program
         DateTimeOffset CapturedAt,
         IReadOnlyList<string> VisitedPages,
         IReadOnlyList<string> RequiredAutomationIds,
+        IReadOnlyList<string> ActionableHardwareControlIds,
         int VisualElementCount,
         int InteractiveControlCount,
         int NamedInteractiveControlCount,
@@ -590,7 +689,20 @@ internal static class Program
         bool SimpleSurfaceWorked,
         bool AdvancedSurfaceWorked,
         IReadOnlyList<string> DuplicateAutomationIds,
+        FeatureReadinessReport FeatureReadiness,
         IReadOnlyList<string> Errors);
+
+    private sealed record FeatureReadinessReport(
+        bool ServiceOnline,
+        bool ServiceWritesReady,
+        bool HardwareControlEnabled,
+        bool GpuCoreClockTargetReady,
+        bool GpuMemoryClockTargetReady,
+        bool GpuFanTargetReady,
+        bool GpuPowerTargetReady,
+        int SafeCaseFanOutputCount,
+        int ProtectedCoolingOutputCount,
+        string ServiceCompatibilityMessage);
 
     private static void Capture(MainWindow window, string outputDirectory, int pageIndex)
     {

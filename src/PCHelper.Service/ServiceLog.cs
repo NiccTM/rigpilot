@@ -28,6 +28,12 @@ internal static partial class ServiceLog
     [LoggerMessage(EventId = 2005, Level = LogLevel.Critical, Message = "Cooling graph {GraphId} entered emergency recovery: {Reason}. Recovery details: {RecoveryDetails}")]
     public static partial void CoolingGraphEmergency(ILogger logger, string graphId, string reason, string? recoveryDetails);
 
+    [LoggerMessage(EventId = 2006, Level = LogLevel.Error, Message = "RigPilot could not complete verified default-state recovery during shutdown; the running marker remains unclean.")]
+    public static partial void ShutdownRecoveryFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 2007, Level = LogLevel.Warning, Message = "Hardware-control state was verified, but the cached capability descriptors could not be refreshed immediately.")]
+    public static partial void HardwareControlSnapshotRefreshFailed(ILogger logger, Exception exception);
+
     [LoggerMessage(EventId = 3000, Level = LogLevel.Critical, Message = "RigPilot service stopped unexpectedly.")]
     public static partial void ServiceFailed(ILogger logger, Exception exception);
 }

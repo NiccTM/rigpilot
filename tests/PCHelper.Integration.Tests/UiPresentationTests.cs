@@ -94,6 +94,53 @@ public sealed class UiPresentationTests
         Assert.Equal("Experimental", card.StatusLabel);
     }
 
+    [Theory]
+    [InlineData("Case fans silent mode", CoolingCurveMode.Silent)]
+    [InlineData("Case fans balanced mode", CoolingCurveMode.Balanced)]
+    [InlineData("Case fans cooling mode", CoolingCurveMode.Cooling)]
+    [InlineData("GPU fan BALANCED MODE", CoolingCurveMode.Balanced)]
+    public void AutomaticCoolingProfileRestoresItsSelectedMode(string profileName, CoolingCurveMode expected)
+    {
+        ProfileV2 profile = new(
+            ProfileV2.CurrentSchemaVersion,
+            "auto.profile.case-fans",
+            profileName,
+            "Automatic cooling profile.",
+            [],
+            new SafetyLimits(),
+            CoolingGraphId: "auto.cooling.case-fans",
+            LightingSceneId: null,
+            OsdLayoutId: null,
+            ManualOnlyActionIds: [],
+            AutomationReferences: [],
+            IsBuiltIn: false,
+            IsExperimental: true);
+
+        Assert.True(MainViewModel.TryReadAutomaticCoolingMode(profile, out CoolingCurveMode actual));
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void UnrelatedProfileDoesNotClaimAnAutomaticCoolingSelection()
+    {
+        ProfileV2 profile = new(
+            ProfileV2.CurrentSchemaVersion,
+            "custom.profile.case-fans",
+            "Case fans custom curve",
+            "Custom cooling profile.",
+            [],
+            new SafetyLimits(),
+            CoolingGraphId: "custom.cooling.case-fans",
+            LightingSceneId: null,
+            OsdLayoutId: null,
+            ManualOnlyActionIds: [],
+            AutomationReferences: [],
+            IsBuiltIn: false,
+            IsExperimental: true);
+
+        Assert.False(MainViewModel.TryReadAutomaticCoolingMode(profile, out _));
+    }
+
     [Fact]
     public void DeviceCardUsesReadableMetadataWithoutEncodingCorruption()
     {
@@ -318,7 +365,7 @@ public sealed class UiPresentationTests
         Assert.Contains("pump", protectedPump.NextSafeStep, StringComparison.OrdinalIgnoreCase);
         Assert.True(directGpu.IsGpuCoolingControl);
         Assert.False(directGpu.CanOpenCoolingCommissioning);
-        Assert.Contains("conservative GPU fan floor", directGpu.NextSafeStep, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("controller-reported GPU fan minimum", directGpu.NextSafeStep, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

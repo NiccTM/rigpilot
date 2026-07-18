@@ -15,11 +15,13 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
     private readonly SemaphoreSlim _snapshotGate = new(1, 1);
     private readonly SemaphoreSlim _coolingGraphGate = new(1, 1);
+    private readonly SemaphoreSlim _hardwareMutationGate = new(1, 1);
     private readonly object _operationSync = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<string, IpcResponse> _idempotentResponses = new(StringComparer.Ordinal);
     private readonly OwnershipLeaseManager _ownershipLeases = new();
     private readonly HealthRuleEngine _healthRuleEngine = new();
+    private readonly string _serviceInstanceId = Guid.NewGuid().ToString("N");
     private readonly WindowsSystemHealthSignalProbe _healthSignalProbe = new();
     private SqliteStateStore? _store;
     private AdapterCoordinator? _coordinator;
@@ -45,6 +47,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private long _suiteRevision;
     private HardwareSnapshot _snapshot = EmptySnapshot();
     private bool _rollbackBlocked;
+    private int _disposeState;
     private HardwareOperationStatus? _operationStatus;
     private CancellationTokenSource? _operationCancellation;
     private Task? _activeOperationTask;
@@ -193,7 +196,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _cpuTuneRecoveryMessage = await _cpuTuneSentinel.RecoverAsync(transport: null, cancellationToken).ConfigureAwait(false);
 
         _coordinator = new AdapterCoordinator(adapters);
-        _engine = new ProfileTransactionEngine(adapters, _store);
+        _engine = new ProfileTransactionEngine(
+            adapters,
+            _store,
+            mutationLock: _hardwareMutationGate,
+            suiteStore: _store,
+            serviceInstanceId: _serviceInstanceId);
         _adapterPackManager = CreateAdapterPackManager();
         await RecoverPendingTransactionAsync(cancellationToken).ConfigureAwait(false);
         await RefreshAsync(persistSensors: true, cancellationToken).ConfigureAwait(false);
@@ -297,6 +305,14 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 "Hardware and profile changes require membership of the installed RigPilot operator group or an elevated session. Group membership added by the installer takes effect after you sign out and back in.");
         }
 
+        if (IsMutatingCommand(request.Command) && _rollbackBlocked)
+        {
+            return Failure(
+                request,
+                "RECOVERY_REQUIRED",
+                "Hardware writes are locked because the service could not prove a default state during recovery. Restart after correcting the adapter or driver fault; read-only IPC remains available.");
+        }
+
         if (request.IdempotencyKey is string key && _idempotentResponses.TryGetValue(key, out IpcResponse? cached))
         {
             return cached with { RequestId = request.RequestId };
@@ -392,9 +408,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.SetRazerRgb => await SetRazerRgbAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StopConflictingProcesses => StopConflictingProcesses(request),
                 IpcCommand.ReadRyzenSmuFeasibility => await ReadRyzenSmuFeasibilityAsync(request, cancellationToken).ConfigureAwait(false),
-                IpcCommand.SetGpuFanControlArmed => await SetGpuFanControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
-                IpcCommand.SetGpuPowerLimitArmed => await SetGpuPowerLimitArmedAsync(request, cancellationToken).ConfigureAwait(false),
-                IpcCommand.SetGpuClockOffsetArmed => await SetGpuClockOffsetArmedAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetGpuFanControlArmed => await SetGpuFanControlArmedSerializedAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetGpuPowerLimitArmed => await SetGpuPowerLimitArmedSerializedAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetGpuClockOffsetArmed => await SetGpuClockOffsetArmedSerializedAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetHardwareControlArmed => await SetHardwareControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetCpuTuningArmed => SetCpuTuningArmed(request),
                 _ when IsUserAgentCommand(request.Command) => Failure(
                     request,
@@ -428,6 +445,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
+        {
+            return;
+        }
+
         _shutdown.Cancel();
         CancellationTokenSource? operationCancellation;
         Task? operationTask;
@@ -471,6 +493,16 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             ServiceLog.CoolingGraphDeactivated(logger, exception);
         }
 
+        try
+        {
+            await CompleteCleanShutdownAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            _rollbackBlocked = true;
+            ServiceLog.ShutdownRecoveryFailed(logger, exception);
+        }
+
         if (_coordinator is not null)
         {
             await _coordinator.DisposeAsync().ConfigureAwait(false);
@@ -478,63 +510,16 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
         if (_gpuFanTransport is not null)
         {
-            // Service stop must restore firmware/default control. If writes were never
-            // armed the fan was never manual and these calls no-op via the safety gate.
-            foreach (string fanChannel in (string[])["0", "1"])
-            {
-                try
-                {
-                    await _gpuFanTransport.RestoreAutomaticAsync(fanChannel, CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception restoreException) when (restoreException is GpuFanSafetyException or InvalidOperationException)
-                {
-                    // Gate closed (writes not armed) or transient driver error: nothing to restore.
-                }
-            }
-
             _gpuFanTransport.Dispose();
         }
 
         if (_gpuPowerTransport is not null)
         {
-            // Service stop must restore the vendor default power limit. If writes were
-            // never armed no limit was ever changed and the call no-ops via the safety gate.
-            try
-            {
-                GpuPowerLimitBounds? bounds = await _gpuPowerTransport.ReadBoundsAsync("0", CancellationToken.None).ConfigureAwait(false);
-                if (bounds is { IsValid: true } valid)
-                {
-                    await _gpuPowerTransport.SetPowerLimitAsync("0", valid.DefaultMilliwatts, CancellationToken.None).ConfigureAwait(false);
-                }
-            }
-            catch (Exception restoreException) when (restoreException is GpuPowerSafetyException or InvalidOperationException)
-            {
-                // Gate closed (writes not armed) or transient driver error: nothing to restore.
-            }
-
             _gpuPowerTransport.Dispose();
         }
 
         if (_gpuClockTransport is not null)
         {
-            // Service stop must return both domains to stock clocks. If writes were
-            // never armed no offset was ever changed and the call no-ops via the gate.
-            foreach (GpuClockOffsetDomain domain in (GpuClockOffsetDomain[])[GpuClockOffsetDomain.Core, GpuClockOffsetDomain.Memory])
-            {
-                try
-                {
-                    GpuClockOffsetBounds? bounds = await _gpuClockTransport.ReadBoundsAsync(domain, CancellationToken.None).ConfigureAwait(false);
-                    if (bounds is { IsValid: true })
-                    {
-                        await _gpuClockTransport.SetOffsetAsync(domain, GpuClockOffsetBounds.DefaultKiloHertz, CancellationToken.None).ConfigureAwait(false);
-                    }
-                }
-                catch (Exception restoreException) when (restoreException is GpuClockSafetyException or InvalidOperationException)
-                {
-                    // Gate closed (writes not armed) or transient driver error: nothing to restore.
-                }
-            }
-
             _gpuClockTransport.Dispose();
         }
 
@@ -549,6 +534,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _shutdown.Dispose();
         _snapshotGate.Dispose();
         _coolingGraphGate.Dispose();
+        _hardwareMutationGate.Dispose();
     }
 
     private static string Version => RuntimeVersion.Get(Assembly.GetExecutingAssembly());
@@ -568,8 +554,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
     private ServiceStatus GetStatus()
     {
-        bool writesAvailable = !_rollbackBlocked
-            && _snapshot.Capabilities.Any(capability => capability.State == CapabilityAccessState.Verified);
+        bool writesAvailable = !_rollbackBlocked;
         return new ServiceStatus(
             Version,
             _startedAt,
@@ -578,10 +563,21 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             writesAvailable,
             EmergencyMode: _rollbackBlocked,
             _rollbackBlocked
-                ? "Hardware writes are blocked because rollback recovery is incomplete."
-                : writesAvailable
-                    ? "Service is healthy; only Verified controls can be written."
-                    : "Service is healthy in read-only mode.");
+                ? "RecoveryRequired: hardware writes are locked because default-state read-back did not complete."
+                : "Service is healthy; Verified controls and explicitly confirmed Experimental controls can be written.",
+            RecoveryRequired: _rollbackBlocked,
+            HardwareControlArmed: IsHardwareControlFullyArmed());
+    }
+
+    private bool IsHardwareControlFullyArmed()
+    {
+        bool anyAvailable = _gpuFanTransport is not null
+            || _gpuPowerTransport is not null
+            || _gpuClockTransport is not null;
+        return anyAvailable
+            && (_gpuFanTransport is null || _gpuFanArmed)
+            && (_gpuPowerTransport is null || _gpuPowerArmed)
+            && (_gpuClockTransport is null || _gpuClockArmed);
     }
 
     private long CurrentRevision => checked((_engine?.Revision ?? 0) + Interlocked.Read(ref _suiteRevision));
@@ -590,7 +586,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         .Select(ToV2)
         .ToArray();
 
-    private static CapabilityDescriptorV2 ToV2(CapabilityDescriptor capability)
+    internal static CapabilityDescriptorV2 ToV2(CapabilityDescriptor capability)
     {
         bool voltage = capability.Name.Contains("voltage", StringComparison.OrdinalIgnoreCase)
             || capability.Id.Contains("voltage", StringComparison.OrdinalIgnoreCase);
@@ -609,12 +605,18 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         OwnershipState ownership = string.IsNullOrWhiteSpace(capability.ConflictOwner)
             ? OwnershipState.Available
             : OwnershipState.OwnedByAnotherApplication;
+        bool supportsReadBack = capability.Evidence >= EvidenceLevel.ReadBackVerified
+            || capability.AdapterId is LibreHardwareMonitorAdapter.AdapterId
+                or NvidiaGpuFanAdapter.AdapterId
+                or NvidiaGpuPowerLimitAdapter.AdapterId
+                or NvidiaGpuClockOffsetAdapter.CoreAdapterId
+                or NvidiaGpuClockOffsetAdapter.MemoryAdapterId;
         return new CapabilityDescriptorV2(
             CapabilityDescriptorV2.CurrentSchemaVersion,
             capability,
             hazard,
             capability.Range is null ? "Adapter-declared discrete values" : "Adapter-reported numeric bounds",
-            capability.Evidence >= EvidenceLevel.ReadBackVerified,
+            supportsReadBack,
             capability.CanResetToDefault
                 ? capability.Evidence >= EvidenceLevel.SingleSystem
                     ? ResetGuarantee.FirmwareDefaultVerified
@@ -946,21 +948,20 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 .FirstOrDefault();
             if (session is null)
             {
-                // Conservative automatic-mode route (owner amendment 2026-07-16):
-                // an uncalibrated output is acceptable only when its floor is at
-                // or above the deterministic 50% safety floor AND its ceiling is
+                // Automatic-mode route (owner amendment 2026-07-18): an
+                // uncalibrated output is acceptable only when its floor is at or
+                // above the configured 20% floor (and controller minimum) AND its ceiling is
                 // the full controller maximum (emergency headroom). Bounds/reset
                 // checks above and pump/CPU-fan role blocks still apply, and the
                 // graph runtime's stale-sensor maximum-cooling behaviour is
-                // unchanged. Anything below the safety floor still requires a
+                // unchanged. Anything below the configured floor still requires a
                 // physically observed commissioning session and calibration.
-                if (output.Minimum >= Math.Max(range.Minimum, AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent) - 1e-6
-                    && output.Maximum >= range.Maximum - 1e-6)
+                if (AdaptiveCoolingProfileFactory.CanActivateWithoutCalibration(capability, output))
                 {
                     continue;
                 }
 
-                return $"Cooling output '{output.CapabilityId}' has no physically observed commissioning session; without one, automatic mode requires a minimum duty of at least {AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent:0}% and the full controller maximum.";
+                return $"Cooling output '{output.CapabilityId}' has no physically observed commissioning session; without one, automatic mode requires a minimum duty of at least {AdaptiveCoolingProfileFactory.UncalibratedFloorDutyPercent:0}% (or the controller minimum, if higher) and the full controller maximum.";
             }
 
             FanCalibrationV2? calibration = calibrations
@@ -1287,6 +1288,15 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             _engine.Revision,
             payload.ConfirmExperimental && payload.ConfirmDevices,
             cancellationToken).ConfigureAwait(false);
+        if (transaction.State == ProfileTransactionState.RecoveryRequired)
+        {
+            _rollbackBlocked = true;
+            return FailureWithPayload(
+                request,
+                "RECOVERY_REQUIRED",
+                transaction.Error ?? "The profile outcome is unknown and hardware recovery is required.",
+                transaction);
+        }
         if (!validation.Valid || transaction.State != ProfileTransactionState.Committed)
         {
             return Failure(request, "PROFILE_REJECTED", transaction.Error ?? string.Join(" ", validation.Errors));
@@ -1386,6 +1396,15 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             _engine.Revision,
             payload.ConfirmExperimental && unconfirmed.Length == 0,
             cancellationToken).ConfigureAwait(false);
+        if (transaction.State == ProfileTransactionState.RecoveryRequired)
+        {
+            _rollbackBlocked = true;
+            return FailureWithPayload(
+                request,
+                "RECOVERY_REQUIRED",
+                transaction.Error ?? "The profile outcome is unknown and hardware recovery is required.",
+                transaction);
+        }
         if (!legacyValidation.Valid || transaction.State != ProfileTransactionState.Committed)
         {
             return Failure(request, "PROFILE_REJECTED", transaction.Error ?? string.Join(" ", legacyValidation.Errors));
@@ -1393,6 +1412,16 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         string? coolingActivationError = await ConfigureActiveCoolingGraphAsync(
             requestedCoolingGraph,
             cancellationToken).ConfigureAwait(false);
+        if (coolingActivationError is null && requestedCoolingGraph is not null)
+        {
+            await _engine.RecordActiveControlsAsync(
+                payload.Profile.Id,
+                transaction.Id,
+                requestedCoolingGraph.Graph.Outputs.Select(output => new HardwareControlLeaseItemV1(
+                    capabilitiesV2[output.CapabilityId].Capability.AdapterId,
+                    output.CapabilityId)),
+                cancellationToken).ConfigureAwait(false);
+        }
         await _store!.SaveSuiteEntityAsync(
             SuiteEntityKind.ProfileV2,
             payload.Profile.Id,
@@ -2950,6 +2979,405 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             .ToArray()));
     }
 
+    private async Task<IpcResponse> SetHardwareControlArmedAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        EnsureExpectedRevision(request);
+        SetHardwareControlArmedRequest payload = IpcJson.FromElement<SetHardwareControlArmedRequest>(request.Payload)
+            ?? throw new InvalidDataException("SetHardwareControlArmed requires an arming request.");
+        HardwareControlTransactionResult result = await ApplyHardwareControlTransactionAsync(
+            payload,
+            requestedFamily: null,
+            cancellationToken).ConfigureAwait(false);
+        return result.AllRequestedFamiliesVerified
+            ? Success(request, result)
+            : FailureWithPayload(
+                request,
+                result.RecoveryRequired ? "RECOVERY_REQUIRED" : "HARDWARE_CONTROL_NOT_VERIFIED",
+                result.Message,
+                result);
+    }
+
+    private async Task<IpcResponse> SetGpuFanControlArmedSerializedAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        EnsureExpectedRevision(request);
+        SetGpuFanControlArmedRequest payload = IpcJson.FromElement<SetGpuFanControlArmedRequest>(request.Payload)
+            ?? throw new InvalidDataException("SetGpuFanControlArmed requires an arming request.");
+        HardwareControlTransactionResult result = await ApplyHardwareControlTransactionAsync(
+            new SetHardwareControlArmedRequest(payload.Armed, payload.ConfirmExperimental, payload.ConfirmedDeviceIds),
+            HardwareControlFamilyNames.GpuFan,
+            cancellationToken).ConfigureAwait(false);
+        HardwareControlFamilyResult? family = result.Families.Count > 0 ? result.Families[0] : null;
+        GpuFanControlStatus status = new(
+            family?.Available == true,
+            result.AllRequestedFamiliesVerified && result.Armed,
+            _gpuFanDeviceId,
+            family?.Message ?? result.Message);
+        return result.AllRequestedFamiliesVerified
+            ? Success(request, status)
+            : FailureWithPayload(request, result.RecoveryRequired ? "RECOVERY_REQUIRED" : "GPU_FAN_NOT_VERIFIED", result.Message, status);
+    }
+
+    private async Task<IpcResponse> SetGpuPowerLimitArmedSerializedAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        EnsureExpectedRevision(request);
+        SetGpuPowerLimitArmedRequest payload = IpcJson.FromElement<SetGpuPowerLimitArmedRequest>(request.Payload)
+            ?? throw new InvalidDataException("SetGpuPowerLimitArmed requires an arming request.");
+        HardwareControlTransactionResult result = await ApplyHardwareControlTransactionAsync(
+            new SetHardwareControlArmedRequest(payload.Armed, payload.ConfirmExperimental, payload.ConfirmedDeviceIds),
+            HardwareControlFamilyNames.GpuPower,
+            cancellationToken).ConfigureAwait(false);
+        HardwareControlFamilyResult? family = result.Families.Count > 0 ? result.Families[0] : null;
+        GpuPowerLimitStatus status = new(
+            family?.Available == true,
+            result.AllRequestedFamiliesVerified && result.Armed,
+            _gpuFanDeviceId,
+            family?.Message ?? result.Message);
+        return result.AllRequestedFamiliesVerified
+            ? Success(request, status)
+            : FailureWithPayload(request, result.RecoveryRequired ? "RECOVERY_REQUIRED" : "GPU_POWER_NOT_VERIFIED", result.Message, status);
+    }
+
+    private async Task<IpcResponse> SetGpuClockOffsetArmedSerializedAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        EnsureExpectedRevision(request);
+        SetGpuClockOffsetArmedRequest payload = IpcJson.FromElement<SetGpuClockOffsetArmedRequest>(request.Payload)
+            ?? throw new InvalidDataException("SetGpuClockOffsetArmed requires an arming request.");
+        HardwareControlTransactionResult result = await ApplyHardwareControlTransactionAsync(
+            new SetHardwareControlArmedRequest(payload.Armed, payload.ConfirmExperimental, payload.ConfirmedDeviceIds),
+            HardwareControlFamilyNames.GpuClock,
+            cancellationToken).ConfigureAwait(false);
+        HardwareControlFamilyResult? family = result.Families.Count > 0 ? result.Families[0] : null;
+        GpuClockOffsetStatus status = new(
+            family?.Available == true,
+            result.AllRequestedFamiliesVerified && result.Armed,
+            _gpuFanDeviceId,
+            family?.Message ?? result.Message);
+        return result.AllRequestedFamiliesVerified
+            ? Success(request, status)
+            : FailureWithPayload(request, result.RecoveryRequired ? "RECOVERY_REQUIRED" : "GPU_CLOCK_NOT_VERIFIED", result.Message, status);
+    }
+
+    private async Task<HardwareControlTransactionResult> ApplyHardwareControlTransactionAsync(
+        SetHardwareControlArmedRequest request,
+        string? requestedFamily,
+        CancellationToken cancellationToken)
+    {
+        HardwareControlFamilyDefinition[] available = BuildHardwareControlFamilies()
+            .Where(family => requestedFamily is null || string.Equals(family.Name, requestedFamily, StringComparison.Ordinal))
+            .ToArray();
+        if (available.Length == 0)
+        {
+            return new HardwareControlTransactionResult(
+                Armed: false,
+                AllRequestedFamiliesVerified: false,
+                RecoveryRequired: false,
+                [],
+                requestedFamily is null
+                    ? "No implemented GPU hardware-control family is available on this system."
+                    : $"{requestedFamily} is unavailable on this system.");
+        }
+
+        if (request.Armed)
+        {
+            if (!request.ConfirmExperimental)
+            {
+                return new HardwareControlTransactionResult(false, false, false, [], "Arming hardware control requires explicit Experimental confirmation.");
+            }
+            if (!request.ConfirmedDeviceIds.Contains(_gpuFanDeviceId, StringComparer.Ordinal))
+            {
+                return new HardwareControlTransactionResult(false, false, false, [], $"Arming hardware control requires exact-device confirmation for '{_gpuFanDeviceId}'.");
+            }
+        }
+
+        List<HardwareControlFamilyResult> results = [];
+        await _hardwareMutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            foreach (HardwareControlFamilyDefinition family in available)
+            {
+                family.SetTransportGate(true);
+            }
+
+            foreach (HardwareControlFamilyDefinition family in available)
+            {
+                results.Add(await ResetAndVerifyHardwareFamilyAsync(family, cancellationToken).ConfigureAwait(false));
+            }
+
+            bool allVerified = results.All(result => result.ReadBackVerified);
+            foreach (HardwareControlFamilyDefinition family in available)
+            {
+                family.CommitLogicalState(allVerified && request.Armed);
+                family.SetTransportGate(allVerified && request.Armed);
+            }
+
+            if (!allVerified)
+            {
+                _rollbackBlocked = true;
+                await SaveHardwareRecoveryRequiredLeaseAsync(available, results, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            IncrementSuiteRevision();
+            try
+            {
+                await RefreshHardwareControlCapabilitiesAsync(available, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                ServiceLog.HardwareControlSnapshotRefreshFailed(logger, exception);
+            }
+
+            return new HardwareControlTransactionResult(
+                Armed: allVerified && request.Armed,
+                AllRequestedFamiliesVerified: allVerified,
+                RecoveryRequired: !allVerified,
+                results,
+                allVerified
+                    ? request.Armed
+                        ? $"Hardware control armed only after default-state read-back verified {available.Length} requested family/families."
+                        : $"Hardware control disarmed after vendor/default state was restored and read back for {available.Length} requested family/families."
+                    : "RecoveryRequired: at least one requested hardware family could not be restored and read back at its default state.");
+        }
+        catch (Exception operationException)
+        {
+            // A caller cancellation or an unexpected service-side failure can
+            // happen after one or more transport gates have opened. Make the
+            // exceptional exit a contained rollback: attempt default restore
+            // with a non-cancellable token, then always close every gate.
+            List<HardwareControlFamilyResult> recoveryResults = [];
+            try
+            {
+                foreach (HardwareControlFamilyDefinition family in available)
+                {
+                    family.SetTransportGate(true);
+                    recoveryResults.Add(await ResetAndVerifyHardwareFamilyAsync(
+                        family,
+                        CancellationToken.None).ConfigureAwait(false));
+                }
+            }
+            finally
+            {
+                foreach (HardwareControlFamilyDefinition family in available)
+                {
+                    family.CommitLogicalState(false);
+                    family.SetTransportGate(false);
+                }
+            }
+
+            bool defaultsVerified = recoveryResults.Count == available.Length
+                && recoveryResults.All(result => result.ReadBackVerified);
+            bool recoveryRequired = operationException is HardwareStateUnknownException
+                || !defaultsVerified
+                || _rollbackBlocked;
+            if (recoveryRequired)
+            {
+                _rollbackBlocked = true;
+                await SaveHardwareRecoveryRequiredLeaseAsync(
+                    available,
+                    recoveryResults,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+
+            if (operationException is OperationCanceledException)
+            {
+                throw;
+            }
+
+            return new HardwareControlTransactionResult(
+                Armed: false,
+                AllRequestedFamiliesVerified: false,
+                RecoveryRequired: recoveryRequired,
+                recoveryResults,
+                defaultsVerified
+                    ? $"Hardware-control change failed ({operationException.Message}); vendor/default state was restored and read back, so control remains disarmed."
+                    : $"RecoveryRequired: hardware-control change failed ({operationException.Message}) and the default state could not be proved.");
+        }
+        finally
+        {
+            _hardwareMutationGate.Release();
+        }
+    }
+
+    private async Task RefreshHardwareControlCapabilitiesAsync(
+        IEnumerable<HardwareControlFamilyDefinition> families,
+        CancellationToken cancellationToken)
+    {
+        foreach (IHardwareAdapter adapter in families
+            .SelectMany(family => family.Controls)
+            .Select(control => control.Adapter)
+            .Distinct())
+        {
+            IReadOnlyList<CapabilityDescriptor> refreshed = await AdapterCoordinator
+                .CaptureAdapterCapabilitiesAsync(adapter, cancellationToken)
+                .ConfigureAwait(false);
+            await PatchSnapshotCapabilitiesAsync(refreshed, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<HardwareControlFamilyResult> ResetAndVerifyHardwareFamilyAsync(
+        HardwareControlFamilyDefinition family,
+        CancellationToken cancellationToken)
+    {
+        List<string> messages = [];
+        bool retried = false;
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            bool verified = true;
+            bool unknownMutationOutcome = false;
+            messages.Clear();
+            foreach ((IHardwareAdapter adapter, string capabilityId) in family.Controls)
+            {
+                try
+                {
+                    await adapter.ResetToDefaultAsync(capabilityId, cancellationToken).ConfigureAwait(false);
+                    if (adapter is not IHardwareStateVerifier verifier)
+                    {
+                        verified = false;
+                        messages.Add($"{capabilityId}: default-state verifier is unavailable.");
+                        continue;
+                    }
+
+                    HardwareStateVerification verification = await verifier
+                        .VerifyDefaultStateAsync(capabilityId, cancellationToken)
+                        .ConfigureAwait(false);
+                    verified &= verification.Success;
+                    messages.Add($"{capabilityId}: {verification.Message}");
+                }
+                catch (HardwareStateUnknownException exception)
+                {
+                    // Never convert a timed-out mutation into Verified by
+                    // retrying it. Continue through the remaining controls so
+                    // their defaults are still attempted, then fail closed.
+                    verified = false;
+                    unknownMutationOutcome = true;
+                    messages.Add($"{capabilityId}: {exception.Message}");
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    verified = false;
+                    messages.Add($"{capabilityId}: {exception.Message}");
+                }
+            }
+
+            if (unknownMutationOutcome)
+            {
+                return new HardwareControlFamilyResult(
+                    family.Name,
+                    Available: true,
+                    RequestedStateApplied: false,
+                    ReadBackVerified: false,
+                    RolledBack: false,
+                    $"Hardware state is unknown after a timed-out mutation. {string.Join(" ", messages)}");
+            }
+
+            if (verified)
+            {
+                return new HardwareControlFamilyResult(
+                    family.Name,
+                    Available: true,
+                    RequestedStateApplied: true,
+                    ReadBackVerified: true,
+                    RolledBack: retried,
+                    string.Join(" ", messages));
+            }
+
+            retried = true;
+        }
+
+        return new HardwareControlFamilyResult(
+            family.Name,
+            Available: true,
+            RequestedStateApplied: false,
+            ReadBackVerified: false,
+            RolledBack: false,
+            string.Join(" ", messages));
+    }
+
+    private HardwareControlFamilyDefinition[] BuildHardwareControlFamilies()
+    {
+        List<HardwareControlFamilyDefinition> families = [];
+        if (_gpuFanTransport is not null && _gpuFanAdapter is not null)
+        {
+            families.Add(new HardwareControlFamilyDefinition(
+                HardwareControlFamilyNames.GpuFan,
+                [(_gpuFanAdapter, $"{NvidiaGpuFanAdapter.CapabilityPrefix}0")],
+                armed => _gpuFanTransport.SetArmed(armed),
+                armed => _gpuFanArmed = armed));
+        }
+        if (_gpuPowerTransport is not null && _gpuPowerAdapter is not null)
+        {
+            families.Add(new HardwareControlFamilyDefinition(
+                HardwareControlFamilyNames.GpuPower,
+                [(_gpuPowerAdapter, $"{NvidiaGpuPowerLimitAdapter.CapabilityPrefix}0")],
+                armed => _gpuPowerTransport.SetArmed(armed),
+                armed => _gpuPowerArmed = armed));
+        }
+        if (_gpuClockTransport is not null && _gpuClockCoreAdapter is not null)
+        {
+            List<(IHardwareAdapter Adapter, string CapabilityId)> controls =
+            [
+                (_gpuClockCoreAdapter, $"{NvidiaGpuClockOffsetAdapter.CorePrefix}0")
+            ];
+            if (_gpuClockMemoryAdapter is not null)
+            {
+                controls.Add((_gpuClockMemoryAdapter, $"{NvidiaGpuClockOffsetAdapter.MemoryPrefix}0"));
+            }
+            families.Add(new HardwareControlFamilyDefinition(
+                HardwareControlFamilyNames.GpuClock,
+                controls,
+                armed => _gpuClockTransport.SetArmed(armed),
+                armed => _gpuClockArmed = armed));
+        }
+        return families.ToArray();
+    }
+
+    private async Task SaveHardwareRecoveryRequiredLeaseAsync(
+        IEnumerable<HardwareControlFamilyDefinition> families,
+        IEnumerable<HardwareControlFamilyResult> results,
+        CancellationToken cancellationToken)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        HardwareControlLeaseV1? existing = await _store!.GetSuiteEntityAsync<HardwareControlLeaseV1>(
+            SuiteEntityKind.HardwareControlLease,
+            HardwareControlLeaseV1.DefaultId,
+            cancellationToken).ConfigureAwait(false);
+        HardwareControlLeaseItemV1[] controls = (existing?.Controls ?? [])
+            .Concat(families.SelectMany(family => family.Controls).Select(control =>
+                new HardwareControlLeaseItemV1(control.Adapter.Manifest.Id, control.CapabilityId)))
+            .DistinctBy(item => (item.AdapterId, item.CapabilityId))
+            .ToArray();
+        HardwareControlLeaseV1 lease = new(
+            HardwareControlLeaseV1.CurrentSchemaVersion,
+            HardwareControlLeaseV1.DefaultId,
+            _serviceInstanceId,
+            existing?.ActiveProfileId,
+            existing?.LastTransactionId,
+            controls,
+            existing?.AcquiredAt ?? now,
+            now,
+            CleanShutdown: false,
+            DefaultsVerified: false,
+            HardwareControlLeaseState.RecoveryRequired,
+            string.Join(" ", results.Where(result => !result.ReadBackVerified).Select(result => result.Message)));
+        await _store.SaveSuiteEntityAsync(
+            SuiteEntityKind.HardwareControlLease,
+            lease.Id,
+            lease,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private sealed record HardwareControlFamilyDefinition(
+        string Name,
+        IReadOnlyList<(IHardwareAdapter Adapter, string CapabilityId)> Controls,
+        Action<bool> SetTransportGate,
+        Action<bool> CommitLogicalState);
+
+    private static class HardwareControlFamilyNames
+    {
+        public const string GpuFan = "GPU fan";
+        public const string GpuPower = "GPU power limit";
+        public const string GpuClock = "GPU clock offset";
+    }
+
     private async Task<IpcResponse> SetGpuFanControlArmedAsync(IpcRequest request, CancellationToken cancellationToken)
     {
         EnsureExpectedRevision(request);
@@ -3567,9 +3995,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         IReadOnlyList<FanCalibrationV2> calibrations = await _store
             .GetSuiteEntitiesAsync<FanCalibrationV2>(SuiteEntityKind.FanCalibration, cancellationToken)
             .ConfigureAwait(false);
+        HardwareSnapshot snapshot = GetSnapshot();
         Dictionary<string, FanCalibrationV2> selected = new(StringComparer.Ordinal);
         foreach (CoolingGraphOutputV1 output in graph.Outputs)
         {
+            CapabilityDescriptor? capability = snapshot.Capabilities.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, output.CapabilityId, StringComparison.Ordinal));
             FanCommissioningSessionV1? session = sessions
                 .Where(candidate => candidate.State == FanCommissioningState.Completed
                     && candidate.PhysicalHeaderObserved
@@ -3585,6 +4016,16 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                     .FirstOrDefault();
             if (calibration is null)
             {
+                if (session is null
+                    && capability is not null
+                    && AdaptiveCoolingProfileFactory.CanActivateWithoutCalibration(capability, output))
+                {
+                    // Duty-percent automatic mode does not need an RPM map. The
+                    // graph engine already supports a missing calibration and
+                    // keeps the configured floor/full-maximum envelope.
+                    continue;
+                }
+
                 throw new InvalidOperationException($"Cooling output '{output.CapabilityId}' lost its exact commissioned calibration before activation.");
             }
 
@@ -4037,44 +4478,121 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private async Task RecoverPendingTransactionAsync(CancellationToken cancellationToken)
     {
         ProfileTransaction? pending = await _store!.GetPendingAsync(cancellationToken).ConfigureAwait(false);
-        if (pending is null)
+        HardwareControlLeaseV1? previousLease = await _store.GetSuiteEntityAsync<HardwareControlLeaseV1>(
+            SuiteEntityKind.HardwareControlLease,
+            HardwareControlLeaseV1.DefaultId,
+            cancellationToken).ConfigureAwait(false);
+        // Migration safety: older builds had no lease marker, so the latest
+        // committed profile is treated as potentially active exactly once.
+        ProfileTransaction? legacyCommitted = previousLease is null
+            ? await _store.GetLatestCommittedAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+        HardwareStartupRecoveryPlan startupPlan = HardwareControlRecoveryPlanner.BuildStartupPlan(
+            previousLease,
+            pending,
+            legacyCommitted);
+        IReadOnlyList<HardwareControlLeaseItemV1> controls = startupPlan.Controls;
+        bool uncleanStartup = startupPlan.RequiresRecovery;
+        HardwareRecoveryResult recovery = new(true, [], []);
+
+        if (uncleanStartup)
+        {
+            if (pending is not null)
+            {
+                ServiceLog.RecoveringTransaction(logger, pending.Id);
+            }
+
+            SetGpuTransportRecoveryGate(armed: true);
+            try
+            {
+                recovery = await _engine!.RestoreDefaultsAsync(controls, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                SetGpuTransportRecoveryGate(armed: false);
+                _gpuFanArmed = false;
+                _gpuPowerArmed = false;
+                _gpuClockArmed = false;
+            }
+
+            _rollbackBlocked = !recovery.AllDefaultsVerified;
+            if (pending is not null)
+            {
+                ProfileTransaction recovered = pending with
+                {
+                    State = recovery.AllDefaultsVerified
+                        ? ProfileTransactionState.RolledBack
+                        : ProfileTransactionState.RecoveryRequired,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    Error = recovery.AllDefaultsVerified
+                        ? "Unclean-start recovery restored and read back every leased capability at its default state."
+                        : $"RecoveryRequired: {string.Join("; ", recovery.Errors)}"
+                };
+                await _store.SaveAsync(recovered, cancellationToken).ConfigureAwait(false);
+                if (recovery.AllDefaultsVerified)
+                {
+                    await _store.ClearPendingAsync(pending.Id, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        HardwareControlLeaseV1 runningMarker = HardwareControlRecoveryPlanner.CreateRunningMarker(
+            _serviceInstanceId,
+            previousLease,
+            startupPlan,
+            recovery,
+            DateTimeOffset.UtcNow);
+        await _store.SaveSuiteEntityAsync(
+            SuiteEntityKind.HardwareControlLease,
+            runningMarker.Id,
+            runningMarker,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private void SetGpuTransportRecoveryGate(bool armed)
+    {
+        _gpuFanTransport?.SetArmed(armed);
+        _gpuPowerTransport?.SetArmed(armed);
+        _gpuClockTransport?.SetArmed(armed);
+    }
+
+    private async Task CompleteCleanShutdownAsync()
+    {
+        if (_store is null || _engine is null)
         {
             return;
         }
 
-        ServiceLog.RecoveringTransaction(logger, pending.Id);
-        List<string> errors = [];
-        foreach (PreparedAction prepared in pending.PreparedActions.Reverse())
+        HardwareControlLeaseV1? lease = await _store.GetSuiteEntityAsync<HardwareControlLeaseV1>(
+            SuiteEntityKind.HardwareControlLease,
+            HardwareControlLeaseV1.DefaultId,
+            CancellationToken.None).ConfigureAwait(false);
+        HardwareControlLeaseItemV1[] controls = lease?.Controls.ToArray() ?? [];
+        SetGpuTransportRecoveryGate(armed: true);
+        HardwareRecoveryResult recovery;
+        try
         {
-            IHardwareAdapter? adapter = _coordinator!.Adapters.FirstOrDefault(item => item.Manifest.Id == prepared.Action.AdapterId);
-            if (adapter is null)
-            {
-                errors.Add($"Adapter {prepared.Action.AdapterId} is unavailable.");
-                continue;
-            }
-
-            try
-            {
-                await adapter.RollbackAsync(prepared, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                errors.Add($"{prepared.Action.Id}: {exception.Message}");
-            }
+            recovery = await _engine.RestoreDefaultsAsync(controls, CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            SetGpuTransportRecoveryGate(armed: false);
+            _gpuFanArmed = false;
+            _gpuPowerArmed = false;
+            _gpuClockArmed = false;
         }
 
-        ProfileTransaction recovered = pending with
-        {
-            State = errors.Count == 0 ? ProfileTransactionState.RolledBack : ProfileTransactionState.RollingBack,
-            UpdatedAt = DateTimeOffset.UtcNow,
-            Error = errors.Count == 0 ? "Recovered after an unclean stop." : string.Join("; ", errors)
-        };
-        await _store.SaveAsync(recovered, cancellationToken).ConfigureAwait(false);
-        _rollbackBlocked = errors.Count > 0;
-        if (!_rollbackBlocked)
-        {
-            await _store.ClearPendingAsync(pending.Id, cancellationToken).ConfigureAwait(false);
-        }
+        HardwareControlLeaseV1 marker = HardwareControlRecoveryPlanner.CreateShutdownMarker(
+            _serviceInstanceId,
+            lease,
+            recovery,
+            DateTimeOffset.UtcNow);
+        await _store.SaveSuiteEntityAsync(
+            SuiteEntityKind.HardwareControlLease,
+            marker.Id,
+            marker,
+            CancellationToken.None).ConfigureAwait(false);
+        _rollbackBlocked = !recovery.AllDefaultsVerified;
     }
 
     private IpcResponse Success<T>(IpcRequest request, T payload) => new(

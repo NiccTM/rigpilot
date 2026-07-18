@@ -98,7 +98,8 @@ public enum ProfileTransactionState
     Committed,
     RollingBack,
     RolledBack,
-    Failed
+    Failed,
+    RecoveryRequired
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<TuningObjective>))]

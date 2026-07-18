@@ -1,11 +1,14 @@
 using LibreHardwareMonitor.Hardware;
 using PCHelper.Contracts;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace PCHelper.Adapters;
 
-public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
+public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter, IHardwareStateVerifier, IAdapterTopologyCachePolicy
 {
+    public const string AdapterId = "librehardwaremonitor";
+
     private readonly SemaphoreSlim _gate = new(1, 1);
     // LibreHardwareMonitor can expose a bounded control during the initial
     // hardware traversal and omit that sensor from a later traversal of the
@@ -22,9 +25,11 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
     private readonly Dictionary<string, CapabilityDescriptor> _knownControlCapabilities = new(StringComparer.Ordinal);
     private Computer? _computer;
     private string? _lastError;
+    private long _probeUpdateTimestamp;
+    private bool _probeUpdateAvailableForTelemetry;
 
     public AdapterManifest Manifest { get; } = new(
-        "librehardwaremonitor",
+        AdapterId,
         "LibreHardwareMonitor",
         "0.9.6",
         "MPL-2.0",
@@ -33,6 +38,8 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
         ["LibreHardwareMonitor 0.9.6 supported devices"],
         ["Monitoring", "MotherboardFanExperimental", "GpuFanExperimental", "UsbControllerDiscoveryContainedReadOnly"]);
 
+    public TimeSpan TopologyCacheDuration => TimeSpan.FromSeconds(30);
+
     public async Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -40,6 +47,7 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
         {
             EnsureOpen();
             UpdateHardware();
+            long probeUpdateTimestamp = Stopwatch.GetTimestamp();
             List<HardwareDevice> devices = [];
             List<CapabilityDescriptor> capabilities = [];
             bool pawnIoInstalled = IsPawnIoInstalled();
@@ -130,10 +138,16 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
                     "Install the official signed PawnIO package only if privileged hardware access is required."));
             }
 
+            // CaptureAsync reads sensors immediately after a topology refresh.
+            // Let that one read reuse this update instead of walking the entire
+            // hardware tree twice in the same telemetry tick.
+            _probeUpdateTimestamp = probeUpdateTimestamp;
+            _probeUpdateAvailableForTelemetry = true;
             return new AdapterProbeResult(Manifest, devices, capabilities, warnings);
         }
         catch (Exception exception)
         {
+            _probeUpdateAvailableForTelemetry = false;
             _lastError = exception.Message;
             return new AdapterProbeResult(
                 Manifest,
@@ -153,7 +167,10 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
         try
         {
             EnsureOpen();
-            UpdateHardware();
+            if (!TryConsumeProbeUpdate())
+            {
+                UpdateHardware();
+            }
             DateTimeOffset now = DateTimeOffset.UtcNow;
             return TraverseHardware()
                 .SelectMany(hardware => hardware.Sensors.Select(sensor => ToSample(hardware, sensor, now)))
@@ -307,6 +324,58 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
         }
     }
 
+    public async Task<HardwareStateVerification> VerifyDefaultStateAsync(
+        string capabilityId,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureOpen();
+            UpdateHardware();
+            IControl control = FindControl(capabilityId);
+            bool success = control.ControlMode == ControlMode.Default;
+            return new HardwareStateVerification(
+                Manifest.Id,
+                capabilityId,
+                success,
+                null,
+                success ? "LibreHardwareMonitor read-back confirmed firmware/default control." : $"LibreHardwareMonitor control remained in {control.ControlMode} mode.");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<HardwareStateVerification> VerifyRollbackStateAsync(
+        PreparedAction action,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureOpen();
+            UpdateHardware();
+            IControl control = FindControl(action.Action.CapabilityId);
+            ControlRollbackState rollback = JsonSerializer.Deserialize<ControlRollbackState>(action.AdapterToken)
+                ?? throw new InvalidDataException("The fan-control rollback token is invalid.");
+            bool success = rollback.Mode == ControlMode.Software
+                ? control.ControlMode == ControlMode.Software && Math.Abs(control.SoftwareValue - rollback.SoftwareValue) <= 0.5
+                : control.ControlMode == ControlMode.Default;
+            return new HardwareStateVerification(
+                Manifest.Id,
+                action.Action.CapabilityId,
+                success,
+                control.ControlMode == ControlMode.Software ? ControlValue.FromNumeric(control.SoftwareValue) : null,
+                success ? "LibreHardwareMonitor rollback state was read back." : "LibreHardwareMonitor rollback read-back did not match the captured control mode.");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
         bool healthy = _computer is not null && _lastError is null;
@@ -327,6 +396,7 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
         {
             _computer?.Close();
             _computer = null;
+            _probeUpdateAvailableForTelemetry = false;
             _knownControls.Clear();
             _knownControlCapabilities.Clear();
         }
@@ -363,11 +433,24 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
         };
         _knownControls.Clear();
         _knownControlCapabilities.Clear();
+        _probeUpdateAvailableForTelemetry = false;
         _computer.Open();
         _lastError = null;
     }
 
-    private void UpdateHardware() => _computer!.Accept(new UpdateVisitor());
+    private void UpdateHardware()
+    {
+        _probeUpdateAvailableForTelemetry = false;
+        _computer!.Accept(new UpdateVisitor());
+    }
+
+    private bool TryConsumeProbeUpdate()
+    {
+        bool reusable = _probeUpdateAvailableForTelemetry
+            && Stopwatch.GetElapsedTime(_probeUpdateTimestamp) <= TimeSpan.FromSeconds(1);
+        _probeUpdateAvailableForTelemetry = false;
+        return reusable;
+    }
 
     private IControl FindControl(string capabilityId)
     {
@@ -557,8 +640,12 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter
         }
     }
 
-    private static bool IsPawnIoInstalled() =>
-        Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\PawnIO") is not null;
+    private static bool IsPawnIoInstalled()
+    {
+        using Microsoft.Win32.RegistryKey? key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+            @"SYSTEM\CurrentControlSet\Services\PawnIO");
+        return key is not null;
+    }
 
     private sealed record ControlRollbackState(ControlMode Mode, float SoftwareValue);
 

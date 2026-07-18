@@ -11,7 +11,7 @@ namespace PCHelper.Adapters;
 /// endpoint becomes writable until its individual apply/read-back/reset tests
 /// are included in a signed built-in adapter or a reviewed pack.
 /// </summary>
-public sealed class VendorControlEligibilityAdapter : IHardwareAdapter
+public sealed class VendorControlEligibilityAdapter : IHardwareAdapter, IAdapterTopologyCachePolicy
 {
     private string? _lastError;
 
@@ -24,6 +24,8 @@ public sealed class VendorControlEligibilityAdapter : IHardwareAdapter
         AdapterExecutionContext.AdapterHost,
         ["AMD Ryzen and Threadripper 5000-9000", "Intel Core 12th-14th and Core Ultra 200", "NVIDIA RTX 20-50", "AMD Radeon RX 5000-9000", "Intel Arc A/B", "ASUS/ROG/TUF, Gigabyte/AORUS, MSI/Mystic Light, ASRock/Polychrome, ZOTAC/SPECTRA, EVGA/K|NGP|N, Sapphire, PowerColor, XFX, PNY, Palit, Gainward, INNO3D, GALAX/KFA2, Colorful, Maxsun, Yeston, Manli, Leadtek, Sparkle, and OEM graphics-board identities", "ASUS, MSI, Gigabyte, and ASRock desktop boards"],
         ["CompatibilityCatalogReadOnly", "GpuBoardPartnerReadOnly", "GpuRgbEligibilityReadOnly", "CpuTuningBlocked", "GpuTuningBlocked", "AdlxReadOnly", "IgclReadOnly"]);
+
+    public TimeSpan TopologyCacheDuration => TimeSpan.FromMinutes(5);
 
     public Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken)
     {

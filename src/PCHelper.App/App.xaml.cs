@@ -5,10 +5,12 @@ using Forms = System.Windows.Forms;
 
 namespace PCHelper.App;
 
-public partial class App : System.Windows.Application, IDisposable
+public partial class App : System.Windows.Application, IDisposable, IAsyncDisposable
 {
     private const string InstanceMutexName = @"Local\PCHelper.App";
     private const string ActivationEventName = @"Local\PCHelper.App.Activate";
+    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
+    private readonly object _disposeSync = new();
     private Forms.NotifyIcon? _trayIcon;
     private MainWindow? _window;
     private MainViewModel? _viewModel;
@@ -18,6 +20,8 @@ public partial class App : System.Windows.Application, IDisposable
     private UserAgentRuntime? _userAgent;
     private CancellationTokenSource? _userAgentCancellation;
     private Task? _userAgentTask;
+    private Task? _disposeTask;
+    private int _shutdownRequested;
     private bool _exiting;
 
     public bool IsExiting => _exiting;
@@ -128,21 +132,126 @@ public partial class App : System.Windows.Application, IDisposable
         }
 
         _exiting = true;
-        Dispose();
+        bool requiresFallback;
+        lock (_disposeSync)
+        {
+            requiresFallback = _disposeTask is null;
+        }
+        if (requiresFallback)
+        {
+            // Normal tray exit awaits cleanup before calling Shutdown. This is
+            // the bounded fallback for OS-initiated or otherwise direct exits.
+            Dispose();
+        }
         base.OnExit(e);
     }
 
     public void Dispose()
     {
-        _userAgentCancellation?.Cancel();
-        _userAgentCancellation?.Dispose();
-        _userAgentCancellation = null;
-        if (_userAgent is not null)
+        try
         {
-            _userAgent.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            _userAgent = null;
+            EnsureDisposeAsync()
+                .WaitAsync(ShutdownTimeout)
+                .GetAwaiter()
+                .GetResult();
         }
+        catch (TimeoutException)
+        {
+            System.Diagnostics.Debug.WriteLine("RigPilot shutdown cleanup exceeded 5 seconds; process exit will release remaining resources.");
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"RigPilot shutdown cleanup failed: {exception}");
+        }
+
+        GC.SuppressFinalize(this);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await EnsureDisposeAsync().WaitAsync(ShutdownTimeout).ConfigureAwait(false);
+        GC.SuppressFinalize(this);
+    }
+
+    private async Task RequestShutdownAsync()
+    {
+        if (Interlocked.Exchange(ref _shutdownRequested, 1) != 0)
+        {
+            return;
+        }
+
+        _exiting = true;
+        try
+        {
+            await DisposeAsync();
+        }
+        catch (TimeoutException)
+        {
+            System.Diagnostics.Debug.WriteLine("RigPilot shutdown cleanup exceeded 5 seconds; continuing with application exit.");
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"RigPilot shutdown cleanup failed: {exception}");
+        }
+        finally
+        {
+            Shutdown();
+        }
+    }
+
+    private Task EnsureDisposeAsync()
+    {
+        lock (_disposeSync)
+        {
+            return _disposeTask ??= DisposeAsyncCore();
+        }
+    }
+
+    private async Task DisposeAsyncCore()
+    {
+        CancellationTokenSource? userAgentCancellation = _userAgentCancellation;
+        Task? userAgentTask = _userAgentTask;
+        UserAgentRuntime? userAgent = _userAgent;
+        _userAgentCancellation = null;
         _userAgentTask = null;
+        _userAgent = null;
+
+        userAgentCancellation?.Cancel();
+        DisposeUiResources();
+
+        if (userAgentTask is not null)
+        {
+            try
+            {
+                await userAgentTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (userAgentCancellation?.IsCancellationRequested == true)
+            {
+                // Expected after stopping the user-agent pipe.
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine($"RigPilot user-agent pipe shutdown failed: {exception}");
+            }
+        }
+
+        if (userAgent is not null)
+        {
+            try
+            {
+                await userAgent.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine($"RigPilot user-agent resource cleanup failed: {exception}");
+            }
+        }
+
+        userAgentCancellation?.Dispose();
+    }
+
+    private void DisposeUiResources()
+    {
         _activationRegistration?.Unregister(null);
         _activationRegistration = null;
         _activationEvent?.Dispose();
@@ -158,8 +267,6 @@ public partial class App : System.Windows.Application, IDisposable
             _trayIcon.Dispose();
             _trayIcon = null;
         }
-
-        GC.SuppressFinalize(this);
     }
 
     public void ShowDashboard()
@@ -237,7 +344,11 @@ public partial class App : System.Windows.Application, IDisposable
         {
             if (_viewModel is not null)
             {
-                _viewModel.HardwareControlEnabled = !_viewModel.HardwareControlEnabled;
+                bool requested = !_viewModel.HardwareControlEnabled;
+                if (_viewModel.ToggleHardwareControlCommand.CanExecute(requested))
+                {
+                    _viewModel.ToggleHardwareControlCommand.Execute(requested);
+                }
             }
         });
         Forms.ToolStripMenuItem undervoltMenu = new("GPU undervolt");
@@ -258,11 +369,7 @@ public partial class App : System.Windows.Application, IDisposable
         menu.Items.Add(new Forms.ToolStripSeparator());
         Forms.ToolStripMenuItem resetItem = new("Reset verified controls", null, async (_, _) => await _viewModel!.ResetVerifiedControlsAsync());
         menu.Items.Add(resetItem);
-        menu.Items.Add("Exit", null, (_, _) =>
-        {
-            _exiting = true;
-            Shutdown();
-        });
+        menu.Items.Add("Exit", null, async (_, _) => await RequestShutdownAsync());
         menu.Opening += (_, _) =>
         {
             if (_viewModel is null)

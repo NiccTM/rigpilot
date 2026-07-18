@@ -6,8 +6,8 @@ namespace PCHelper.Core;
 /// Picks the automatic cooling curve (Silent / Balanced / Cooling) from live
 /// temperatures, with hysteresis so the mode does not flap on a boundary. Pure
 /// and deterministic; the caller supplies the previous choice for stickiness.
-/// The selection only chooses between existing conservative curves — every
-/// curve keeps the 50% floor and full-maximum emergency headroom regardless.
+/// The selection only chooses between existing bounded curves — every curve
+/// keeps the configured floor and full-maximum emergency headroom regardless.
 /// </summary>
 public static class CoolingModeSelector
 {

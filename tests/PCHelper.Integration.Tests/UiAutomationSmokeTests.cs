@@ -9,7 +9,8 @@ public sealed class UiAutomationSmokeTests
     public async Task RepositoryOwnedUiSmokeVisitsEveryPageAndValidatesCriticalAutomationIds()
     {
         string repoRoot = FindRepositoryRoot();
-        string tool = Path.Combine(
+        string colocatedTool = Path.Combine(AppContext.BaseDirectory, "PCHelper.UiSnapshot.exe");
+        string defaultTool = Path.Combine(
             repoRoot,
             "tools",
             "PCHelper.UiSnapshot",
@@ -17,6 +18,7 @@ public sealed class UiAutomationSmokeTests
             "Release",
             "net10.0-windows10.0.19041.0",
             "PCHelper.UiSnapshot.exe");
+        string tool = File.Exists(colocatedTool) ? colocatedTool : defaultTool;
         Assert.True(File.Exists(tool), $"Build the solution before running the UI smoke test: {tool}");
         string reportPath = Path.Combine(Path.GetTempPath(), $"pchelper-ui-smoke-{Guid.NewGuid():N}.json");
 
@@ -55,7 +57,9 @@ public sealed class UiAutomationSmokeTests
             Assert.Empty(root.GetProperty("duplicateAutomationIds").EnumerateArray());
             Assert.Empty(root.GetProperty("unnamedInteractiveControls").EnumerateArray());
             Assert.Empty(root.GetProperty("errors").EnumerateArray());
+            Assert.Equal(JsonValueKind.Object, root.GetProperty("featureReadiness").ValueKind);
             Assert.True(root.GetProperty("requiredAutomationIds").GetArrayLength() >= 20);
+            Assert.Equal(29, root.GetProperty("actionableHardwareControlIds").GetArrayLength());
             Assert.Equal(
                 root.GetProperty("interactiveControlCount").GetInt32(),
                 root.GetProperty("namedInteractiveControlCount").GetInt32());

@@ -28,9 +28,11 @@ public enum TimelineScope
 public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 {
     private static readonly TimeSpan LocalProbeInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ServiceControlPlaneRefreshInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ServiceDiagnosticsRefreshInterval = TimeSpan.FromSeconds(10);
 
-    private readonly NamedPipeRequestClient _client = new(ProtocolConstants.ServicePipeName, TimeSpan.FromSeconds(3));
-    private readonly NamedPipeRequestClient _userAgentClient = new(ProtocolConstants.UserAgentPipeName, TimeSpan.FromSeconds(3));
+    private readonly NamedPipeRequestClient _client = new(ProtocolConstants.ServicePipeName, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(30));
+    private readonly NamedPipeRequestClient _userAgentClient = new(ProtocolConstants.UserAgentPipeName, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(30));
     private readonly System.Threading.Timer _refreshTimer;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly AutomationRuleStateMachine _automationMachine = new();
@@ -128,6 +130,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         "Waiting for the RigPilot service handshake.");
     private HardwareOperationStatus? _operation;
     private DateTimeOffset _lastLocalProbe = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastServiceControlPlaneRefresh = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastServiceDiagnosticsRefresh = DateTimeOffset.MinValue;
     private bool _isServiceOnline;
     private bool _isBusy = true;
     private bool _refreshing;
@@ -317,27 +321,45 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public MainViewModel()
     {
+        _toggleHardwareControlCommand = new AsyncCommand(
+            ToggleHardwareControlAsync,
+            _ => CanUseServiceWrites && !IsHardwareControlChanging,
+            ReportError);
         _refreshCommand = new AsyncCommand(_ => RefreshWithFeedbackAsync(), onError: ReportError);
         _applyGpuControlCommand = new AsyncCommand(
             parameter => ApplyGpuControlAsync((GpuControlSlider)parameter!),
-            parameter => IsServiceOnline && HardwareControlEnabled && parameter is GpuControlSlider,
-            ReportError);
+            parameter => CanRunHardwareAction() && parameter is GpuControlSlider,
+            ReportError,
+            parameter =>
+            {
+                if (parameter is not GpuControlSlider)
+                {
+                    ShowNotice("Select a detected GPU or fan control first.", "Warning");
+                    return;
+                }
+
+                ShowHardwareActionBlocked();
+            });
         _startGpuAutoOcCommand = new AsyncCommand(
             _ => StartGpuAutoOcAsync(),
-            _ => IsServiceOnline && HardwareControlEnabled && !HasActiveOperation,
-            ReportError);
+            _ => CanRunHardwareAction(requireIdle: true),
+            ReportError,
+            _ => ShowHardwareActionBlocked(requireIdle: true));
         SetKrakenPumpCommand = new AsyncCommand(
             _ => SetKrakenPumpAsync(),
-            _ => IsServiceOnline && HardwareControlEnabled,
-            ReportError);
+            _ => CanRunHardwareAction(),
+            ReportError,
+            _ => ShowHardwareActionBlocked());
         _enableGpuFanAutoModeCommand = new AsyncCommand(
             parameter => StartAutomaticCoolingAsync(gpuFans: true, ParseCoolingCurveMode(parameter)),
-            _ => IsServiceOnline && HardwareControlEnabled,
-            ReportError);
+            _ => CanRunHardwareAction(),
+            ReportError,
+            _ => ShowHardwareActionBlocked());
         _enableCaseFansAutoModeCommand = new AsyncCommand(
             parameter => StartAutomaticCoolingAsync(gpuFans: false, ParseCoolingCurveMode(parameter)),
-            _ => IsServiceOnline && HardwareControlEnabled,
-            ReportError);
+            _ => CanRunHardwareAction(),
+            ReportError,
+            _ => ShowHardwareActionBlocked());
         _applyProfileCommand = new AsyncCommand(
             parameter => ApplyProfileCardAsync((ProfileCardDisplay)parameter!),
             parameter => CanUseServiceWrites
@@ -358,15 +380,30 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         _startCalibrationCommand = new AsyncCommand(
             _ => StartCalibrationCoreAsync(),
             _ => CanStartCalibration,
-            ReportError);
+            ReportError,
+            _ => ShowNotice(
+                HasActiveOperation
+                    ? "Another hardware operation is active. Abort it and wait for restoration before starting calibration."
+                    : CalibrationEligibilityReason,
+                "Warning"));
         _startTuneCommand = new AsyncCommand(
             _ => StartTuneCoreAsync(),
             _ => CanStartTune,
-            ReportError);
+            ReportError,
+            _ => ShowNotice(
+                HasActiveOperation
+                    ? "Another hardware operation is active. Abort it and wait for restoration before starting tuning."
+                    : TuneEligibilityReason,
+                "Warning"));
         _abortOperationCommand = new AsyncCommand(
             _ => AbortOperationCoreAsync(),
             _ => IsServiceOnline && HasActiveOperation,
-            ReportError);
+            ReportError,
+            _ => ShowNotice(
+                !IsServiceOnline
+                    ? GetServiceWriteBlockReason()
+                    : "There is no active hardware operation to abort or restore.",
+                "Info"));
         _probeOpenRgbCommand = new AsyncCommand(
             _ => ProbeOpenRgbCoreAsync(),
             _ => OpenRgbEnabled && !HasLightingConflict,
@@ -643,54 +680,54 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public event Action<string>? OsdHotkeyChanged;
 
-    public ObservableCollection<SensorDisplay> ImportantSensors { get; } = [];
+    public ObservableCollection<SensorDisplay> ImportantSensors { get; } = new BatchedObservableCollection<SensorDisplay>();
 
-    public ObservableCollection<SensorDisplay> CoolingSensors { get; } = [];
+    public ObservableCollection<SensorDisplay> CoolingSensors { get; } = new BatchedObservableCollection<SensorDisplay>();
 
-    public ObservableCollection<SensorDisplay> PerformanceSensors { get; } = [];
+    public ObservableCollection<SensorDisplay> PerformanceSensors { get; } = new BatchedObservableCollection<SensorDisplay>();
 
-    public ObservableCollection<ProfileV1> Profiles { get; } = [];
+    public ObservableCollection<ProfileV1> Profiles { get; } = new BatchedObservableCollection<ProfileV1>();
 
-    public ObservableCollection<ProfileCardDisplay> ProfileCards { get; } = [];
+    public ObservableCollection<ProfileCardDisplay> ProfileCards { get; } = new BatchedObservableCollection<ProfileCardDisplay>();
 
-    public ObservableCollection<CapabilityDisplay> CoolingCapabilities { get; } = [];
+    public ObservableCollection<CapabilityDisplay> CoolingCapabilities { get; } = new BatchedObservableCollection<CapabilityDisplay>();
 
-    public ObservableCollection<CapabilityDisplay> PerformanceCapabilities { get; } = [];
+    public ObservableCollection<CapabilityDisplay> PerformanceCapabilities { get; } = new BatchedObservableCollection<CapabilityDisplay>();
 
-    public ObservableCollection<CapabilityDisplay> CapabilityDecisions { get; } = [];
+    public ObservableCollection<CapabilityDisplay> CapabilityDecisions { get; } = new BatchedObservableCollection<CapabilityDisplay>();
 
     /// <summary>
     /// A deliberately narrow view of capabilities that are labelled Experimental.
     /// It does not turn a capability into a write path: it only explains whether
     /// the existing cooling commissioning workflow can safely inspect it.
     /// </summary>
-    public ObservableCollection<ExperimentalControlDisplay> ExperimentalControls { get; } = [];
+    public ObservableCollection<ExperimentalControlDisplay> ExperimentalControls { get; } = new BatchedObservableCollection<ExperimentalControlDisplay>();
 
-    public ObservableCollection<DeviceDisplay> Devices { get; } = [];
+    public ObservableCollection<DeviceDisplay> Devices { get; } = new BatchedObservableCollection<DeviceDisplay>();
 
-    public ObservableCollection<DiagnosticDisplay> Diagnostics { get; } = [];
+    public ObservableCollection<DiagnosticDisplay> Diagnostics { get; } = new BatchedObservableCollection<DiagnosticDisplay>();
 
-    public ObservableCollection<AdapterHealthDisplay> AdapterHealth { get; } = [];
+    public ObservableCollection<AdapterHealthDisplay> AdapterHealth { get; } = new BatchedObservableCollection<AdapterHealthDisplay>();
 
-    public ObservableCollection<AdapterTraceDisplay> AdapterTrace { get; } = [];
+    public ObservableCollection<AdapterTraceDisplay> AdapterTrace { get; } = new BatchedObservableCollection<AdapterTraceDisplay>();
 
-    public ObservableCollection<HealthRuleDisplay> HealthRules { get; } = [];
+    public ObservableCollection<HealthRuleDisplay> HealthRules { get; } = new BatchedObservableCollection<HealthRuleDisplay>();
 
-    public ObservableCollection<HealthAlertDisplay> HealthAlerts { get; } = [];
+    public ObservableCollection<HealthAlertDisplay> HealthAlerts { get; } = new BatchedObservableCollection<HealthAlertDisplay>();
 
-    public ObservableCollection<SensorTrendDisplay> MonitoringTrends { get; } = [];
+    public ObservableCollection<SensorTrendDisplay> MonitoringTrends { get; } = new BatchedObservableCollection<SensorTrendDisplay>();
 
-    public ObservableCollection<SensorTrendDisplay> VisibleMonitoringTrends { get; } = [];
+    public ObservableCollection<SensorTrendDisplay> VisibleMonitoringTrends { get; } = new BatchedObservableCollection<SensorTrendDisplay>();
 
-    public ObservableCollection<SensorComparisonSeriesDisplay> MonitoringComparisonSeries { get; } = [];
+    public ObservableCollection<SensorComparisonSeriesDisplay> MonitoringComparisonSeries { get; } = new BatchedObservableCollection<SensorComparisonSeriesDisplay>();
 
-    public ObservableCollection<TimelineEventDisplay> TimelineEvents { get; } = [];
+    public ObservableCollection<TimelineEventDisplay> TimelineEvents { get; } = new BatchedObservableCollection<TimelineEventDisplay>();
 
-    public ObservableCollection<TimelineEventDisplay> VisibleTimelineEvents { get; } = [];
+    public ObservableCollection<TimelineEventDisplay> VisibleTimelineEvents { get; } = new BatchedObservableCollection<TimelineEventDisplay>();
 
-    public ObservableCollection<CoolingQualificationReportV1> CoolingQualificationReports { get; } = [];
+    public ObservableCollection<CoolingQualificationReportV1> CoolingQualificationReports { get; } = new BatchedObservableCollection<CoolingQualificationReportV1>();
 
-    public ObservableCollection<DeviceQualificationPlanV1> DeviceQualificationPlans { get; } = [];
+    public ObservableCollection<DeviceQualificationPlanV1> DeviceQualificationPlans { get; } = new BatchedObservableCollection<DeviceQualificationPlanV1>();
 
     public IReadOnlyList<DeviceQualificationPlanV1> TuningQualificationPlans => DeviceQualificationPlans
         .Where(plan => plan.Kind is DeviceQualificationKind.CpuTuning or DeviceQualificationKind.GpuTuning)
@@ -700,11 +737,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         .Where(plan => plan.Kind == DeviceQualificationKind.Lighting)
         .ToArray();
 
-    public ObservableCollection<OperationTargetDisplay> CalibrationTargets { get; } = [];
+    public ObservableCollection<OperationTargetDisplay> CalibrationTargets { get; } = new BatchedObservableCollection<OperationTargetDisplay>();
 
-    public ObservableCollection<FanCommissioningSessionV1> FanCommissioningSessions { get; } = [];
+    public ObservableCollection<FanCommissioningSessionV1> FanCommissioningSessions { get; } = new BatchedObservableCollection<FanCommissioningSessionV1>();
 
-    public ObservableCollection<CoolingOutputAssignmentV1> CoolingOutputAssignments { get; } = [];
+    public ObservableCollection<CoolingOutputAssignmentV1> CoolingOutputAssignments { get; } = new BatchedObservableCollection<CoolingOutputAssignmentV1>();
 
     public IReadOnlyList<MonitoringTrendScope> MonitoringTrendScopes { get; } = Enum.GetValues<MonitoringTrendScope>();
 
@@ -718,37 +755,37 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public IReadOnlyList<int> MacroRecordingDurationOptions { get; } = [10, 30, 60, 120, 300];
 
-    public ObservableCollection<OperationTargetDisplay> TuneTargets { get; } = [];
+    public ObservableCollection<OperationTargetDisplay> TuneTargets { get; } = new BatchedObservableCollection<OperationTargetDisplay>();
 
-    public ObservableCollection<AutomationRuleDisplay> AutomationRules { get; } = [];
+    public ObservableCollection<AutomationRuleDisplay> AutomationRules { get; } = new BatchedObservableCollection<AutomationRuleDisplay>();
 
-    public ObservableCollection<GameEntryV1> Games { get; } = [];
+    public ObservableCollection<GameEntryV1> Games { get; } = new BatchedObservableCollection<GameEntryV1>();
 
-    public ObservableCollection<AutomationWorkflowV1> Workflows { get; } = [];
+    public ObservableCollection<AutomationWorkflowV1> Workflows { get; } = new BatchedObservableCollection<AutomationWorkflowV1>();
 
-    public ObservableCollection<LightingSceneV1> LightingScenes { get; } = [];
+    public ObservableCollection<LightingSceneV1> LightingScenes { get; } = new BatchedObservableCollection<LightingSceneV1>();
 
-    public ObservableCollection<EffectGraphV1> EffectGraphs { get; } = [];
+    public ObservableCollection<EffectGraphV1> EffectGraphs { get; } = new BatchedObservableCollection<EffectGraphV1>();
 
-    public ObservableCollection<MacroV1> Macros { get; } = [];
+    public ObservableCollection<MacroV1> Macros { get; } = new BatchedObservableCollection<MacroV1>();
 
-    public ObservableCollection<ScriptActionV1> Scripts { get; } = [];
+    public ObservableCollection<ScriptActionV1> Scripts { get; } = new BatchedObservableCollection<ScriptActionV1>();
 
-    public ObservableCollection<OsdLayoutV1> OsdLayouts { get; } = [];
+    public ObservableCollection<OsdLayoutV1> OsdLayouts { get; } = new BatchedObservableCollection<OsdLayoutV1>();
 
-    public ObservableCollection<CapturePresetV1> CapturePresets { get; } = [];
+    public ObservableCollection<CapturePresetV1> CapturePresets { get; } = new BatchedObservableCollection<CapturePresetV1>();
 
-    public ObservableCollection<CaptureTargetV1> CaptureTargets { get; } = [];
+    public ObservableCollection<CaptureTargetV1> CaptureTargets { get; } = new BatchedObservableCollection<CaptureTargetV1>();
 
-    public ObservableCollection<MonitorBrightnessDeviceV1> MonitorBrightnessDevices { get; } = [];
+    public ObservableCollection<MonitorBrightnessDeviceV1> MonitorBrightnessDevices { get; } = new BatchedObservableCollection<MonitorBrightnessDeviceV1>();
 
-    public ObservableCollection<DynamicLightingDevice> DynamicLightingDevices { get; } = [];
+    public ObservableCollection<DynamicLightingDevice> DynamicLightingDevices { get; } = new BatchedObservableCollection<DynamicLightingDevice>();
 
-    public ObservableCollection<RgbRouteAssessment> RgbRouteAssessments { get; } = [];
+    public ObservableCollection<RgbRouteAssessment> RgbRouteAssessments { get; } = new BatchedObservableCollection<RgbRouteAssessment>();
 
-    public ObservableCollection<LightingZoneV1> DraftLightingZones { get; } = [];
+    public ObservableCollection<LightingZoneV1> DraftLightingZones { get; } = new BatchedObservableCollection<LightingZoneV1>();
 
-    public ObservableCollection<MacroRecordingSessionV1> MacroRecordingSessions { get; } = [];
+    public ObservableCollection<MacroRecordingSessionV1> MacroRecordingSessions { get; } = new BatchedObservableCollection<MacroRecordingSessionV1>();
 
     public IReadOnlyList<TuningObjective> TuneObjectives { get; } = Enum.GetValues<TuningObjective>();
 
@@ -2187,7 +2224,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged(nameof(ConnectionTone));
             OnPropertyChanged(nameof(CanWrite));
             OnPropertyChanged(nameof(CanUseServiceWrites));
+            OnPropertyChanged(nameof(IsRecoveryRequired));
             OnPropertyChanged(nameof(WriteStateLabel));
+            _toggleHardwareControlCommand.RaiseCanExecuteChanged();
             _applyGpuControlCommand.RaiseCanExecuteChanged();
             _startGpuAutoOcCommand.RaiseCanExecuteChanged();
             _enableGpuFanAutoModeCommand.RaiseCanExecuteChanged();
@@ -2244,7 +2283,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             ? "Neutral"
             : "Warning";
 
-    public bool CanUseServiceWrites => IsServiceOnline && _serviceCompatibility.CanUseServiceWrites;
+    public bool CanUseServiceWrites => IsServiceOnline
+        && _serviceCompatibility.CanUseServiceWrites
+        && _status is { WritesEnabled: true, RecoveryRequired: false };
+
+    public bool IsRecoveryRequired => _status?.RecoveryRequired == true;
 
     public bool IsServiceUpgradeRequired => _serviceCompatibility.State is ServiceCompatibilityState.UpgradeRequired or ServiceCompatibilityState.ReadOnly;
 
@@ -3030,8 +3073,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public ICommand ApplyKrakenLightingCommand => _applyKrakenLightingCommand ??= new AsyncCommand(
         parameter => ApplyKrakenLightingAsync(turnOff: string.Equals(parameter as string, "off", StringComparison.Ordinal)),
-        _ => IsServiceOnline && HardwareControlEnabled,
-        ReportError);
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
 
     private AsyncCommand? _applyKrakenLightingCommand;
 
@@ -3051,9 +3095,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     /// </summary>
     public async Task ApplyKrakenLightingAsync(bool turnOff)
     {
-        if (!HardwareControlEnabled)
+        if (!CanRunHardwareAction())
         {
-            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            ShowHardwareActionBlocked();
             return;
         }
 
@@ -3560,10 +3604,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         && GetTuneEligibility().Eligible
         && TryReadTuneLimits(out _, out _);
 
-    public bool CanWrite => CanUseServiceWrites && _status?.WritesEnabled == true;
+    public bool CanWrite => CanUseServiceWrites;
 
     public string WriteStateLabel => !IsServiceOnline
         ? "Hardware writes locked"
+        : IsRecoveryRequired
+            ? "Recovery required"
         : !CanUseServiceWrites
             ? "Service update required"
             : CanWrite ? "Service write path ready" : "Hardware writes locked";
@@ -3850,8 +3896,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         _disposed = true;
         _refreshTimer.Dispose();
         _desktopOsd.Dispose();
-        _ambientCancellation?.Cancel();
-        _ambientCancellation?.Dispose();
+        CancelAmbientLightingForDisposal();
         _lifetime.Cancel();
         _lifetime.Dispose();
         DisposeLocalCoordinator();
@@ -3899,29 +3944,52 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             }
 
             CancellationToken token = _lifetime.Token;
-            await RefreshServiceCompatibilityAsync(token);
-            if (!_serviceCompatibility.IsServiceReachable)
+            DateTimeOffset refreshTime = DateTimeOffset.UtcNow;
+            bool refreshControlPlane = full
+                || userInitiated
+                || !IsServiceOnline
+                || _status is null
+                || refreshTime - _lastServiceControlPlaneRefresh >= ServiceControlPlaneRefreshInterval;
+            if (refreshControlPlane)
             {
-                throw new InvalidOperationException(_serviceCompatibility.Summary);
+                await RefreshServiceCompatibilityAsync(token);
+                if (!_serviceCompatibility.IsServiceReachable)
+                {
+                    throw new InvalidOperationException(_serviceCompatibility.Summary);
+                }
+                IpcResponse statusResponse = await _client.SendAsync(
+                    NamedPipeRequestClient.CreateRequest(IpcCommand.GetServiceStatus),
+                    token);
+                EnsureSuccess(statusResponse);
+                _status = IpcJson.FromElement<ServiceStatus>(statusResponse.Payload)
+                    ?? throw new InvalidDataException("Service returned an empty status response.");
+                if (_status.RecoveryRequired)
+                {
+                    _hardwareControlArmedThisConnection = false;
+                    SetHardwareControlState(false);
+                }
+                NotifyServiceWriteStateChanged();
+                // CanUseServiceWrites intentionally includes the live connection
+                // state. Set it only after a valid status reply, before composing
+                // the user-facing message, so a ready service is not described as
+                // update-locked for the rest of this refresh.
+                IsServiceOnline = true;
+                ServiceStatusText = !_serviceCompatibility.CanUseServiceWrites
+                    ? "The service is reachable, but this dashboard has locked all service-owned writes until the matching runtime is installed."
+                    : _status.Message;
+                await RefreshOperationStatusAsync(token);
+                await RefreshFanCommissioningAsync(token);
+                await RefreshCoolingOutputAssignmentsAsync(token);
+                await RefreshUpdateStatusAsync(token);
+                _lastServiceControlPlaneRefresh = refreshTime;
             }
-            IpcResponse statusResponse = await _client.SendAsync(
-                NamedPipeRequestClient.CreateRequest(IpcCommand.GetServiceStatus),
-                token);
-            EnsureSuccess(statusResponse);
-            _status = IpcJson.FromElement<ServiceStatus>(statusResponse.Payload)
-                ?? throw new InvalidDataException("Service returned an empty status response.");
-            // CanUseServiceWrites intentionally includes the live connection
-            // state. Set it only after a valid status reply, before composing
-            // the user-facing message, so a ready service is not described as
-            // update-locked for the rest of this refresh.
-            IsServiceOnline = true;
-            ServiceStatusText = CanUseServiceWrites
-                ? _status.Message
-                : "The service is reachable, but this dashboard has locked all service-owned writes until the matching runtime is installed.";
-            await RefreshOperationStatusAsync(token);
-            await RefreshFanCommissioningAsync(token);
-            await RefreshCoolingOutputAssignmentsAsync(token);
-            await RefreshUpdateStatusAsync(token);
+            else if (HasActiveOperation)
+            {
+                // Progress remains one-second live while calibration or tuning is
+                // active; otherwise this control-plane request follows the slower
+                // cadence above.
+                await RefreshOperationStatusAsync(token);
+            }
 
             if (full || _snapshot is null)
             {
@@ -3958,8 +4026,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             DisposeLocalCoordinator();
             UpdateDisplays();
             ApplyCoolingOutputAssignmentForTarget();
-            await RefreshAdapterTraceAsync(token);
-            await RefreshReliabilityAsync(token);
+            if (full
+                || userInitiated
+                || refreshTime - _lastServiceDiagnosticsRefresh >= ServiceDiagnosticsRefreshInterval)
+            {
+                await RefreshAdapterTraceAsync(token);
+                await RefreshReliabilityAsync(token);
+                _lastServiceDiagnosticsRefresh = refreshTime;
+            }
             LastUpdatedText = $"Updated {DateTimeOffset.Now:HH:mm:ss}";
             if (userInitiated)
             {
@@ -3975,7 +4049,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         catch (Exception exception)
         {
             IsServiceOnline = false;
-            _hardwareControlArmedThisConnection = false; // re-arm on the next successful connection
+            _hardwareControlArmedThisConnection = false;
+            _hardwareControlArmAttemptedThisConnection = false;
+            SetHardwareControlState(false);
             _status = null;
             _operation = null;
             NotifyOperationProperties();
@@ -4061,6 +4137,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(ServiceCompatibilityTone));
         OnPropertyChanged(nameof(IsServiceUpgradeRequired));
         OnPropertyChanged(nameof(CanUseServiceWrites));
+        OnPropertyChanged(nameof(IsRecoveryRequired));
         OnPropertyChanged(nameof(ServiceStateLabel));
         OnPropertyChanged(nameof(ConnectionTone));
         OnPropertyChanged(nameof(CanWrite));
@@ -4070,6 +4147,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         RebuildExperimentalControlCenter();
         UpdateSafetySummary();
         NotifyOperationEligibility();
+        _applyProfileCommand.RaiseCanExecuteChanged();
+        _resetVerifiedCommand.RaiseCanExecuteChanged();
+        _toggleHardwareControlCommand.RaiseCanExecuteChanged();
+    }
+
+    private void NotifyServiceWriteStateChanged()
+    {
+        OnPropertyChanged(nameof(CanUseServiceWrites));
+        OnPropertyChanged(nameof(IsRecoveryRequired));
+        OnPropertyChanged(nameof(CanWrite));
+        OnPropertyChanged(nameof(WriteStateLabel));
+        OnPropertyChanged(nameof(ConnectionTone));
+        _toggleHardwareControlCommand.RaiseCanExecuteChanged();
+        RaiseHardwareControlCanExecuteChanged();
         _applyProfileCommand.RaiseCanExecuteChanged();
         _resetVerifiedCommand.RaiseCanExecuteChanged();
     }
@@ -4641,7 +4732,16 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 new WindowsPeripheralInventoryAdapter(),
                 new LibreHardwareMonitorAdapter()
             ]);
-            _snapshot = await _localCoordinator.CaptureAsync(_lifetime.Token);
+            AdapterCoordinator coordinator = _localCoordinator;
+            CancellationToken cancellationToken = _lifetime.Token;
+            HardwareSnapshot localSnapshot = await Task.Run(
+                () => coordinator.CaptureAsync(cancellationToken),
+                cancellationToken);
+
+            // This continuation deliberately resumes on the WPF Dispatcher. The
+            // synchronous WMI/native probe above runs entirely on a worker thread;
+            // only its completed immutable snapshot reaches UI-bound state.
+            _snapshot = localSnapshot;
             _lastLocalProbe = DateTimeOffset.UtcNow;
             DataSourceLabel = LocalProbeLabel;
             if (Profiles.Count == 0)
@@ -4816,33 +4916,58 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
 
+        // CollectionChanged drives both WPF item generation and the ScottPlot
+        // comparison redraw. Hold every high-frequency collection until the
+        // complete snapshot has been reconciled, then publish at most one Reset
+        // per changed collection. Keep the plot collection first so the reverse
+        // disposal order refreshes it after the supporting lists are current.
+        using IDisposable collectionBatch = CollectionNotificationBatch.Defer(
+            MonitoringComparisonSeries,
+            MonitoringTrends,
+            VisibleMonitoringTrends,
+            ImportantSensors,
+            CoolingSensors,
+            PerformanceSensors,
+            ProfileCards,
+            CoolingCapabilities,
+            PerformanceCapabilities,
+            CapabilityDecisions,
+            ExperimentalControls,
+            Devices,
+            Diagnostics,
+            AdapterHealth,
+            CalibrationTargets,
+            TuneTargets,
+            RgbRouteAssessments);
+
         UpdateMonitoringTrends();
         RebuildGpuControlSliders();
+        SynchronizeAutomaticCoolingSelection();
         ActiveProfileName = Profiles.FirstOrDefault(profile => profile.Id == _status?.ActiveProfileId)?.Name ?? "None";
         Replace(ProfileCards, Profiles.Select(profile =>
         {
             _suiteProfilesById.TryGetValue(profile.Id, out ProfileV2? suiteProfile);
             return ProfileCardDisplay.From(profile, profile.Id == _status?.ActiveProfileId, suiteProfile);
-        }));
+        }), card => card.Profile.Id, StringComparer.Ordinal);
 
         Replace(ImportantSensors, SelectImportantSensors(_snapshot).Select(sensor => new SensorDisplay(
             sensor.Name,
             FindDevice(sensor.DeviceId),
             FormatSensorValue(sensor),
             TemperatureSeverity(sensor),
-            SensorGlyph(sensor.Unit))));
+            SensorGlyph(sensor.Unit))), sensor => (sensor.Device, sensor.Name));
         Replace(CoolingSensors, SelectCoolingSensors(_snapshot).Select(sensor => new SensorDisplay(
             sensor.Name,
             FindDevice(sensor.DeviceId),
             FormatSensorValue(sensor),
             TemperatureSeverity(sensor),
-            SensorGlyph(sensor.Unit))));
+            SensorGlyph(sensor.Unit))), sensor => (sensor.Device, sensor.Name));
         Replace(PerformanceSensors, SelectPerformanceSensors(_snapshot).Select(sensor => new SensorDisplay(
             sensor.Name,
             FindDevice(sensor.DeviceId),
             FormatSensorValue(sensor),
             TemperatureSeverity(sensor),
-            SensorGlyph(sensor.Unit))));
+            SensorGlyph(sensor.Unit))), sensor => (sensor.Device, sensor.Name));
 
         _allDevices.Clear();
         _allDevices.AddRange(_snapshot.Devices
@@ -4856,28 +4981,32 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             .Where(capability => !IsInformationalDuplicate(capability, _snapshot.Capabilities))
             .OrderBy(CapabilityRank)
             .ThenBy(capability => capability.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(CapabilityDisplay.From));
+            .Select(CapabilityDisplay.From), capability => capability.Id, StringComparer.Ordinal);
         Replace(PerformanceCapabilities, _snapshot.Capabilities
             .Where(capability => !IsCoolingCapability(capability) && capability.Domain != ControlDomain.Lighting)
             .Where(capability => !IsInformationalDuplicate(capability, _snapshot.Capabilities))
             .OrderBy(CapabilityRank)
             .ThenBy(capability => capability.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(CapabilityDisplay.From));
+            .Select(CapabilityDisplay.From), capability => capability.Id, StringComparer.Ordinal);
         Replace(CapabilityDecisions, _snapshot.Capabilities
             .OrderBy(CapabilityRank)
             .ThenBy(capability => capability.Domain)
             .ThenBy(capability => capability.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(CapabilityDisplay.From));
+            .Select(CapabilityDisplay.From), capability => capability.Id, StringComparer.Ordinal);
         UpdateOperationTargets();
         RebuildExperimentalControlCenter();
 
         List<DiagnosticDisplay> diagnostics = _snapshot.Warnings.Select(DiagnosticDisplay.From).ToList();
         diagnostics.AddRange(_snapshot.Conflicts.Where(conflict => conflict.IsRunning).Select(DiagnosticDisplay.From));
-        Replace(Diagnostics, diagnostics.OrderBy(DiagnosticDisplay.Rank).ThenBy(item => item.Title, StringComparer.OrdinalIgnoreCase));
+        Replace(
+            Diagnostics,
+            diagnostics.OrderBy(DiagnosticDisplay.Rank).ThenBy(item => item.Title, StringComparer.OrdinalIgnoreCase),
+            diagnostic => diagnostic.Title,
+            StringComparer.Ordinal);
         Replace(AdapterHealth, _snapshot.AdapterHealth
             .OrderBy(health => health.Healthy ? 1 : 0)
             .ThenBy(health => health.AdapterId, StringComparer.OrdinalIgnoreCase)
-            .Select(AdapterHealthDisplay.From));
+            .Select(AdapterHealthDisplay.From), health => health.Name, StringComparer.Ordinal);
         if (OpenRgbEnabled && HasLightingConflict)
         {
             OpenRgbStatus = LightingConflictReason;
@@ -4907,7 +5036,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 FindDevice(capability.DeviceId),
                 GetCoolingOutputAssignment(capability),
                 CanUseServiceWrites,
-                AdvancedWritesAcknowledged)));
+                AdvancedWritesAcknowledged)),
+            control => control.Descriptor.Id,
+            StringComparer.Ordinal);
         NotifyExperimentalControlProperties();
     }
 
@@ -5023,7 +5154,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             _monitoringPreferences,
             maximumPoints: 24);
         Replace(MonitoringTrends, trends.Take(32).Select(trend => SensorTrendDisplay.From(trend)
-            .WithPinned(_monitoringPreferences.PinnedSensorIds.Contains(trend.SensorId, StringComparer.Ordinal))));
+            .WithPinned(_monitoringPreferences.PinnedSensorIds.Contains(trend.SensorId, StringComparer.Ordinal))),
+            trend => trend.SensorId,
+            StringComparer.Ordinal);
         SelectedMonitoringTrend = MonitoringTrends.FirstOrDefault(item => item.SensorId == selectedId)
             ?? MonitoringTrends.FirstOrDefault(item => item.IsPinned)
             ?? MonitoringTrends.FirstOrDefault();
@@ -5045,7 +5178,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 _monitoringPreferences.PinnedSensorIds)
             .Select(item => item.SensorId)
             .ToHashSet(StringComparer.Ordinal);
-        Replace(VisibleMonitoringTrends, MonitoringTrends.Where(item => included.Contains(item.SensorId)));
+        Replace(
+            VisibleMonitoringTrends,
+            MonitoringTrends.Where(item => included.Contains(item.SensorId)),
+            trend => trend.SensorId,
+            StringComparer.Ordinal);
         OnPropertyChanged(nameof(MonitoringTrendScopeLabel));
         OnPropertyChanged(nameof(MonitoringTrendFilterSummary));
         OnPropertyChanged(nameof(HasVisibleMonitoringTrends));
@@ -5063,7 +5200,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             .Take(4)
             .ToArray();
         Replace(MonitoringComparisonSeries, selectedIds
-            .Select((id, index) => SensorComparisonSeriesDisplay.From(trendsById[id], index)));
+            .Select((id, index) => SensorComparisonSeriesDisplay.From(trendsById[id], index)),
+            series => series.SensorId,
+            StringComparer.Ordinal);
         HashSet<string> selected = new(selectedIds, StringComparer.Ordinal);
         SelectedMonitoringComparisonTrend = MonitoringTrends.FirstOrDefault(trend => trend.SensorId == selectedId)
             ?? MonitoringTrends.FirstOrDefault(trend => !selected.Contains(trend.SensorId))
@@ -5180,8 +5319,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             .ThenBy(capability => capability.Name, StringComparer.OrdinalIgnoreCase)
             .Select(capability => OperationTargetDisplay.From(capability, FindDevice(capability.DeviceId), null))
             .ToArray();
-        Replace(CalibrationTargets, calibrationTargets);
-        Replace(TuneTargets, tuneTargets);
+        Replace(CalibrationTargets, calibrationTargets, target => target.Descriptor.Id, StringComparer.Ordinal);
+        Replace(TuneTargets, tuneTargets, target => target.Descriptor.Id, StringComparer.Ordinal);
 
         OperationTargetDisplay? nextCalibration = calibrationTargets.FirstOrDefault(
             target => string.Equals(target.Descriptor.Id, calibrationId, StringComparison.Ordinal))
@@ -5256,7 +5395,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             filtered = filtered.Where(device => device.SearchText.Contains(query, StringComparison.OrdinalIgnoreCase));
         }
 
-        Replace(Devices, filtered);
+        Replace(Devices, filtered, device => device.Id, StringComparer.Ordinal);
         DeviceResultSummary = _allDevices.Count == 0
             ? "No inventory loaded"
             : string.IsNullOrEmpty(query)
@@ -5767,11 +5906,38 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private static void Replace<T>(ObservableCollection<T> target, IEnumerable<T> items)
     {
+        if (target is BatchedObservableCollection<T> batched)
+        {
+            batched.Synchronize(items);
+            return;
+        }
+
+        T[] desired = items.ToArray();
+        if (target.SequenceEqual(desired))
+        {
+            return;
+        }
+
         target.Clear();
-        foreach (T item in items)
+        foreach (T item in desired)
         {
             target.Add(item);
         }
+    }
+
+    private static void Replace<T, TKey>(
+        ObservableCollection<T> target,
+        IEnumerable<T> items,
+        Func<T, TKey> keySelector,
+        IEqualityComparer<TKey>? keyComparer = null)
+    {
+        if (target is BatchedObservableCollection<T> batched)
+        {
+            batched.SynchronizeByKey(items, keySelector, keyComparer);
+            return;
+        }
+
+        Replace(target, items);
     }
 
     private void ReportError(Exception exception) => ShowNotice(exception.Message, "Error");

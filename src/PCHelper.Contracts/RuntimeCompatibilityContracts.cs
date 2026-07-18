@@ -48,6 +48,7 @@ public static class ServiceRuntimeFeatures
     public const string AdapterTrace = "adapter-trace";
     public const string CoolingGraphs = "cooling-graphs";
     public const string CoolingOutputRoles = "cooling-output-roles";
+    public const string VerifiedHardwareControl = "verified-hardware-control";
 
     public static IReadOnlyList<string> RequiredByDashboard { get; } =
     [
@@ -57,7 +58,8 @@ public static class ServiceRuntimeFeatures
         FanCalibrations,
         Reliability,
         AdapterTrace,
-        CoolingOutputRoles
+        CoolingOutputRoles,
+        VerifiedHardwareControl
     ];
 
     public static IReadOnlyList<string> AdvertisedByCurrentService { get; } =
@@ -69,7 +71,8 @@ public static class ServiceRuntimeFeatures
         Reliability,
         AdapterTrace,
         CoolingGraphs,
-        CoolingOutputRoles
+        CoolingOutputRoles,
+        VerifiedHardwareControl
     ];
 }
 

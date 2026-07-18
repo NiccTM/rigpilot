@@ -12,11 +12,12 @@ namespace PCHelper.Adapters;
 /// or (separately) tuning adapter would be built on this evidence later. See
 /// docs/qualification/cpu-tuning-and-intel-arc.md.
 /// </summary>
-public sealed class IntelGraphicsControlAdapter : IHardwareAdapter
+public sealed class IntelGraphicsControlAdapter : IHardwareAdapter, IAdapterTopologyCachePolicy
 {
     private const string AdapterId = "intel.igcl";
     private const string ControlLibraryName = "ControlLib.dll";
     private const string InitEntryPoint = "ctlInit";
+    private bool? _libraryPresent;
 
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
@@ -28,9 +29,12 @@ public sealed class IntelGraphicsControlAdapter : IHardwareAdapter
         ["Intel Arc / Xe graphics with the Intel driver installed"],
         ["IntelGraphicsControlFeasibility", "GpuWritesSafetyLocked"]);
 
+    public TimeSpan TopologyCacheDuration => TimeSpan.FromSeconds(30);
+
     public Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken)
     {
         (bool libraryPresent, bool initPresent) = DetectControlLibrary();
+        _libraryPresent = libraryPresent;
         List<CapabilityDescriptor> capabilities = [];
 
         // Only surface a card when the Intel control library is actually present, so
@@ -80,7 +84,7 @@ public sealed class IntelGraphicsControlAdapter : IHardwareAdapter
 
     public Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
-        (bool libraryPresent, _) = DetectControlLibrary();
+        bool libraryPresent = _libraryPresent ?? DetectControlLibrary().LibraryPresent;
         return Task.FromResult(new AdapterHealth(
             AdapterId,
             true,

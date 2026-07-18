@@ -4,7 +4,7 @@ using PCHelper.Contracts;
 
 namespace PCHelper.Adapters;
 
-public sealed partial class WindowsPowerAdapter : IHardwareAdapter
+public sealed partial class WindowsPowerAdapter : IHardwareAdapter, IHardwareStateVerifier
 {
     private const string CapabilityId = "windows.power.active-scheme";
     private static readonly Guid BalancedScheme = Guid.Parse("381b4222-f694-41f0-9685-ff5bb260df2e");
@@ -139,6 +139,53 @@ public sealed partial class WindowsPowerAdapter : IHardwareAdapter
 
         SetActiveScheme(BalancedScheme);
         return Task.CompletedTask;
+    }
+
+    public Task<HardwareStateVerification> VerifyDefaultStateAsync(
+        string capabilityId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!string.Equals(capabilityId, CapabilityId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Unknown capability.", nameof(capabilityId));
+        }
+
+        Guid actual = GetActiveScheme();
+        bool success = actual == BalancedScheme;
+        return Task.FromResult(new HardwareStateVerification(
+            Manifest.Id,
+            capabilityId,
+            success,
+            ControlValue.FromText(actual.ToString("D")),
+            success ? "Windows power-scheme read-back matched Balanced." : $"Windows power-scheme read-back observed {actual:D}, not Balanced."));
+    }
+
+    public Task<HardwareStateVerification> VerifyRollbackStateAsync(
+        PreparedAction action,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureAction(action.Action);
+        if (action.PreviousValue is null)
+        {
+            return Task.FromResult(new HardwareStateVerification(
+                Manifest.Id,
+                action.Action.CapabilityId,
+                false,
+                null,
+                "The prior Windows power scheme was not captured; rollback cannot be verified."));
+        }
+
+        Guid expected = ParseScheme(action.PreviousValue);
+        Guid actual = GetActiveScheme();
+        bool success = expected == actual;
+        return Task.FromResult(new HardwareStateVerification(
+            Manifest.Id,
+            action.Action.CapabilityId,
+            success,
+            ControlValue.FromText(actual.ToString("D")),
+            success ? "Windows power-scheme rollback was read back." : $"Expected rollback scheme {expected:D}, observed {actual:D}."));
     }
 
     public Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken)

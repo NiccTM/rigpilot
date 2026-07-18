@@ -4,7 +4,7 @@ using PCHelper.Contracts;
 
 namespace PCHelper.Adapters;
 
-public sealed class SystemInventoryAdapter : IHardwareAdapter
+public sealed class SystemInventoryAdapter : IHardwareAdapter, IAdapterTopologyCachePolicy
 {
     public AdapterManifest Manifest { get; } = new(
         "windows.inventory",
@@ -15,6 +15,8 @@ public sealed class SystemInventoryAdapter : IHardwareAdapter
         AdapterExecutionContext.SystemService,
         ["Windows 10 22H2 x64", "Windows 11 x64"],
         ["Inventory"]);
+
+    public TimeSpan TopologyCacheDuration => TimeSpan.FromMinutes(5);
 
     public Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken)
     {

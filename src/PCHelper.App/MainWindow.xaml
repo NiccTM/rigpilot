@@ -339,7 +339,8 @@
                   automation:AutomationProperties.AutomationId="Header.InterfaceMode">
             <TextBlock Text="{Binding InterfaceModeLabel}" Style="{StaticResource BadgeTextStyle}" />
           </Border>
-          <CheckBox IsChecked="{Binding HardwareControlEnabled}"
+          <CheckBox IsChecked="{Binding HardwareControlEnabled, Mode=OneWay}"
+                    Command="{Binding ToggleHardwareControlCommand}"
                     VerticalAlignment="Center"
                     Margin="0,0,14,0"
                     ToolTip="Owner acknowledgement, remembered on this machine: arms every implemented GPU write family (fan, power limit, clocks) while connected. Turning it off restores vendor defaults."
@@ -1118,7 +1119,7 @@
                 <Grid>
                   <StackPanel>
                     <TextBlock Text="Fan controls" Style="{StaticResource CardTitleStyle}" />
-                    <TextBlock Text="Set any fan directly. Every apply is bounds-clamped and read-back verified; pump and CPU-fan protections always hold." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                    <TextBlock Text="Set eligible case-fan outputs directly. Every apply is bounds-clamped and read-back verified; protected pump and CPU-fan headers are excluded." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
                   </StackPanel>
                   <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
                     <ContentControl Content="Blocked" Margin="0,0,8,0">
@@ -1159,6 +1160,7 @@
                         <Button Grid.Column="3" Content="Apply"
                                 Command="{Binding DataContext.ApplyGpuControlCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                 CommandParameter="{Binding}"
+                                Style="{StaticResource HardwareActionButtonStyle}"
                                 automation:AutomationProperties.Name="{Binding Name, StringFormat=Apply {0}}" />
                       </Grid>
                     </DataTemplate>
@@ -1180,27 +1182,27 @@
                             automation:AutomationProperties.Name="AIO pump duty" />
                     <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,10,0"
                                Text="{Binding Value, ElementName=PumpSlider, Mode=OneWay, StringFormat={}{0:0} %}" />
-                    <Button Grid.Column="3" Content="Apply" Command="{Binding SetKrakenPumpCommand}"
-                            automation:AutomationProperties.Name="Apply AIO pump duty" />
+                    <Button Grid.Column="3" Content="Apply" Command="{Binding SetKrakenPumpCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                            automation:AutomationProperties.Name="Apply AIO pump duty" automation:AutomationProperties.AutomationId="Cooling.ApplyPump" />
                   </Grid>
                 </Border>
                 <TextBlock Text="{Binding KrakenPumpStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,6,0,0" />
                 <TextBlock Text="AUTOMATIC FAN CURVE (CPU/GPU TEMPERATURE)" Style="{StaticResource EyebrowStyle}" Margin="0,14,0,5" />
-                <TextBlock Text="Binds every writable fan output to the maximum of CPU and GPU temperature through the service graph engine, with a 50% safety floor, full speed at the mode's critical temperature, and stale-sensor maximum cooling. Pump and CPU-fan protections always hold." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />
+                <TextBlock Text="Binds every writable fan output to the maximum of CPU and GPU temperature through the service graph engine, with a 20% minimum (or the controller's higher reported minimum), full speed at the mode's critical temperature, and stale-sensor maximum cooling. Pump and CPU-fan protections always hold." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />
                 <WrapPanel>
-                  <Button Content="Silent" Command="{Binding EnableCaseFansAutoModeCommand}" CommandParameter="silent" Margin="0,0,8,8" x:Name="CaseFansAutoModeButton"
+                  <Button Content="Silent" Command="{Binding EnableCaseFansAutoModeCommand}" CommandParameter="silent" Style="{StaticResource HardwareModeButtonStyle}" Tag="{Binding IsCaseFanSilentSelected}" Margin="0,0,8,8" x:Name="CaseFansAutoModeButton"
                           ToolTip="Quiet-biased curve: stays near the floor longer and reaches full speed only near critical (88 °C)."
                           automation:AutomationProperties.Name="Enable silent automatic fan curve for case fans"
                           automation:AutomationProperties.AutomationId="Cooling.CaseFansSilent" />
-                  <Button Content="Balanced" Command="{Binding EnableCaseFansAutoModeCommand}" CommandParameter="balanced" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                  <Button Content="Balanced" Command="{Binding EnableCaseFansAutoModeCommand}" CommandParameter="balanced" Style="{StaticResource HardwareModeButtonStyle}" Tag="{Binding IsCaseFanBalancedSelected}" Margin="0,0,8,8"
                           ToolTip="The default balance of noise and temperature (full speed at 85 °C)."
                           automation:AutomationProperties.Name="Enable balanced automatic fan curve for case fans"
                           automation:AutomationProperties.AutomationId="Cooling.EnableCaseFansAutoMode" />
-                  <Button Content="Cooling" Command="{Binding EnableCaseFansAutoModeCommand}" CommandParameter="cooling" Margin="0,0,8,8"
+                  <Button Content="Cooling" Command="{Binding EnableCaseFansAutoModeCommand}" CommandParameter="cooling" Style="{StaticResource HardwareModeButtonStyle}" Tag="{Binding IsCaseFanCoolingSelected}" Margin="0,0,8,8"
                           ToolTip="Temperature-biased curve: ramps early and steeply, reaching full speed at a lower temperature (78 °C)."
                           automation:AutomationProperties.Name="Enable cooling automatic fan curve for case fans"
                           automation:AutomationProperties.AutomationId="Cooling.CaseFansCooling" />
-                  <Button Content="Adaptive (pick for me)" Command="{Binding StartAdaptiveCoolingCommand}" CommandParameter="case" Margin="0,0,8,8"
+                  <Button Content="Adaptive (pick for me)" Command="{Binding StartAdaptiveCoolingCommand}" CommandParameter="case" Style="{StaticResource HardwareModeButtonStyle}" Margin="0,0,8,8"
                           ToolTip="Reads the current CPU and GPU temperatures and picks Silent, Balanced, or Cooling for you — with hysteresis so it doesn't flap at a boundary. Cool (≤55 °C) → Silent; hot (≥75 °C) → Cooling; otherwise Balanced."
                           automation:AutomationProperties.Name="Enable adaptive automatic fan curve chosen from live temperatures"
                           automation:AutomationProperties.AutomationId="Cooling.CaseFansAdaptive" />
@@ -1401,7 +1403,7 @@
                     </Border>
                     <WrapPanel>
                       <Button Content="Start calibration" Command="{Binding StartCalibrationCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" ToolTipService.ShowOnDisabled="True" ToolTip="{Binding CalibrationEligibilityReason}" automation:AutomationProperties.AutomationId="Cooling.StartCalibration" />
-                      <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Margin="0,0,8,8" automation:AutomationProperties.AutomationId="Cooling.AbortCalibration" />
+                      <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8" automation:AutomationProperties.AutomationId="Cooling.AbortCalibration" />
                     </WrapPanel>
                     <Border Style="{StaticResource InsetCardStyle}" Margin="0,8,0,0">
                       <StackPanel>
@@ -1800,39 +1802,40 @@
                         <Button Grid.Column="3" Content="Apply"
                                 Command="{Binding DataContext.ApplyGpuControlCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                 CommandParameter="{Binding}"
+                                Style="{StaticResource HardwareActionButtonStyle}"
                                 automation:AutomationProperties.Name="{Binding Name, StringFormat=Apply {0}}" />
                       </Grid>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <WrapPanel Margin="0,14,0,0">
-                  <Button Content="Auto OC core" Command="{Binding StartGpuAutoOcCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                  <Button Content="Auto OC core" Command="{Binding StartGpuAutoOcCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                           ToolTip="Refined core-clock search: climbs in coarse steps, bisects the gap to the first failure to find the stability edge, then backs off a 15 MHz safety margin for headroom. Thermal/WHEA/display-reset aborts, rollback, boot sentinel, no voltage. Labelled 'Passed 10-minute screening', never 'stable'."
                           automation:AutomationProperties.Name="Start GPU core auto overclock screening"
                           automation:AutomationProperties.AutomationId="Performance.AutoOcCore" />
-                  <Button Content="Auto OC memory" Command="{Binding StartGpuMemoryAutoOcCommand}" Margin="0,0,8,8"
+                  <Button Content="Auto OC memory" Command="{Binding StartGpuMemoryAutoOcCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                           ToolTip="The same refined climb, edge-find, and back-off search applied to the GDDR6X memory clock offset (100 MHz safety margin). Often the larger real-world gain on this card. Same aborts, rollback, and boot sentinel; no voltage."
                           automation:AutomationProperties.Name="Start GPU memory auto overclock screening"
                           automation:AutomationProperties.AutomationId="Performance.AutoOcMemory" />
-                  <Button Content="Full Auto OC" Command="{Binding StartFullAutoOcCommand}" Margin="0,0,8,8"
+                  <Button Content="Full Auto OC" Command="{Binding StartFullAutoOcCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                           ToolTip="Unattended complete pass: runs the core-clock auto-OC to completion, then the memory pass — each with the full safety envelope (83 °C ceiling, screening, rollback, boot sentinel). Memory is never tuned on top of a failed core run."
                           automation:AutomationProperties.Name="Start full unattended auto overclock (core then memory)"
                           automation:AutomationProperties.AutomationId="Performance.FullAutoOc" />
-                  <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Margin="0,0,8,8" />
+                  <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8" />
                 </WrapPanel>
                 <TextBlock Text="{Binding FullAutoOcStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" />
                 <TextBlock Text="AUTOMATIC GPU FAN CURVE" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,5" />
-                <TextBlock Text="Binds the armed GPU fan to GPU temperature through the service graph engine, with a 50% safety floor, full speed at the mode's critical temperature, and stale-sensor maximum cooling." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />
+                <TextBlock Text="Binds the armed GPU fan to GPU temperature through the service graph engine, with a 20% minimum (or the controller's higher reported minimum), full speed at the mode's critical temperature, and stale-sensor maximum cooling." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />
                 <WrapPanel>
-                  <Button Content="Silent" Command="{Binding EnableGpuFanAutoModeCommand}" CommandParameter="silent" Margin="0,0,8,8"
+                  <Button Content="Silent" Command="{Binding EnableGpuFanAutoModeCommand}" CommandParameter="silent" Style="{StaticResource HardwareModeButtonStyle}" Tag="{Binding IsGpuFanSilentSelected}" Margin="0,0,8,8"
                           ToolTip="Quiet-biased GPU fan curve: stays near the floor longer, full speed only near critical (88 °C)."
                           automation:AutomationProperties.Name="Enable silent automatic GPU fan curve"
                           automation:AutomationProperties.AutomationId="Performance.GpuFanSilent" />
-                  <Button Content="Balanced" Command="{Binding EnableGpuFanAutoModeCommand}" CommandParameter="balanced" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                  <Button Content="Balanced" Command="{Binding EnableGpuFanAutoModeCommand}" CommandParameter="balanced" Style="{StaticResource HardwareModeButtonStyle}" Tag="{Binding IsGpuFanBalancedSelected}" Margin="0,0,8,8"
                           ToolTip="Default balance of noise and temperature (full speed at 85 °C)."
                           automation:AutomationProperties.Name="Enable balanced automatic GPU fan curve"
                           automation:AutomationProperties.AutomationId="Performance.EnableGpuFanAutoMode" />
-                  <Button Content="Cooling" Command="{Binding EnableGpuFanAutoModeCommand}" CommandParameter="cooling" Margin="0,0,8,8"
+                  <Button Content="Cooling" Command="{Binding EnableGpuFanAutoModeCommand}" CommandParameter="cooling" Style="{StaticResource HardwareModeButtonStyle}" Tag="{Binding IsGpuFanCoolingSelected}" Margin="0,0,8,8"
                           ToolTip="Temperature-biased GPU fan curve: ramps early and steeply, full speed at a lower temperature (78 °C)."
                           automation:AutomationProperties.Name="Enable cooling automatic GPU fan curve"
                           automation:AutomationProperties.AutomationId="Performance.GpuFanCooling" />
@@ -1848,13 +1851,13 @@
                     <TextBlock Text="Guided undervolt" FontWeight="SemiBold" />
                     <TextBlock Text="{Binding UndervoltStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,4,0,10" automation:AutomationProperties.AutomationId="Performance.UndervoltStatus" />
                     <WrapPanel>
-                      <Button Content="Quiet (−25% power)" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="quiet" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                      <Button Content="Quiet (−25% power)" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="quiet" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                               ToolTip="Sets the GPU power limit to 75% of the vendor default. Biggest heat and noise reduction; a small FPS cost is possible in power-hungry titles."
                               automation:AutomationProperties.Name="Apply quiet undervolt preset" automation:AutomationProperties.AutomationId="Performance.UndervoltQuiet" />
-                      <Button Content="Efficient (−15% power)" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="efficient" Margin="0,0,8,8"
+                      <Button Content="Efficient (−15% power)" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="efficient" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                               ToolTip="Sets the GPU power limit to 85% of the vendor default. Near-stock frame rates with noticeably less heat in most games."
                               automation:AutomationProperties.Name="Apply efficient undervolt preset" automation:AutomationProperties.AutomationId="Performance.UndervoltEfficient" />
-                      <Button Content="Back to stock" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="stock" Margin="0,0,8,8"
+                      <Button Content="Back to stock" Command="{Binding ApplyUndervoltPresetCommand}" CommandParameter="stock" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                               ToolTip="Restores the vendor default power limit."
                               automation:AutomationProperties.Name="Restore stock power target" automation:AutomationProperties.AutomationId="Performance.UndervoltStock" />
                     </WrapPanel>
@@ -1937,8 +1940,8 @@
                       <TextBlock Text="{Binding SelectedTuneTarget.DisplayName, StringFormat=I confirm this exact target: {0}}" TextWrapping="Wrap" />
                     </CheckBox>
                     <WrapPanel>
-                      <Button Content="Start 10-minute tune" Command="{Binding StartTuneCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" ToolTipService.ShowOnDisabled="True" ToolTip="{Binding TuneEligibilityReason}" />
-                      <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Margin="0,0,8,8" />
+                      <Button Content="Start 10-minute tune" Command="{Binding StartTuneCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" ToolTipService.ShowOnDisabled="True" ToolTip="{Binding TuneEligibilityReason}" automation:AutomationProperties.AutomationId="Performance.StartTune" automation:AutomationProperties.Name="Start bounded 10-minute tune" />
+                      <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8" />
                     </WrapPanel>
                     <Border Style="{StaticResource InsetCardStyle}" Margin="0,8,0,0">
                       <StackPanel>
@@ -2139,30 +2142,30 @@
                   <Separator Margin="0,4" />
                   <TextBlock Text="SYNC EVERYTHING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <WrapPanel>
-                    <Button Content="Sync colour to all devices" Command="{Binding SyncAllRgbCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                    <Button Content="Sync colour to all devices" Command="{Binding SyncAllRgbCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             ToolTip="One click: the chosen colour to the Kraken, both Aura headers (including the ELV8 GPU holder), the Trident Z RAM, and the Razer case — each through its own gated native path, with a combined result."
                             automation:AutomationProperties.Name="Sync the chosen colour to every native RGB device" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgb" />
-                    <Button Content="All lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                    <Button Content="All lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             automation:AutomationProperties.Name="Turn every native RGB device off" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgbOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
                   <TextBlock Text="KRAKEN COOLER" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding KrakenLightingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingStatus" />
                   <WrapPanel>
-                    <Button Content="Apply to Kraken" Command="{Binding ApplyKrakenLightingCommand}" Margin="0,0,8,8"
+                    <Button Content="Apply to Kraken" Command="{Binding ApplyKrakenLightingCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             ToolTip="Writes the static colour to the Kraken's ring and logo through RigPilot's own contained HID adapter (liquidctl-derived protocol). Lighting only; there is no firmware read-back, so confirm visually."
                             automation:AutomationProperties.Name="Apply static colour to Kraken via native adapter" automation:AutomationProperties.AutomationId="Lighting.ApplyKrakenLighting" />
-                    <Button Content="Kraken lighting off" Command="{Binding ApplyKrakenLightingCommand}" CommandParameter="off" Margin="0,0,8,8"
+                    <Button Content="Kraken lighting off" Command="{Binding ApplyKrakenLightingCommand}" CommandParameter="off" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             automation:AutomationProperties.Name="Turn Kraken lighting off via native adapter" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
                   <TextBlock Text="AURA HEADERS" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <WrapPanel>
-                    <Button Content="Apply to Aura board" Command="{Binding ApplyAuraLightingCommand}" Margin="0,0,8,8"
+                    <Button Content="Apply to Aura board" Command="{Binding ApplyAuraLightingCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             ToolTip="Writes the static colour to both addressable AURA headers through RigPilot's own contained HID adapter (clean-room documented protocol). Lighting only; confirm visually."
-                            automation:AutomationProperties.Name="Apply static colour to the AURA board via native adapter" />
-                    <Button Content="Aura lighting off" Command="{Binding ApplyAuraLightingCommand}" CommandParameter="off" Margin="0,0,8,8"
-                            automation:AutomationProperties.Name="Turn AURA lighting off via native adapter" />
+                            automation:AutomationProperties.Name="Apply static colour to the AURA board via native adapter" automation:AutomationProperties.AutomationId="Lighting.ApplyAura" />
+                    <Button Content="Aura lighting off" Command="{Binding ApplyAuraLightingCommand}" CommandParameter="off" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn AURA lighting off via native adapter" automation:AutomationProperties.AutomationId="Lighting.AuraOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
                   <TextBlock Text="ELV8 GPU HOLDER" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
@@ -2175,28 +2178,28 @@
                       <ComboBoxItem Content="Header 1" />
                       <ComboBoxItem Content="Header 2" />
                     </ComboBox>
-                    <Button Content="Apply to bracket" Command="{Binding ApplyGpuBracketCommand}" Margin="0,0,8,8"
+                    <Button Content="Apply to bracket" Command="{Binding ApplyGpuBracketCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             ToolTip="Writes the static colour to only the selected addressable header — the one the Cooler Master GPU sag bracket is on. No read-back; confirm visually."
                             automation:AutomationProperties.Name="Apply static colour to the GPU sag bracket header" automation:AutomationProperties.AutomationId="Lighting.ApplyGpuBracket" />
-                    <Button Content="Bracket lighting off" Command="{Binding ApplyGpuBracketCommand}" CommandParameter="off" Margin="0,0,8,8"
+                    <Button Content="Bracket lighting off" Command="{Binding ApplyGpuBracketCommand}" CommandParameter="off" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             automation:AutomationProperties.Name="Turn the GPU sag bracket header lighting off" automation:AutomationProperties.AutomationId="Lighting.GpuBracketOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
                   <TextBlock Text="TRIDENT Z RAM" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <WrapPanel>
-                    <Button Content="Apply to RAM" Command="{Binding ApplyDimmRgbCommand}" Margin="0,0,8,8"
+                    <Button Content="Apply to RAM" Command="{Binding ApplyDimmRgbCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             ToolTip="Writes the static colour to the G.Skill Trident Z RGB sticks through RigPilot's own SMBus adapter (signed PawnIO transport, identity-verified ENE controller, first-light audited on this kit). All sticks change together; there is no read-back, so confirm visually."
                             automation:AutomationProperties.Name="Apply static colour to Trident Z RAM via native SMBus adapter" automation:AutomationProperties.AutomationId="Lighting.ApplyDimmRgb" />
-                    <Button Content="RAM lighting off" Command="{Binding ApplyDimmRgbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                    <Button Content="RAM lighting off" Command="{Binding ApplyDimmRgbCommand}" CommandParameter="off" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             automation:AutomationProperties.Name="Turn Trident Z RAM lighting off via native SMBus adapter" automation:AutomationProperties.AutomationId="Lighting.DimmRgbOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
                   <TextBlock Text="RAZER CASE" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <WrapPanel>
-                    <Button Content="Apply to Razer case" Command="{Binding ApplyRazerUsbCommand}" Margin="0,0,8,8"
+                    <Button Content="Apply to Razer case" Command="{Binding ApplyRazerUsbCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             ToolTip="Writes the static colour to the Lian Li O11 Dynamic Razer Edition through RigPilot's own USB adapter — no Razer Synapse needed. The firmware acknowledges the command, so this result is verified."
                             automation:AutomationProperties.Name="Apply static colour to the Razer case via native adapter" automation:AutomationProperties.AutomationId="Lighting.ApplyRazerUsb" />
-                    <Button Content="Case lighting off" Command="{Binding ApplyRazerUsbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                    <Button Content="Case lighting off" Command="{Binding ApplyRazerUsbCommand}" CommandParameter="off" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
                             automation:AutomationProperties.Name="Turn the Razer case lighting off via native adapter" automation:AutomationProperties.AutomationId="Lighting.RazerUsbOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />

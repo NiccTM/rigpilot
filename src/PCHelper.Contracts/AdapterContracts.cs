@@ -21,6 +21,32 @@ public interface IHardwareAdapter : IAsyncDisposable
     Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Opt-in read-back contract for adapters that can prove a rollback or a
+/// firmware/vendor-default reset. A reset is never considered successful from
+/// the write call alone.
+/// </summary>
+public interface IHardwareStateVerifier
+{
+    Task<HardwareStateVerification> VerifyDefaultStateAsync(
+        string capabilityId,
+        CancellationToken cancellationToken);
+
+    Task<HardwareStateVerification> VerifyRollbackStateAsync(
+        PreparedAction action,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Opt-in policy for adapters whose Probe operation performs slow, mostly
+/// static topology discovery. Sensor reads remain uncached and run every
+/// telemetry tick. A zero duration keeps the default probe-every-tick behavior.
+/// </summary>
+public interface IAdapterTopologyCachePolicy
+{
+    TimeSpan TopologyCacheDuration { get; }
+}
+
 public interface IOwnershipAwareAdapter
 {
     Task<OwnershipLeaseV1> AcquireOwnershipAsync(
@@ -67,6 +93,9 @@ public interface IProfileTransactionJournal
     Task<ProfileTransaction?> GetPendingAsync(CancellationToken cancellationToken);
 
     Task ClearPendingAsync(string transactionId, CancellationToken cancellationToken);
+
+    Task<ProfileTransaction?> GetLatestCommittedAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<ProfileTransaction?>(null);
 }
 
 public interface IProfileStore

@@ -15,7 +15,7 @@ namespace PCHelper.Adapters;
 /// The default is a read-only capability card, so wiring the adapter in cannot by
 /// itself un-gate a hardware write. See docs/qualification/rtx3090-fan-write-path.md.
 /// </summary>
-public sealed class NvidiaGpuFanAdapter : IHardwareAdapter
+public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifier
 {
     public const string AdapterId = "nvidia.gpufan";
     public const string CapabilityPrefix = "gpufan.duty:";
@@ -199,6 +199,44 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter
     {
         EnsureOwnedCapability(capabilityId);
         await _transport.RestoreAutomaticAsync(_channelId, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<HardwareStateVerification> VerifyDefaultStateAsync(
+        string capabilityId,
+        CancellationToken cancellationToken)
+    {
+        EnsureOwnedCapability(capabilityId);
+        GpuFanChannelState state = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        bool success = state.Policy == GpuFanControlPolicy.Automatic;
+        return new HardwareStateVerification(
+            Manifest.Id,
+            capabilityId,
+            success,
+            state.MeasuredDutyPercent is int observed ? ControlValue.FromNumeric(observed) : null,
+            success
+                ? "GPU fan read-back confirmed the driver automatic policy."
+                : $"GPU fan read-back remained in {state.Policy} policy.");
+    }
+
+    public async Task<HardwareStateVerification> VerifyRollbackStateAsync(
+        PreparedAction action,
+        CancellationToken cancellationToken)
+    {
+        EnsureOwnedCapability(action.Action.CapabilityId);
+        GpuFanChannelState? expected = DeserializeRollback(action.AdapterToken);
+        GpuFanChannelState actual = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        bool success = expected is null || expected.Policy == GpuFanControlPolicy.Automatic
+            ? actual.Policy == GpuFanControlPolicy.Automatic
+            : actual.Policy == GpuFanControlPolicy.Manual
+                && expected.CommandedDutyPercent is int requested
+                && (actual.MeasuredDutyPercent ?? actual.CommandedDutyPercent) is int observed
+                && Math.Abs(observed - requested) <= VerifyTolerancePercent;
+        return new HardwareStateVerification(
+            Manifest.Id,
+            action.Action.CapabilityId,
+            success,
+            actual.MeasuredDutyPercent is int value ? ControlValue.FromNumeric(value) : null,
+            success ? "GPU fan rollback state was read back." : "GPU fan rollback read-back did not match the captured state.");
     }
 
     public async Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken)

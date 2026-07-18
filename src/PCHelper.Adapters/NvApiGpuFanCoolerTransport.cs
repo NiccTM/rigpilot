@@ -1,6 +1,7 @@
 using NvAPIWrapper;
 using NvAPIWrapper.GPU;
 using NvAPIWrapper.Native.GPU;
+using PCHelper.Core;
 
 namespace PCHelper.Adapters;
 
@@ -15,8 +16,6 @@ namespace PCHelper.Adapters;
 public sealed class NvApiGpuFanCoolerTransport : IGpuFanCoolerTransport, IDisposable
 {
     public const string WriteOptInEnvironmentVariable = NvmlGpuFanCoolerTransport.WriteOptInEnvironmentVariable;
-    private const int ConservativeFloorPercent = 50;
-
     private readonly object _gate = new();
     private readonly PhysicalGPU _gpu;
     private bool _armed;
@@ -79,7 +78,7 @@ public sealed class NvApiGpuFanCoolerTransport : IGpuFanCoolerTransport, IDispos
             return Task.FromResult<GpuFanBounds?>(null);
         }
 
-        int minimum = Math.Max(ConservativeFloorPercent, cooler.CurrentMinimumLevel);
+        int minimum = Math.Max((int)AdaptiveCoolingProfileFactory.UncalibratedFloorDutyPercent, cooler.CurrentMinimumLevel);
         int maximum = Math.Min(100, cooler.CurrentMaximumLevel);
         return Task.FromResult<GpuFanBounds?>(new GpuFanBounds(minimum, maximum));
     }

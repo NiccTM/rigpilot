@@ -515,7 +515,9 @@ public sealed partial class MainViewModel
                 dynamicLighting,
                 openRgb,
                 OpenRgbEnabled,
-                OpenRgbConnected));
+                OpenRgbConnected),
+            assessment => assessment.Id,
+            StringComparer.Ordinal);
         NotifyRgbRoutingProperties();
     }
 

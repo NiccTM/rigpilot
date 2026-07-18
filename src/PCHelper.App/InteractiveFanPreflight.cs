@@ -347,7 +347,7 @@ public static class InteractiveFanPreflightHost
         InteractiveFanPreflightResultV1 result = await RunNoWritePrepareAsync(invocation, cancellationToken).ConfigureAwait(false);
         try
         {
-            NamedPipeRequestClient client = new(invocation.PipeName, TimeSpan.FromSeconds(10));
+            NamedPipeRequestClient client = new(invocation.PipeName, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10));
             IpcResponse response = await client.SendAsync(
                 NamedPipeRequestClient.CreateRequest(
                     IpcCommand.SubmitInteractiveFanPreflight,

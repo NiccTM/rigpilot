@@ -7,8 +7,10 @@ using PCHelper.Ipc;
 
 namespace PCHelper.Service;
 
-internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsProvider
+internal sealed class AdapterHostProxy : IHardwareAdapter, IHardwareStateVerifier, IAdapterDiagnosticsProvider, IAdapterTopologyCachePolicy
 {
+    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(10);
     private static readonly Regex StructuredFailurePattern = new(
         @"Adapter-host (?<command>\w+) failed at (?<stage>[^()]+) \((?<type>[^;]+); HResult=0x(?<hresult>[0-9A-Fa-f]{8})(?:; Win32=(?<win32>\d+))?\)",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -35,6 +37,8 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsPr
         ["LibreHardwareMonitor 0.9.6 supported devices"],
         ["Monitoring", "MotherboardFanExperimental", "GpuFanExperimental", "UsbControllerDiscoveryContainedReadOnly"]);
 
+    public TimeSpan TopologyCacheDuration => TimeSpan.FromSeconds(30);
+
     public async Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken) =>
         await SendReadAsync<AdapterProbeResult>(IpcCommand.AdapterProbe, cancellationToken).ConfigureAwait(false);
 
@@ -47,7 +51,8 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsPr
         return await SendMutationAsync<ProfileAction, PreparedAction>(
             IpcCommand.AdapterPrepare,
             action,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            mutationOutcomeUnknownOnTimeout: false).ConfigureAwait(false);
     }
 
     public async Task ApplyAsync(PreparedAction action, CancellationToken cancellationToken)
@@ -62,7 +67,8 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsPr
         await SendMutationAsync<PreparedAction, ActionVerification>(
             IpcCommand.AdapterVerify,
             action,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            mutationOutcomeUnknownOnTimeout: false).ConfigureAwait(false);
 
     public async Task RollbackAsync(PreparedAction action, CancellationToken cancellationToken)
     {
@@ -79,6 +85,24 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsPr
             new AdapterResetRequest(capabilityId),
             cancellationToken).ConfigureAwait(false);
     }
+
+    public Task<HardwareStateVerification> VerifyDefaultStateAsync(
+        string capabilityId,
+        CancellationToken cancellationToken) =>
+        SendMutationAsync<AdapterDefaultVerificationRequest, HardwareStateVerification>(
+            IpcCommand.AdapterVerifyDefault,
+            new AdapterDefaultVerificationRequest(capabilityId),
+            cancellationToken,
+            mutationOutcomeUnknownOnTimeout: false);
+
+    public Task<HardwareStateVerification> VerifyRollbackStateAsync(
+        PreparedAction action,
+        CancellationToken cancellationToken) =>
+        SendMutationAsync<AdapterRollbackVerificationRequest, HardwareStateVerification>(
+            IpcCommand.AdapterVerifyRollback,
+            new AdapterRollbackVerificationRequest(action),
+            cancellationToken,
+            mutationOutcomeUnknownOnTimeout: false);
 
     public async Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
@@ -156,13 +180,12 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsPr
 
     private async Task<T> SendReadAsync<T>(IpcCommand command, CancellationToken cancellationToken)
     {
-        TimeSpan timeout = command == IpcCommand.AdapterProbe
-            ? TimeSpan.FromSeconds(30)
-            : TimeSpan.FromSeconds(10);
+        Process? generation = null;
         try
         {
             await EnsureHostAsync(cancellationToken).ConfigureAwait(false);
-            NamedPipeRequestClient client = CreateClient(timeout);
+            generation = _process;
+            NamedPipeRequestClient client = CreateClient(OperationTimeout);
             IpcResponse response = await client.SendAsync(
                 NamedPipeRequestClient.CreateRequest(
                     command,
@@ -170,42 +193,63 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsPr
                 cancellationToken).ConfigureAwait(false);
             return ReadPayload<T>(response);
         }
+        catch (TimeoutException exception)
+        {
+            await RecycleHostAsync(generation).ConfigureAwait(false);
+            throw new TimeoutException($"Adapter Host {command} did not complete within {OperationTimeout.TotalSeconds:0} s; the host was terminated and will be recycled.", exception);
+        }
         catch (Exception exception) when (exception is IOException or EndOfStreamException)
         {
-            throw HostCommunicationException(exception);
-        }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw HostCommunicationException(new TimeoutException($"Adapter Host {command} exceeded {timeout}.", exception));
+            InvalidOperationException failure = HostCommunicationException(exception);
+            await RecycleHostAsync(generation).ConfigureAwait(false);
+            throw failure;
         }
     }
 
     private async Task<TResult> SendMutationAsync<TPayload, TResult>(
         IpcCommand command,
         TPayload payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool mutationOutcomeUnknownOnTimeout = true)
     {
-        TimeSpan timeout = TimeSpan.FromSeconds(10);
+        Process? generation = null;
         try
         {
             await EnsureHostAsync(cancellationToken).ConfigureAwait(false);
-            NamedPipeRequestClient client = CreateClient(timeout);
+            generation = _process;
+            NamedPipeRequestClient client = CreateClient(OperationTimeout);
             IpcRequest request = NamedPipeRequestClient.CreateRequest(
                 command,
                 new AdapterHostEnvelope<TPayload>(_sessionToken, payload));
             IpcResponse response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
             return ReadPayload<TResult>(response);
         }
-        catch (Exception exception) when (exception is IOException or EndOfStreamException)
+        catch (TimeoutException exception)
         {
-            InvalidOperationException failure = HostCommunicationException(exception);
+            await RecycleHostAsync(generation).ConfigureAwait(false);
+            Exception failure = mutationOutcomeUnknownOnTimeout
+                ? new HardwareStateUnknownException(
+                    Manifest.Id,
+                    command.ToString(),
+                    $"Adapter Host {command} timed out after transmission. The process tree was terminated; hardware state is unknown and recovery is required.",
+                    exception)
+                : new TimeoutException(
+                    $"Adapter Host {command} did not complete within {OperationTimeout.TotalSeconds:0} s; the host was terminated and will be recycled.",
+                    exception);
             CacheFailure(command, failure);
             throw failure;
         }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is IOException or EndOfStreamException)
         {
-            InvalidOperationException failure = HostCommunicationException(
-                new TimeoutException($"Adapter Host {command} exceeded {timeout}.", exception));
+            InvalidOperationException communicationFailure = HostCommunicationException(exception);
+            await RecycleHostAsync(generation).ConfigureAwait(false);
+            Exception failure = mutationOutcomeUnknownOnTimeout
+                ? new HardwareStateUnknownException(
+                    Manifest.Id,
+                    command.ToString(),
+                    $"Adapter Host {command} lost its pipe after transmission. Hardware state is unknown and recovery is required.",
+                    communicationFailure)
+                : communicationFailure;
             CacheFailure(command, failure);
             throw failure;
         }
@@ -321,7 +365,62 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsPr
 
     private NamedPipeRequestClient CreateClient(TimeSpan timeout) => new(
         _pipeName,
+        ConnectTimeout,
         timeout);
+
+    internal async Task RecycleHostAsync(Process? expectedGeneration)
+    {
+        if (expectedGeneration is null)
+        {
+            return;
+        }
+
+        await _startGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            if (!ReferenceEquals(_process, expectedGeneration))
+            {
+                return;
+            }
+
+            _process = null;
+            await TerminateProcessTreeAsync(expectedGeneration).ConfigureAwait(false);
+        }
+        catch
+        {
+            Process? failedGeneration = _process;
+            _process = null;
+            if (failedGeneration is not null)
+            {
+                await TerminateProcessTreeAsync(failedGeneration).ConfigureAwait(false);
+            }
+            throw;
+        }
+        finally
+        {
+            _startGate.Release();
+        }
+    }
+
+    private static async Task TerminateProcessTreeAsync(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync().ConfigureAwait(false);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // The process exited between the state check and termination.
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
 
     private async Task EnsureHostAsync(CancellationToken cancellationToken)
     {
@@ -372,7 +471,10 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsPr
 
                 try
                 {
-                    NamedPipeRequestClient client = new(_pipeName, TimeSpan.FromMilliseconds(250));
+                    NamedPipeRequestClient client = new(
+                        _pipeName,
+                        TimeSpan.FromMilliseconds(250),
+                        TimeSpan.FromSeconds(2));
                     IpcResponse handshake = await client.SendAsync(
                         NamedPipeRequestClient.CreateRequest(
                             IpcCommand.Handshake,
@@ -390,7 +492,23 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IAdapterDiagnosticsPr
                 }
             }
 
-            throw new TimeoutException("Adapter Host did not open its private pipe.", lastError);
+            Process? failedGeneration = _process;
+            _process = null;
+            if (failedGeneration is not null)
+            {
+                await TerminateProcessTreeAsync(failedGeneration).ConfigureAwait(false);
+            }
+            throw new TimeoutException("Adapter Host did not open its private pipe; the failed process tree was terminated.", lastError);
+        }
+        catch
+        {
+            Process? failedGeneration = _process;
+            _process = null;
+            if (failedGeneration is not null)
+            {
+                await TerminateProcessTreeAsync(failedGeneration).ConfigureAwait(false);
+            }
+            throw;
         }
         finally
         {

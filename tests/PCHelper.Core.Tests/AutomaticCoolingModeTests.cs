@@ -4,7 +4,7 @@ using PCHelper.Core;
 namespace PCHelper.Core.Tests;
 
 /// <summary>
-/// Exercises the one-click automatic cooling mode factory: conservative 50%
+/// Exercises the one-click automatic cooling mode factory: configured 20%
 /// floors on uncalibrated outputs, full maximum for emergency headroom, and
 /// source selection. No hardware or service is involved.
 /// </summary>
@@ -14,7 +14,7 @@ public sealed class AutomaticCoolingModeTests
     public void AutomaticModeFloorsEveryOutputAtTheConservativeSafetyFloor()
     {
         CapabilityDescriptor fan = Output("lhm.control:/lpc/x/0/control/0", "Fan #1", minimum: 0, maximum: 100);
-        CapabilityDescriptor gpuFan = Output("gpufan.duty:0", "GPU fan duty", minimum: 30, maximum: 100);
+        CapabilityDescriptor gpuFan = Output("gpufan.duty:0", "GPU fan duty", minimum: 10, maximum: 100);
 
         AdaptiveCoolingProfileDraft draft = AdaptiveCoolingProfileFactory.CreateAutomaticMode(
             [fan, gpuFan], "Case fans", Samples());
@@ -22,7 +22,7 @@ public sealed class AutomaticCoolingModeTests
         Assert.Equal(2, draft.Graph.Outputs.Count);
         Assert.All(draft.Graph.Outputs, output =>
         {
-            Assert.Equal(AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent, output.Minimum);
+            Assert.Equal(AdaptiveCoolingProfileFactory.UncalibratedFloorDutyPercent, output.Minimum);
             Assert.Equal(100, output.Maximum);
         });
         // Every curve must reach the controller maximum for emergency headroom.
@@ -31,6 +31,17 @@ public sealed class AutomaticCoolingModeTests
             node => Assert.Equal(100, node.Points[^1].Output));
         Assert.True(draft.Profile.IsExperimental);
         Assert.Equal(draft.Graph.Id, draft.Profile.CoolingGraphId);
+    }
+
+    [Fact]
+    public void AutomaticModePreservesAHigherControllerReportedMinimum()
+    {
+        CapabilityDescriptor fan = Output("gpufan.duty:0", "GPU fan duty", minimum: 30, maximum: 100);
+
+        AdaptiveCoolingProfileDraft draft = AdaptiveCoolingProfileFactory.CreateAutomaticMode(
+            [fan], "GPU fan", Samples(), preferGpuSourceOnly: true);
+
+        Assert.Equal(30, Assert.Single(draft.Graph.Outputs).Minimum);
     }
 
     [Fact]
@@ -66,8 +77,8 @@ public sealed class AutomaticCoolingModeTests
         CurvePoint[] silentPoints = [.. silent.Graph.Nodes.First(node => node.Kind == CoolingNodeKind.Graph).Points];
         CurvePoint[] coolingPoints = [.. cooling.Graph.Nodes.First(node => node.Kind == CoolingNodeKind.Graph).Points];
 
-        // Both still floor at 50% and top out at the controller maximum.
-        Assert.Equal(AdaptiveCoolingProfileFactory.ConservativeFloorDutyPercent, silentPoints[0].Output);
+        // Both still use the configured floor and top out at the controller maximum.
+        Assert.Equal(AdaptiveCoolingProfileFactory.UncalibratedFloorDutyPercent, silentPoints[0].Output);
         Assert.Equal(100, silentPoints[^1].Output);
         Assert.Equal(100, coolingPoints[^1].Output);
         // Cooling reaches full speed at a lower temperature than Silent.
@@ -79,7 +90,7 @@ public sealed class AutomaticCoolingModeTests
     [Fact]
     public void AutomaticModeRefusesOutputsWithNoRangeAboveTheFloor()
     {
-        CapabilityDescriptor cramped = Output("lhm.control:/lpc/x/0/control/1", "Fan #2", minimum: 0, maximum: 45);
+        CapabilityDescriptor cramped = Output("lhm.control:/lpc/x/0/control/1", "Fan #2", minimum: 0, maximum: 20);
 
         Assert.Throws<InvalidOperationException>(() =>
             AdaptiveCoolingProfileFactory.CreateAutomaticMode([cramped], "Case fans", Samples()));
@@ -91,6 +102,34 @@ public sealed class AutomaticCoolingModeTests
         Assert.Throws<InvalidOperationException>(() =>
             AdaptiveCoolingProfileFactory.CreateAutomaticMode(
                 [Output("lhm.control:/lpc/x/0/control/0", "Fan #1", 0, 100)], "Case fans", []));
+    }
+
+    [Fact]
+    public void ConservativeDutyGraphCanActivateWithoutCommissioningCalibration()
+    {
+        CapabilityDescriptor fan = Output("gpufan.duty:0", "GPU fan duty", 20, 100);
+        AdaptiveCoolingProfileDraft draft = AdaptiveCoolingProfileFactory.CreateAutomaticMode(
+            [fan], "GPU fan", Samples(), preferGpuSourceOnly: true);
+
+        Assert.True(AdaptiveCoolingProfileFactory.CanActivateWithoutCalibration(
+            fan,
+            Assert.Single(draft.Graph.Outputs)));
+    }
+
+    [Theory]
+    [InlineData(19, 100, FanOutputMode.DutyPercent)]
+    [InlineData(20, 99, FanOutputMode.DutyPercent)]
+    [InlineData(20, 100, FanOutputMode.Rpm)]
+    public void UncalibratedActivationRejectsAnythingOutsideTheConservativeEnvelope(
+        double minimum,
+        double maximum,
+        FanOutputMode mode)
+    {
+        CapabilityDescriptor fan = Output("lhm.control:/lpc/x/0/control/0", "Fan #1", 0, 100);
+        CoolingGraphOutputV1 output = new(
+            fan.Id, "curve", mode, minimum, maximum, 0, 10, 10, []);
+
+        Assert.False(AdaptiveCoolingProfileFactory.CanActivateWithoutCalibration(fan, output));
     }
 
     private static CapabilityDescriptor Output(string id, string name, double minimum, double maximum) => new(

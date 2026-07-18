@@ -139,9 +139,97 @@ public sealed class ProfileTransactionEngineTests
             confirmExperimental: false,
             CancellationToken.None);
 
-        Assert.Equal(ProfileTransactionState.RollingBack, transaction.State);
+        Assert.Equal(ProfileTransactionState.RecoveryRequired, transaction.State);
         Assert.Equal(transaction.Id, (await journal.GetPendingAsync(CancellationToken.None))?.Id);
         Assert.Contains("Rollback errors", transaction.Error);
+    }
+
+    [Fact]
+    public async Task MutationTimeoutRemainsRecoveryRequiredEvenWhenRollbackReadsBack()
+    {
+        FakeAdapter adapter = new() { CurrentValue = 25, UnknownDuringApply = true };
+        MemoryJournal journal = new();
+        using ProfileTransactionEngine engine = new([adapter], journal);
+
+        (ProfileTransaction transaction, _) = await engine.ApplyAsync(
+            ProfileValidatorTests.Profile(ProfileValidatorTests.Action(required: true), experimental: false),
+            Capabilities(),
+            expectedRevision: 0,
+            confirmExperimental: false,
+            CancellationToken.None);
+
+        Assert.Equal(ProfileTransactionState.RecoveryRequired, transaction.State);
+        Assert.Equal(25, adapter.CurrentValue);
+        Assert.Equal(transaction.Id, (await journal.GetPendingAsync(CancellationToken.None))?.Id);
+    }
+
+    [Fact]
+    public async Task CommittedTransactionPersistsControlLeaseBeforePendingIsCleared()
+    {
+        FakeAdapter adapter = new();
+        MemoryJournal journal = new();
+        MemorySuiteStore suiteStore = new();
+        using ProfileTransactionEngine engine = new(
+            [adapter],
+            journal,
+            suiteStore: suiteStore,
+            serviceInstanceId: "service-test");
+
+        (ProfileTransaction transaction, _) = await engine.ApplyAsync(
+            ProfileValidatorTests.Profile(ProfileValidatorTests.Action(required: true), experimental: false),
+            Capabilities(),
+            expectedRevision: 0,
+            confirmExperimental: false,
+            CancellationToken.None);
+
+        HardwareControlLeaseV1? lease = await suiteStore.GetSuiteEntityAsync<HardwareControlLeaseV1>(
+            SuiteEntityKind.HardwareControlLease,
+            HardwareControlLeaseV1.DefaultId,
+            CancellationToken.None);
+        Assert.Equal(ProfileTransactionState.Committed, transaction.State);
+        Assert.NotNull(lease);
+        Assert.False(lease.CleanShutdown);
+        Assert.False(lease.DefaultsVerified);
+        HardwareControlLeaseItemV1 control = Assert.Single(lease.Controls);
+        Assert.Equal("test.adapter", control.AdapterId);
+        Assert.Equal("test.control", control.CapabilityId);
+    }
+
+    [Fact]
+    public async Task RestoreDefaultsFailsClosedWhenReadBackDoesNotMatch()
+    {
+        FakeAdapter adapter = new() { CurrentValue = 50, FailDefaultVerification = true };
+        using ProfileTransactionEngine engine = new([adapter], new MemoryJournal());
+
+        HardwareRecoveryResult result = await engine.RestoreDefaultsAsync(
+            [new HardwareControlLeaseItemV1("test.adapter", "test.control")],
+            CancellationToken.None);
+
+        Assert.False(result.AllDefaultsVerified);
+        Assert.Single(result.Errors);
+        Assert.False(Assert.Single(result.Verifications).Success);
+    }
+
+    [Fact]
+    public async Task SuppliedMutationGateSerializesExternalHardwareTransactions()
+    {
+        FakeAdapter adapter = new();
+        using SemaphoreSlim sharedGate = new(1, 1);
+        using ProfileTransactionEngine engine = new([adapter], new MemoryJournal(), mutationLock: sharedGate);
+        await sharedGate.WaitAsync();
+        Task<(ProfileTransaction Transaction, ProfileValidationResult Validation)> apply = engine.ApplyAsync(
+            ProfileValidatorTests.Profile(ProfileValidatorTests.Action(required: true), experimental: false),
+            Capabilities(),
+            expectedRevision: 0,
+            confirmExperimental: false,
+            CancellationToken.None);
+
+        await Task.Delay(50);
+        Assert.Empty(adapter.Calls);
+        sharedGate.Release();
+        (ProfileTransaction transaction, _) = await apply;
+
+        Assert.Equal(ProfileTransactionState.Committed, transaction.State);
     }
 
     private static Dictionary<string, CapabilityDescriptor> Capabilities() =>
@@ -150,7 +238,7 @@ public sealed class ProfileTransactionEngineTests
             ["test.control"] = ProfileValidatorTests.Capability(CapabilityAccessState.Verified)
         };
 
-    private sealed class FakeAdapter : IHardwareAdapter
+    private sealed class FakeAdapter : IHardwareAdapter, IHardwareStateVerifier
     {
         public double CurrentValue { get; set; }
 
@@ -159,6 +247,12 @@ public sealed class ProfileTransactionEngineTests
         public bool CancelDuringApply { get; init; }
 
         public bool FailRollback { get; init; }
+
+        public bool FailRollbackVerification { get; init; }
+
+        public bool FailDefaultVerification { get; init; }
+
+        public bool UnknownDuringApply { get; init; }
 
         public List<string> Calls { get; } = [];
 
@@ -192,6 +286,11 @@ public sealed class ProfileTransactionEngineTests
                 throw new OperationCanceledException("Injected cancellation after a partial write.");
             }
 
+            if (UnknownDuringApply)
+            {
+                throw new HardwareStateUnknownException(Manifest.Id, "Apply", "Injected mutation timeout.");
+            }
+
             return Task.CompletedTask;
         }
 
@@ -217,7 +316,32 @@ public sealed class ProfileTransactionEngineTests
             return Task.CompletedTask;
         }
 
-        public Task ResetToDefaultAsync(string capabilityId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task ResetToDefaultAsync(string capabilityId, CancellationToken cancellationToken)
+        {
+            Calls.Add("reset-default");
+            CurrentValue = 0;
+            return Task.CompletedTask;
+        }
+
+        public Task<HardwareStateVerification> VerifyDefaultStateAsync(string capabilityId, CancellationToken cancellationToken) =>
+            Task.FromResult(new HardwareStateVerification(
+                Manifest.Id,
+                capabilityId,
+                !FailDefaultVerification && CurrentValue == 0,
+                ControlValue.FromNumeric(CurrentValue),
+                FailDefaultVerification ? "Injected default read-back failure." : "Default read back."));
+
+        public Task<HardwareStateVerification> VerifyRollbackStateAsync(PreparedAction action, CancellationToken cancellationToken)
+        {
+            double expected = action.PreviousValue!.Numeric!.Value;
+            bool success = !FailRollbackVerification && CurrentValue == expected;
+            return Task.FromResult(new HardwareStateVerification(
+                Manifest.Id,
+                action.Action.CapabilityId,
+                success,
+                ControlValue.FromNumeric(CurrentValue),
+                success ? "Rollback read back." : "Injected rollback read-back failure."));
+        }
 
         public Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken) =>
             Task.FromResult(new AdapterHealth(Manifest.Id, true, DateTimeOffset.UtcNow, "Healthy", []));
@@ -242,6 +366,32 @@ public sealed class ProfileTransactionEngineTests
         public Task ClearPendingAsync(string transactionId, CancellationToken cancellationToken)
         {
             _pending = null;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class MemorySuiteStore : ISuiteStateStore
+    {
+        private readonly Dictionary<(SuiteEntityKind Kind, string Id), object> _entities = [];
+
+        public Task<IReadOnlyList<T>> GetSuiteEntitiesAsync<T>(SuiteEntityKind kind, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<T>>(_entities
+                .Where(pair => pair.Key.Kind == kind)
+                .Select(pair => (T)pair.Value)
+                .ToArray());
+
+        public Task<T?> GetSuiteEntityAsync<T>(SuiteEntityKind kind, string id, CancellationToken cancellationToken) =>
+            Task.FromResult(_entities.TryGetValue((kind, id), out object? value) ? (T?)value : default);
+
+        public Task SaveSuiteEntityAsync<T>(SuiteEntityKind kind, string id, T entity, CancellationToken cancellationToken)
+        {
+            _entities[(kind, id)] = entity!;
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteSuiteEntityAsync(SuiteEntityKind kind, string id, CancellationToken cancellationToken)
+        {
+            _entities.Remove((kind, id));
             return Task.CompletedTask;
         }
     }
