@@ -33,6 +33,11 @@ internal sealed class RuntimeTuneScreeningMonitor(
         List<double> powers = [];
         List<double> clocks = [];
         List<double> loads = [];
+        List<double> fanRpms = [];
+        long? firstDispatchCount = null;
+        long? lastDispatchCount = null;
+        DateTimeOffset? firstDispatchAt = null;
+        DateTimeOffset? lastDispatchAt = null;
         do
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -52,6 +57,11 @@ internal sealed class RuntimeTuneScreeningMonitor(
                         powers,
                         clocks);
                 }
+
+                firstDispatchCount ??= host.DispatchCount;
+                firstDispatchAt ??= _timeProvider.GetUtcNow();
+                lastDispatchCount = host.DispatchCount;
+                lastDispatchAt = _timeProvider.GetUtcNow();
             }
 
             HardwareSnapshot snapshot = _snapshotProvider();
@@ -106,6 +116,10 @@ internal sealed class RuntimeTuneScreeningMonitor(
             clocks.AddRange(related.Where(sample => string.Equals(sample.Unit, "MHz", StringComparison.OrdinalIgnoreCase))
                 .Select(sample => sample.Value!.Value)
                 .Where(value => value > 0));
+            fanRpms.AddRange(good.Where(sample => string.Equals(sample.Unit, "RPM", StringComparison.OrdinalIgnoreCase)
+                    && (sensorBinding is null || sensorBinding.BoundDeviceIds.Contains(sample.DeviceId, StringComparer.Ordinal)))
+                .Select(sample => sample.Value!.Value)
+                .Where(value => value >= 0));
             loads.AddRange(related.Where(sample => string.Equals(sample.Unit, "%", StringComparison.OrdinalIgnoreCase)
                     && (sensorBinding is not null
                         ? string.Equals(sample.SensorId, sensorBinding.UtilizationSensorId, StringComparison.Ordinal)
@@ -163,12 +177,20 @@ internal sealed class RuntimeTuneScreeningMonitor(
                 clocks);
         }
 
+        double? throughputScore = firstDispatchCount is long first
+            && lastDispatchCount is long last
+            && lastDispatchAt - firstDispatchAt is TimeSpan dispatchDuration
+            && dispatchDuration > TimeSpan.Zero
+                ? Math.Max(0, last - first) / dispatchDuration.TotalSeconds
+                : null;
         return new TuneScreeningResult(
             true,
             "No thermal, power, WHEA, display-reset, or control-ownership rejection was observed.",
             temperatures.Count == 0 ? null : temperatures.Max(),
             powers.Count == 0 ? null : powers.Average(),
-            clocks.Count == 0 ? null : clocks.Average());
+            clocks.Count == 0 ? null : clocks.Average(),
+            throughputScore,
+            fanRpms.Count == 0 ? null : fanRpms.Average());
     }
 
     private static SensorSample[] RelatedSensors(

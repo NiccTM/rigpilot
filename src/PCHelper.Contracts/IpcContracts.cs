@@ -14,6 +14,7 @@ public enum IpcCommand
     SaveAutomationRule,
     DeleteAutomationRule,
     ValidateProfile,
+    PreviewProfileV2,
     ApplyProfile,
     ApplyProfileV2,
     ResetHardware,
@@ -32,6 +33,7 @@ public enum IpcCommand
     RecoverFanCommissioning,
     StartTune,
     StartAutoOc,
+    StartAutoOcV3,
     AbortOperation,
     GetOperationStatus,
     GetOperationById,
@@ -170,6 +172,7 @@ public static class IpcCommandPolicy
         IpcCommand.SubscribeSensors or
         IpcCommand.GetProfiles or
         IpcCommand.GetAutomationRules or
+        IpcCommand.PreviewProfileV2 or
         IpcCommand.GetOperationStatus or
         IpcCommand.GetOperationById or
         IpcCommand.GetServiceStatus or

@@ -50,6 +50,8 @@ public static class ServiceRuntimeFeatures
     public const string CoolingOutputRoles = "cooling-output-roles";
     public const string VerifiedHardwareControl = "verified-hardware-control";
     public const string ReleaseWritePolicy = "release-write-policy";
+    public const string AutoOcV3 = "auto-oc-v3";
+    public const string ProfileDryRunV1 = "profile-dry-run-v1";
 
     public static IReadOnlyList<string> RequiredByDashboard { get; } =
     [
@@ -74,7 +76,9 @@ public static class ServiceRuntimeFeatures
         CoolingGraphs,
         CoolingOutputRoles,
         VerifiedHardwareControl,
-        ReleaseWritePolicy
+        ReleaseWritePolicy,
+        AutoOcV3,
+        ProfileDryRunV1
     ];
 }
 

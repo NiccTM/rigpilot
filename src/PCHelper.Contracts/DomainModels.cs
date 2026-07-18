@@ -455,7 +455,9 @@ public sealed record TuneScreeningResult(
     string Message,
     double? MaximumTemperatureCelsius,
     double? AveragePowerWatts,
-    double? AverageClockMegahertz);
+    double? AverageClockMegahertz,
+    double? ThroughputScore = null,
+    double? AverageFanRpm = null);
 
 public sealed record TuneCandidateResult(
     double Value,
@@ -502,7 +504,8 @@ public sealed record HardwareOperationStatus(
     FanCalibrationResult? CalibrationResult,
     TuneResult? TuneResult,
     string? Error,
-    AutoOcResultV2? AutoOcResult = null);
+    AutoOcResultV2? AutoOcResult = null,
+    AutoOcResultV3? AutoOcResultV3 = null);
 
 public sealed record AutomationRuleV1(
     int SchemaVersion,

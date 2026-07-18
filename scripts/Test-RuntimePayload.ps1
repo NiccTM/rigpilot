@@ -77,7 +77,7 @@ if ($components.Count -eq 0) {
     throw "Runtime contract has no component records."
 }
 
-$requiredFeatures = @("service-status", "capability-v2", "fan-commissioning", "fan-calibrations", "reliability", "adapter-trace", "cooling-output-roles", "release-write-policy")
+$requiredFeatures = @("service-status", "capability-v2", "fan-commissioning", "fan-calibrations", "reliability", "adapter-trace", "cooling-output-roles", "release-write-policy", "auto-oc-v3", "profile-dry-run-v1")
 $advertisedFeatures = @($contract.requiredServiceFeatures | ForEach-Object { [string]$_ })
 foreach ($requiredFeature in $requiredFeatures) {
     if ($advertisedFeatures -notcontains $requiredFeature) {

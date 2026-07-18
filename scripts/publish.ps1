@@ -237,6 +237,8 @@ $runtimeContract = [ordered]@{
         "adapter-trace",
         "cooling-output-roles"
         "release-write-policy"
+        "auto-oc-v3"
+        "profile-dry-run-v1"
     )
     components = @($runtimeComponents)
 }

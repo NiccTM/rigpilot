@@ -63,6 +63,37 @@ public sealed class RuntimeTuneScreeningMonitorTests
         Assert.Contains("workload host", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task ReportsMeasuredDispatchThroughputAndBoundDeviceFanRpm()
+    {
+        ManualTimeProvider clock = new(new DateTimeOffset(2026, 7, 18, 12, 0, 0, TimeSpan.Zero));
+        CapabilityDescriptor capability = Capability();
+        RuntimeTuneScreeningMonitor monitor = new(
+            () => Snapshot(clock.GetUtcNow(), capability, boundLoad: 95, unrelatedLoad: 0),
+            capability,
+            clock,
+            (delay, _) =>
+            {
+                clock.Advance(delay);
+                return Task.CompletedTask;
+            },
+            _ => null,
+            Binding(),
+            new AdvancingWorkload(clock),
+            AutoOcWorkloadMode.Core,
+            requiredAverageLoadPercent: 70);
+
+        TuneScreeningResult result = await monitor.ScreenAsync(
+            capability,
+            Plan(capability),
+            TimeSpan.FromSeconds(2),
+            CancellationToken.None);
+
+        Assert.True(result.Passed);
+        Assert.Equal(100, result.ThroughputScore);
+        Assert.Equal(1200, result.AverageFanRpm);
+    }
+
     private static CapabilityDescriptor Capability() => new(
         "gpuclock.core:0",
         "nvidia.clock",
@@ -117,6 +148,7 @@ public sealed class RuntimeTuneScreeningMonitorTests
             Sensor("core-clock", "lHM:gpu:0", "GPU core clock", now, 2000, "MHz"),
             Sensor("memory-clock", "lHM:gpu:0", "GPU memory clock", now, 10000, "MHz"),
             Sensor("power", "nvml:gpu:uuid", "GPU power", now, 250, "W"),
+            Sensor("fan", "lhm:gpu:0", "GPU fan", now, 1200, "RPM"),
             Sensor("other-load", "other:gpu", "Other GPU load", now, unrelatedLoad, "%")
         ],
         [],
@@ -157,6 +189,39 @@ public sealed class RuntimeTuneScreeningMonitorTests
             0,
             1,
             1,
+            clock.GetUtcNow(),
+            null);
+    }
+
+    private sealed class AdvancingWorkload(TimeProvider clock) : IAutoOcWorkloadController
+    {
+        private long _dispatchCount;
+
+        public Task<WorkloadHostStatusV1> SetModeAsync(AutoOcWorkloadMode requested, CancellationToken cancellationToken) =>
+            Task.FromResult(Status(requested));
+
+        public Task<WorkloadHostStatusV1> GetStatusAsync(CancellationToken cancellationToken)
+        {
+            _dispatchCount += 100;
+            return Task.FromResult(Status(AutoOcWorkloadMode.Core));
+        }
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        private WorkloadHostStatusV1 Status(AutoOcWorkloadMode mode) => new(
+            WorkloadHostStatusV1.CurrentSchemaVersion,
+            "session",
+            true,
+            true,
+            true,
+            mode,
+            "Test GPU",
+            0x10DE,
+            1,
+            1,
+            0,
+            1,
+            _dispatchCount,
             clock.GetUtcNow(),
             null);
     }

@@ -44,6 +44,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly SemaphoreSlim _rgbMutationGate = new(1, 1);
     private readonly AsyncCommand _refreshCommand;
     private readonly AsyncCommand _applyProfileCommand;
+    private readonly AsyncCommand _previewProfileCommand;
     private readonly AsyncCommand _resetVerifiedCommand;
     private readonly AsyncCommand _closeBlockersCommand;
     private bool _closeBlockersAcknowledged;
@@ -130,6 +131,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private ServiceRuntimeCompatibilityV1 _serviceCompatibility = ServiceRuntimeCompatibility.Unavailable(
         RuntimeVersion.Get(typeof(MainViewModel).Assembly),
         "Waiting for the RigPilot service handshake.");
+    private HashSet<string> _serviceFeatures = new(StringComparer.OrdinalIgnoreCase);
     private HardwareOperationStatus? _operation;
     private DateTimeOffset _lastLocalProbe = DateTimeOffset.MinValue;
     private DateTimeOffset _lastServiceControlPlaneRefresh = DateTimeOffset.MinValue;
@@ -181,6 +183,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _newRulePriorityText = "100";
     private string _automationStatus = "No automation rules are active.";
     private string _profileActivationStatus = "No profile bundle has been applied in this session.";
+    private string _profileDryRunStatus = "Select Dry run on a profile to inspect prerequisites, conflicts, omitted optional actions, and rollback behavior without writing hardware.";
     private string _gameBundleActivationStatus = "No game bundle has been applied in this session.";
     private string? _manualProfileId;
     private string? _pendingAutomationHotkey;
@@ -396,6 +399,19 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                                         : "The profile cannot be applied in the current state.";
                 ShowNotice(reason, "Warning");
             });
+        _previewProfileCommand = new AsyncCommand(
+            parameter => PreviewProfileCardAsync((ProfileCardDisplay)parameter!),
+            parameter => IsServiceOnline
+                && _serviceFeatures.Contains(ServiceRuntimeFeatures.ProfileDryRunV1)
+                && parameter is ProfileCardDisplay,
+            ReportError,
+            _ => ShowNotice(
+                !IsServiceOnline
+                    ? "Profile dry run requires the RigPilot service. Local-probe mode cannot resolve service-owned capability and rollback state."
+                    : !_serviceFeatures.Contains(ServiceRuntimeFeatures.ProfileDryRunV1)
+                        ? "The installed service does not advertise profile dry-run support. Update the app and service together."
+                        : "Select a profile before running its read-only dry run.",
+                "Warning"));
         _closeBlockersCommand = new AsyncCommand(
             _ => CloseBlockersCoreAsync(),
             _ => IsServiceOnline && RunningConflictCount > 0 && CloseBlockersAcknowledged,
@@ -833,6 +849,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand RefreshCommand => _refreshCommand;
 
     public ICommand ApplyProfileCommand => _applyProfileCommand;
+
+    public ICommand PreviewProfileCommand => _previewProfileCommand;
 
     public ICommand ResetVerifiedCommand => _resetVerifiedCommand;
 
@@ -1745,6 +1763,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         private set => Set(ref _profileActivationStatus, value);
     }
 
+    public string ProfileDryRunStatus
+    {
+        get => _profileDryRunStatus;
+        private set => Set(ref _profileDryRunStatus, value);
+    }
+
     public DynamicLightingDevice? SelectedDynamicLightingDevice
     {
         get => _selectedDynamicLightingDevice;
@@ -2315,6 +2339,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             _enableGpuFanAutoModeCommand.RaiseCanExecuteChanged();
             _enableCaseFansAutoModeCommand.RaiseCanExecuteChanged();
             _applyProfileCommand.RaiseCanExecuteChanged();
+            _previewProfileCommand.RaiseCanExecuteChanged();
             _resetVerifiedCommand.RaiseCanExecuteChanged();
             _closeBlockersCommand.RaiseCanExecuteChanged();
             _startCalibrationCommand.RaiseCanExecuteChanged();
@@ -4187,6 +4212,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         }
         catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException or InvalidDataException)
         {
+            _serviceFeatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             SetServiceCompatibility(ServiceRuntimeCompatibility.Unavailable(
                 clientVersion,
                 $"The service handshake could not complete: {DescribeServiceFailure(exception)}"));
@@ -4195,6 +4221,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
         if (!response.Success)
         {
+            _serviceFeatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             string detail = string.IsNullOrWhiteSpace(response.Error)
                 ? response.ErrorCode ?? "unknown service error"
                 : $"{response.ErrorCode}: {response.Error}";
@@ -4207,10 +4234,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         HandshakeResponseV2? current = IpcJson.FromElement<HandshakeResponseV2>(response.Payload);
         if (current is { SelectedProtocolVersion: > 0 })
         {
+            _serviceFeatures = current.Features.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _previewProfileCommand.RaiseCanExecuteChanged();
             SetServiceCompatibility(ServiceRuntimeCompatibility.Evaluate(clientVersion, current));
             return;
         }
 
+        _serviceFeatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _previewProfileCommand.RaiseCanExecuteChanged();
         HandshakeResponse? legacy = IpcJson.FromElement<HandshakeResponse>(response.Payload);
         SetServiceCompatibility(ServiceRuntimeCompatibility.EvaluateLegacy(clientVersion, legacy));
     }

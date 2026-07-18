@@ -569,19 +569,49 @@ public sealed partial class MainViewModel
             return;
         }
 
+        CapabilityDescriptor? power = _snapshot.Capabilities.FirstOrDefault(capability =>
+            capability.Id.StartsWith("gpupower.limit:", StringComparison.Ordinal)
+            && capability.Range?.Default is not null
+            && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
+            && string.Equals(capability.DeviceId, core.DeviceId, StringComparison.Ordinal));
+        bool useV3 = _serviceFeatures.Contains(ServiceRuntimeFeatures.AutoOcV3);
+
         FullAutoOcStatus = "Starting the isolated Direct3D workload host…";
         await using WorkloadHostSession workload = await WorkloadHostSession.StartAsync(core.DeviceId, _lifetime.Token);
+        IpcCommand command = useV3 ? IpcCommand.StartAutoOcV3 : IpcCommand.StartAutoOc;
+        object payload = useV3
+            ? new StartAutoOcV3Request(
+                StartAutoOcV3Request.CurrentSchemaVersion,
+                core.DeviceId,
+                core.Id,
+                memory.Id,
+                power?.Id,
+                workload.Descriptor,
+                new AutoOcObjectiveConstraintsV3(
+                    SelectedTuneObjective,
+                    MaximumBaselineVariationPercent: 3,
+                    MinimumEfficiencyPerformancePercent: 98,
+                    MinimumQuietPerformancePercent: 95,
+                    TemperatureCeilingCelsius: 83,
+                    PowerCeilingWatts: null,
+                    BaselineSampleDuration: TimeSpan.FromSeconds(10),
+                    CandidateScreeningDuration: TimeSpan.FromSeconds(30),
+                    FinalScreeningDuration: TimeSpan.FromMinutes(20),
+                    RequestPresentMonValidation: false),
+                ConfirmExperimental: true,
+                ConfirmDevice: true)
+            : new StartAutoOcV2Request(
+                StartAutoOcV2Request.CurrentSchemaVersion,
+                core.DeviceId,
+                core.Id,
+                memory.Id,
+                workload.Descriptor,
+                ConfirmExperimental: true,
+                ConfirmDevice: true);
         IpcResponse response = await _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(
-                IpcCommand.StartAutoOc,
-                new StartAutoOcV2Request(
-                    StartAutoOcV2Request.CurrentSchemaVersion,
-                    core.DeviceId,
-                    core.Id,
-                    memory.Id,
-                    workload.Descriptor,
-                    ConfirmExperimental: true,
-                    ConfirmDevice: true),
+                command,
+                payload,
                 _status?.StateRevision,
                 Guid.NewGuid().ToString("N")),
             _lifetime.Token);
@@ -590,8 +620,18 @@ public sealed partial class MainViewModel
             ?? throw new InvalidDataException("Service returned an empty Full Auto OC operation.");
         NotifyOperationProperties();
         HardwareOperationState? outcome = await WaitForOperationAsync(_operation.Id, "core + memory");
+        AutoOcResultV3? resultV3 = _operation?.AutoOcResultV3;
         AutoOcResultV2? result = _operation?.AutoOcResult;
-        bool usable = outcome == HardwareOperationState.Completed
+        bool usableV3 = outcome == HardwareOperationState.Completed
+            && resultV3 is
+            {
+                ValidationState: AutoOcValidationState.Provisional,
+                AllRequestedFamiliesVerified: true,
+                RestorationProof.PriorStateRestored: true,
+                RestorationProof.HardwareStateKnown: true,
+                GeneratedProfile: not null
+            };
+        bool usableV2 = outcome == HardwareOperationState.Completed
             && result is
             {
                 AllRequestedFamiliesVerified: true,
@@ -599,10 +639,14 @@ public sealed partial class MainViewModel
                 HardwareStateKnown: true,
                 GeneratedProfile: not null
             };
-        FullAutoOcStatus = usable
-            ? $"Full Auto OC screened core {result!.CoreOffsetMegahertz:0} MHz and memory {result.MemoryOffsetMegahertz:0} MHz. Prior hardware state was restored; apply the saved profile explicitly from Profiles."
-            : result?.Message ?? $"Full Auto OC ended {outcome?.ToString() ?? "without a final result"}.";
-        ShowNotice(FullAutoOcStatus, usable ? "Success" : "Warning");
+        FullAutoOcStatus = usableV3
+            ? $"{SelectedTuneObjective} Auto OC V3 selected core {resultV3!.CoreOffsetMegahertz:0} MHz, memory {resultV3.MemoryOffsetMegahertz:0} MHz"
+                + (resultV3.PowerLimitWatts is double watts ? $", and {watts:0} W" : string.Empty)
+                + $" after three baseline samples ({resultV3.BaselineVariationPercent:0.##}% variation) and a 20-minute final screen. Prior hardware state was restored; the saved profile is provisional."
+            : usableV2
+                ? $"Full Auto OC screened core {result!.CoreOffsetMegahertz:0} MHz and memory {result.MemoryOffsetMegahertz:0} MHz. Prior hardware state was restored; apply the saved profile explicitly from Profiles."
+                : resultV3?.Message ?? result?.Message ?? $"Full Auto OC ended {outcome?.ToString() ?? "without a final result"}.";
+        ShowNotice(FullAutoOcStatus, usableV3 || usableV2 ? "Success" : "Warning");
         await RefreshAsync(full: true, userInitiated: false);
     }
 

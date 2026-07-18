@@ -27,6 +27,14 @@ public sealed partial class MainViewModel
                 "Profiles require the RigPilot service. The current local-probe mode is read-only.");
         }
 
+        if (_serviceFeatures.Contains(ServiceRuntimeFeatures.ProfileDryRunV1))
+        {
+            ProfileDryRunResultV1 dryRun = await GetProfileDryRunAsync(
+                ProfileMigration.Upgrade(profile),
+                manualSelection ? ProfileActivationSource.Manual : ProfileActivationSource.Automation);
+            EnsureProfileDryRunAllowsApply(profile.Name, dryRun);
+        }
+
         BusyMessage = $"Applying {profile.Name}";
         IsBusy = true;
         try
@@ -82,6 +90,29 @@ public sealed partial class MainViewModel
         return ApplyProfileAsync(card.Profile);
     }
 
+    private async Task PreviewProfileCardAsync(ProfileCardDisplay card)
+    {
+        ProfileV2 profile = _suiteProfilesById.TryGetValue(card.Profile.Id, out ProfileV2? suiteProfile)
+            ? suiteProfile
+            : ProfileMigration.Upgrade(card.Profile);
+        BusyMessage = $"Checking {profile.Name}";
+        IsBusy = true;
+        try
+        {
+            ProfileDryRunResultV1 result = await GetProfileDryRunAsync(profile, ProfileActivationSource.Manual);
+            ProfileDryRunStatus = FormatProfileDryRun(profile.Name, result);
+            ShowNotice(
+                result.CanApply
+                    ? $"{profile.Name} passed the read-only dry run. Review the reported transaction boundary before applying it."
+                    : $"{profile.Name} is blocked. The dry-run report lists the exact prerequisites.",
+                result.CanApply ? "Success" : "Warning");
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     private async Task<ApplyProfileResult> ApplyProfileV2Async(
         ProfileV2 profile,
         bool manualSelection = true,
@@ -93,6 +124,14 @@ public sealed partial class MainViewModel
         {
             throw new InvalidOperationException(
                 "Profiles require the RigPilot service. The current local-probe mode is read-only.");
+        }
+
+        if (_serviceFeatures.Contains(ServiceRuntimeFeatures.ProfileDryRunV1))
+        {
+            ProfileDryRunResultV1 dryRun = await GetProfileDryRunAsync(
+                profile,
+                manualSelection ? ProfileActivationSource.Manual : ProfileActivationSource.Automation);
+            EnsureProfileDryRunAllowsApply(profile.Name, dryRun);
         }
 
         BusyMessage = $"Applying {profile.Name}";
@@ -155,6 +194,66 @@ public sealed partial class MainViewModel
         {
             IsBusy = false;
         }
+    }
+
+    private async Task<ProfileDryRunResultV1> GetProfileDryRunAsync(
+        ProfileV2 profile,
+        ProfileActivationSource source)
+    {
+        bool requiresManualAcknowledgement = profile.ManualOnlyActionIds.Count > 0;
+        IReadOnlyList<string> confirmedDeviceIds = (profile.IsExperimental || requiresManualAcknowledgement)
+            && ProfileDeviceAcknowledged
+            ? GetProfileDeviceIds(profile)
+            : [];
+        PreviewProfileV2Request payload = new(
+            profile,
+            source,
+            ConfirmExperimental: profile.IsExperimental && AdvancedWritesAcknowledged,
+            confirmedDeviceIds,
+            ConfirmManualVoltage: requiresManualAcknowledgement
+                && ManualVoltageAcknowledged
+                && ProfileDeviceAcknowledged,
+            LightingScenes.Select(item => item.Id).ToArray(),
+            OsdLayouts.Select(item => item.Id).ToArray());
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.PreviewProfileV2, payload),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        return IpcJson.FromElement<ProfileDryRunResultV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty profile dry-run result.");
+    }
+
+    private void EnsureProfileDryRunAllowsApply(string profileName, ProfileDryRunResultV1 dryRun)
+    {
+        ProfileDryRunStatus = FormatProfileDryRun(profileName, dryRun);
+        if (dryRun.CanApply)
+        {
+            return;
+        }
+
+        string reason = (dryRun.Conflicts.Count > 0 ? dryRun.Conflicts[0] : null)
+            ?? dryRun.Actions.FirstOrDefault(item => item.State is ProfileDryRunActionState.Blocked
+                or ProfileDryRunActionState.Conflict
+                or ProfileDryRunActionState.RequiresConfirmation)?.Message
+            ?? "The profile did not pass its read-only dry run.";
+        throw new InvalidOperationException($"{profileName} was not applied: {reason}");
+    }
+
+    private static string FormatProfileDryRun(string profileName, ProfileDryRunResultV1 result)
+    {
+        string verdict = result.CanApply ? "READY" : "BLOCKED";
+        string atomic = result.AtomicDomains.Count == 0
+            ? "no privileged mutations"
+            : $"atomic: {string.Join(", ", result.AtomicDomains)}";
+        string independent = result.IndependentDomains.Count == 0
+            ? "no user-session companions"
+            : $"independent after commit: {string.Join(", ", result.IndependentDomains)}";
+        string issues = result.Conflicts.Count > 0
+            ? $" Conflicts: {string.Join(" ", result.Conflicts)}"
+            : result.OmittedOptionalActions.Count > 0
+                ? $" Optional omissions: {string.Join(" ", result.OmittedOptionalActions)}"
+                : string.Empty;
+        return $"{profileName}: {verdict} · {atomic} · {independent}. {result.ExpectedRollback}{issues}";
     }
 
     private string[] GetProfileDeviceIds(ProfileV2 profile)
