@@ -18,7 +18,7 @@ public sealed class VendorControlEligibilityAdapter : IHardwareAdapter, IAdapter
     public AdapterManifest Manifest { get; } = new(
         "vendor.control-eligibility",
         "Vendor control eligibility",
-        "0.5.0-alpha",
+        "0.5.5-alpha",
         "GPL-3.0-only",
         "Vendor display runtime where applicable",
         AdapterExecutionContext.AdapterHost,
