@@ -3242,7 +3242,7 @@
       </Border>
 
       <!-- Busy overlay prevents duplicate mutations and makes long hardware work explicit. -->
-      <Border Grid.RowSpan="4" Background="#D90C1017" Panel.ZIndex="100" automation:AutomationProperties.LiveSetting="Assertive" automation:AutomationProperties.Name="RigPilot is working">
+      <Border Grid.RowSpan="4" Background="{DynamicResource ModalScrimBrush}" Panel.ZIndex="100" automation:AutomationProperties.LiveSetting="Assertive" automation:AutomationProperties.Name="RigPilot is working">
         <Border.Style>
           <Style TargetType="Border">
             <Setter Property="Visibility" Value="Collapsed" />
@@ -3258,26 +3258,102 @@
         </Border>
       </Border>
 
-      <!-- One-time first-run tour. Hidden by default; only the real app startup
-           shows it (the deterministic snapshot host never does). It explains the
-           safety model — it grants and changes nothing. -->
-      <Border Grid.RowSpan="4" Background="#D90C1017" Panel.ZIndex="110" automation:AutomationProperties.AutomationId="Onboarding.Overlay" automation:AutomationProperties.Name="RigPilot first-run tour">
+      <!-- One-time guided setup. Scanning and baseline capture are read-only.
+           The selected mode is applied only through the normal verified profile
+           transaction, and the default-reset proof is a separate read-back. -->
+      <Border Grid.RowSpan="4" Background="{DynamicResource ModalScrimBrush}" Panel.ZIndex="110" automation:AutomationProperties.AutomationId="Onboarding.Overlay" automation:AutomationProperties.Name="RigPilot guided setup">
         <Border.Style>
           <Style TargetType="Border">
             <Setter Property="Visibility" Value="Collapsed" />
             <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingVisible}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
           </Style>
         </Border.Style>
-        <Border Style="{StaticResource CardStyle}" Width="520" Padding="28" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0">
-          <StackPanel>
-            <TextBlock Text="{Binding OnboardingStepLabel}" Style="{StaticResource EyebrowStyle}" automation:AutomationProperties.AutomationId="Onboarding.StepLabel" />
-            <TextBlock Text="{Binding OnboardingTitle}" FontSize="22" FontWeight="Bold" Margin="0,6,0,10" automation:AutomationProperties.AutomationId="Onboarding.Title" />
-            <TextBlock Text="{Binding OnboardingBody}" TextWrapping="Wrap" LineHeight="21" automation:AutomationProperties.AutomationId="Onboarding.Body" />
-            <Grid Margin="0,22,0,0">
-              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-              <Button Content="{loc:Loc Onboarding_Skip}" Command="{Binding OnboardingSkipCommand}" Style="{StaticResource GhostButtonStyle}" automation:AutomationProperties.Name="Skip first-run tour" automation:AutomationProperties.AutomationId="Onboarding.Skip" />
-              <Button Grid.Column="2" Content="{loc:Loc Onboarding_Back}" Command="{Binding OnboardingBackCommand}" Margin="0,0,8,0" automation:AutomationProperties.Name="Previous tour step" automation:AutomationProperties.AutomationId="Onboarding.Back" />
-              <Button Grid.Column="3" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding OnboardingNextCommand}" automation:AutomationProperties.Name="Next tour step" automation:AutomationProperties.AutomationId="Onboarding.Next">
+        <Border Style="{StaticResource CardStyle}" Width="660" MaxHeight="680" Padding="{StaticResource Space6}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+              <TextBlock Text="{Binding OnboardingStepLabel}" Style="{StaticResource EyebrowStyle}" automation:AutomationProperties.AutomationId="Onboarding.StepLabel" />
+              <TextBlock Text="{Binding OnboardingTitle}" FontSize="22" FontWeight="Bold" Margin="0,8,0,12" automation:AutomationProperties.AutomationId="Onboarding.Title" />
+              <TextBlock Text="{Binding OnboardingBody}" TextWrapping="Wrap" LineHeight="21" automation:AutomationProperties.AutomationId="Onboarding.Body" />
+
+              <Border Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                      CornerRadius="{StaticResource RadiusInset}" Padding="{StaticResource Space4}" Margin="{StaticResource StackGap}">
+                <TextBlock Text="{Binding OnboardingDetailText}" TextWrapping="Wrap" LineHeight="20"
+                           automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Onboarding.Detail" />
+              </Border>
+
+              <StackPanel Margin="{StaticResource StackGap}">
+                <StackPanel.Style>
+                  <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingScanStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </StackPanel.Style>
+                <Button Content="{loc:Loc Onboarding_Scan}" Command="{Binding OnboardingScanCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                        HorizontalAlignment="Left" automation:AutomationProperties.Name="Scan hardware and competing owners" automation:AutomationProperties.AutomationId="Onboarding.Scan" />
+              </StackPanel>
+
+              <WrapPanel Margin="{StaticResource StackGap}">
+                <WrapPanel.Style>
+                  <Style TargetType="WrapPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingModeStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </WrapPanel.Style>
+                <Button Content="Quiet" Command="{Binding SelectOnboardingModeCommand}" CommandParameter="Quiet" Style="{StaticResource HardwareModeButtonStyle}"
+                        Tag="{Binding IsOnboardingQuietSelected}" Margin="0,0,8,8" automation:AutomationProperties.AutomationId="Onboarding.Mode.Quiet" />
+                <Button Content="Efficiency" Command="{Binding SelectOnboardingModeCommand}" CommandParameter="Efficiency" Style="{StaticResource HardwareModeButtonStyle}"
+                        Tag="{Binding IsOnboardingEfficiencySelected}" Margin="0,0,8,8" automation:AutomationProperties.AutomationId="Onboarding.Mode.Efficiency" />
+                <Button Content="Performance" Command="{Binding SelectOnboardingModeCommand}" CommandParameter="Performance" Style="{StaticResource HardwareModeButtonStyle}"
+                        Tag="{Binding IsOnboardingPerformanceSelected}" Margin="0,0,8,8" automation:AutomationProperties.AutomationId="Onboarding.Mode.Performance" />
+              </WrapPanel>
+
+              <StackPanel Margin="{StaticResource StackGap}">
+                <StackPanel.Style>
+                  <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingBaselineStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </StackPanel.Style>
+                <Button Content="{loc:Loc Onboarding_CaptureBaseline}" Command="{Binding CaptureOnboardingBaselineCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                        HorizontalAlignment="Left" automation:AutomationProperties.Name="Capture read-only baseline" automation:AutomationProperties.AutomationId="Onboarding.Baseline" />
+              </StackPanel>
+
+              <StackPanel Margin="{StaticResource StackGap}">
+                <StackPanel.Style>
+                  <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingApplyStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </StackPanel.Style>
+                <Button Content="{loc:Loc Onboarding_ApplyMode}" Command="{Binding ApplyOnboardingModeCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                        HorizontalAlignment="Left" automation:AutomationProperties.Name="Apply selected verified mode" automation:AutomationProperties.AutomationId="Onboarding.Apply" />
+              </StackPanel>
+
+              <StackPanel Margin="{StaticResource StackGap}">
+                <StackPanel.Style>
+                  <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingResultStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </StackPanel.Style>
+                <Button Content="{loc:Loc Onboarding_RestoreDefault}" Command="{Binding RestoreOnboardingDefaultsCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                        HorizontalAlignment="Left" automation:AutomationProperties.Name="Restore and verify Windows Balanced default" automation:AutomationProperties.AutomationId="Onboarding.RestoreDefault" />
+              </StackPanel>
+
+              <ProgressBar IsIndeterminate="True" Height="4" Foreground="{StaticResource AccentBrush}" Background="{StaticResource BorderBrush}" Margin="{StaticResource StackGap}">
+                <ProgressBar.Style>
+                  <Style TargetType="ProgressBar">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingWorking}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </ProgressBar.Style>
+              </ProgressBar>
+
+              <Grid Margin="0,24,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <Button Content="{loc:Loc Onboarding_Skip}" Command="{Binding OnboardingSkipCommand}" Style="{StaticResource GhostButtonStyle}" automation:AutomationProperties.Name="Skip guided setup" automation:AutomationProperties.AutomationId="Onboarding.Skip" />
+                <Button Grid.Column="2" Content="{loc:Loc Onboarding_Back}" Command="{Binding OnboardingBackCommand}" Margin="0,0,8,0" automation:AutomationProperties.Name="Previous setup step" automation:AutomationProperties.AutomationId="Onboarding.Back" />
+                <Button Grid.Column="3" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding OnboardingNextCommand}" automation:AutomationProperties.Name="Next setup step" automation:AutomationProperties.AutomationId="Onboarding.Next">
                 <Button.Content>
                   <TextBlock>
                     <TextBlock.Style>
@@ -3293,8 +3369,9 @@
                   </TextBlock>
                 </Button.Content>
               </Button>
-            </Grid>
-          </StackPanel>
+              </Grid>
+            </StackPanel>
+          </ScrollViewer>
         </Border>
       </Border>
     </Grid>

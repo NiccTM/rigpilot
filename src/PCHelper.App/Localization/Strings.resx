@@ -58,22 +58,46 @@
     <value>Step {0} of {1}</value>
   </data>
   <data name="Onboarding_Title1" xml:space="preserve">
-    <value>Welcome to RigPilot</value>
+    <value>Scan hardware and ownership</value>
   </data>
   <data name="Onboarding_Body1" xml:space="preserve">
-    <value>RigPilot controls fans, pumps, GPU limits, lighting, and profiles from one place. Every hardware write is transactional: the previous state is saved first, the applied value is read back from the hardware to verify it, and a failed write is rolled back. Built-in profiles stay within stock limits.</value>
+    <value>Start with a read-only inventory of devices, control evidence, user-session bridges, and competing hardware owners. This step cannot change hardware state.</value>
   </data>
   <data name="Onboarding_Title2" xml:space="preserve">
-    <value>The Hardware control switch</value>
+    <value>Know what RigPilot can control</value>
   </data>
   <data name="Onboarding_Body2" xml:space="preserve">
-    <value>The Hardware control switch in the dashboard header is the master arm for every writable control. While it is on, RigPilot may apply the values you set, always inside vendor bounds. Turning it off disarms every control and restores vendor defaults; stopping the service does the same. Voltage is never increased automatically.</value>
+    <value>Verified controls have apply, read-back, and reset evidence. Experimental controls require explicit confirmation. Read-only and blocked endpoints remain visible with their exact evidence gap or conflict.</value>
   </data>
   <data name="Onboarding_Title3" xml:space="preserve">
-    <value>Evidence labels, not promises</value>
+    <value>Choose a daily mode</value>
   </data>
   <data name="Onboarding_Body3" xml:space="preserve">
-    <value>Every control carries an evidence label. Verified means apply, read-back, and reset were proven on real hardware. Experimental means it works but has limited evidence — use it knowingly. Read Only and Blocked controls cannot write at all. The Devices page shows the evidence and the next safe step for each control.</value>
+    <value>Quiet reduces background power, Efficiency favours useful work per watt, and Performance favours responsiveness without automatic voltage increases. Selection alone never writes hardware.</value>
+  </data>
+  <data name="Onboarding_Title4" xml:space="preserve">
+    <value>Measure the baseline</value>
+  </data>
+  <data name="Onboarding_Body4" xml:space="preserve">
+    <value>Capture three read-only telemetry samples so the result has a before-state. Missing sensors are reported as missing instead of being estimated.</value>
+  </data>
+  <data name="Onboarding_Title5" xml:space="preserve">
+    <value>Review eligibility and omissions</value>
+  </data>
+  <data name="Onboarding_Body5" xml:space="preserve">
+    <value>The dry run lists the exact action that can be applied and why optional cooling, tuning, or lighting actions are omitted. Commissioning and Advanced Lab steps remain opt-in.</value>
+  </data>
+  <data name="Onboarding_Title6" xml:space="preserve">
+    <value>Apply one verified transaction</value>
+  </data>
+  <data name="Onboarding_Body6" xml:space="preserve">
+    <value>The service prepares the prior state, applies the eligible mode action, reads it back, and commits only after verification. A failed apply enters verified rollback or Recovery Required.</value>
+  </data>
+  <data name="Onboarding_Title7" xml:space="preserve">
+    <value>Review proof and restoration</value>
+  </data>
+  <data name="Onboarding_Body7" xml:space="preserve">
+    <value>Review the transaction proof. You can independently restore the Windows Balanced default and require a successful default-state read-back before setup is complete.</value>
   </data>
   <data name="Onboarding_Back" xml:space="preserve">
     <value>Back</value>
@@ -85,7 +109,19 @@
     <value>Got it — open the dashboard</value>
   </data>
   <data name="Onboarding_Skip" xml:space="preserve">
-    <value>Skip tour</value>
+    <value>Skip setup</value>
+  </data>
+  <data name="Onboarding_Scan" xml:space="preserve">
+    <value>Run read-only scan</value>
+  </data>
+  <data name="Onboarding_CaptureBaseline" xml:space="preserve">
+    <value>Capture baseline</value>
+  </data>
+  <data name="Onboarding_ApplyMode" xml:space="preserve">
+    <value>Apply selected mode</value>
+  </data>
+  <data name="Onboarding_RestoreDefault" xml:space="preserve">
+    <value>Restore Windows default</value>
   </data>
   <data name="Updates_CardTitle" xml:space="preserve">
     <value>Updates</value>

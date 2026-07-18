@@ -1536,8 +1536,21 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return Failure(request, "RESET_NOT_AVAILABLE", "Only Verified capabilities with explicit reset semantics can be reset.");
         }
 
-        IHardwareAdapter adapter = _coordinator!.Adapters.First(item => item.Manifest.Id == capability.AdapterId);
-        await adapter.ResetToDefaultAsync(capability.Id, cancellationToken).ConfigureAwait(false);
+        HardwareRecoveryResult recovery = await _engine!.RestoreDefaultsAsync(
+            [new HardwareControlLeaseItemV1(capability.AdapterId, capability.Id)],
+            cancellationToken).ConfigureAwait(false);
+        if (!recovery.AllDefaultsVerified)
+        {
+            _rollbackBlocked = true;
+            string message = recovery.Errors.Count == 0
+                ? "The adapter did not return a successful default-state read-back."
+                : string.Join(" ", recovery.Errors);
+            return Failure(
+                request,
+                "RECOVERY_REQUIRED",
+                $"Reset outcome is not verified; writes are locked until recovery succeeds. {message}");
+        }
+
         await RefreshAsync(persistSensors: false, cancellationToken).ConfigureAwait(false);
         return Success(request, capability.Id);
     }

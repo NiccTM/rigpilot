@@ -82,7 +82,7 @@ public sealed partial class MainViewModel
         return ApplyProfileAsync(card.Profile);
     }
 
-    private async Task ApplyProfileV2Async(
+    private async Task<ApplyProfileResult> ApplyProfileV2Async(
         ProfileV2 profile,
         bool manualSelection = true,
         bool applyLinkedLighting = true,
@@ -148,6 +148,8 @@ public sealed partial class MainViewModel
             {
                 ManualVoltageAcknowledged = false;
             }
+
+            return result;
         }
         finally
         {

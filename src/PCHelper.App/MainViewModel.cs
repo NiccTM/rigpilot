@@ -330,7 +330,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         _toggleHardwareControlCommand = new AsyncCommand(
             ToggleHardwareControlAsync,
             _ => CanUseServiceWrites && !IsHardwareControlChanging,
-            ReportError);
+            ReportError,
+            _ => ShowNotice(
+                IsHardwareControlChanging
+                    ? "The service is still applying and reading back the previous hardware-control request."
+                    : GetServiceWriteBlockReason(),
+                "Warning"));
         _refreshCommand = new AsyncCommand(_ => RefreshWithFeedbackAsync(), onError: ReportError);
         _applyGpuControlCommand = new AsyncCommand(
             parameter => ApplyGpuControlAsync((GpuControlSlider)parameter!),
@@ -374,7 +379,23 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 && (!card.IsExperimental || (AdvancedWritesAcknowledged && ProfileDeviceAcknowledged))
                 && (!card.RequiresManualAcknowledgement
                     || (AdvancedWritesAcknowledged && ProfileDeviceAcknowledged && ManualVoltageAcknowledged)),
-            ReportError);
+            ReportError,
+            parameter =>
+            {
+                string reason = !CanUseServiceWrites
+                    ? GetServiceWriteBlockReason()
+                    : parameter is not ProfileCardDisplay card
+                        ? "Select a profile before applying it."
+                        : card.IsActive
+                            ? $"{card.Name} is already active."
+                            : card.IsExperimental && !(AdvancedWritesAcknowledged && ProfileDeviceAcknowledged)
+                                ? "Experimental profiles require both the advanced-write acknowledgement and exact-device confirmation."
+                                : card.RequiresManualAcknowledgement
+                                    && !(AdvancedWritesAcknowledged && ProfileDeviceAcknowledged && ManualVoltageAcknowledged)
+                                        ? "This profile requires the advanced-write, exact-device, and manual-voltage acknowledgements."
+                                        : "The profile cannot be applied in the current state.";
+                ShowNotice(reason, "Warning");
+            });
         _closeBlockersCommand = new AsyncCommand(
             _ => CloseBlockersCoreAsync(),
             _ => IsServiceOnline && RunningConflictCount > 0 && CloseBlockersAcknowledged,
@@ -382,7 +403,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         _resetVerifiedCommand = new AsyncCommand(
             _ => ResetVerifiedControlsCoreAsync(),
             _ => CanUseServiceWrites && ResettableVerifiedControlCount > 0,
-            ReportError);
+            ReportError,
+            _ => ShowNotice(
+                !CanUseServiceWrites
+                    ? GetServiceWriteBlockReason()
+                    : "No Verified control currently exposes an independently read-back-verified default reset.",
+                "Warning"));
         _startCalibrationCommand = new AsyncCommand(
             _ => StartCalibrationCoreAsync(),
             _ => CanStartCalibration,
