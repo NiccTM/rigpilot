@@ -135,7 +135,14 @@ public sealed record AutoOcProfileValidationV1(
     DateTimeOffset? ActiveSessionStartedAt,
     string? ActiveServiceInstanceId,
     IReadOnlyList<AutoOcStabilityEventV1> RelevantEvents,
-    string Message)
+    string Message,
+    // The most recently closed evidence session. WHEA and display-driver-reset
+    // detection is inherently lagged (the probe polls), so an event that
+    // occurred during a session can be reported after that session closed.
+    // Retaining the window lets a late signal still invalidate the tune
+    // instead of being dropped as unattributable.
+    DateTimeOffset? LastSessionStartedAt = null,
+    DateTimeOffset? LastSessionEndedAt = null)
 {
     public const int CurrentSchemaVersion = 1;
 }

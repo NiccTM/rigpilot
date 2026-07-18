@@ -143,6 +143,61 @@ public sealed class AutoOcValidationPolicyTests
         Assert.Equal(AutoOcStabilityEventKind.UncleanShutdown, Assert.Single(invalidated.RelevantEvents).Kind);
     }
 
+    [Fact]
+    public void ACrashReportedAfterShutdownStillInvalidatesTheSessionThatCrashed()
+    {
+        // Session runs 12:00–13:00. WHEA fires at 12:59. Clean shutdown closes
+        // the session at 13:00 and banks a successful cold boot. The probe only
+        // surfaces the event at 13:00:05 — after the session is gone.
+        DateTimeOffset started = CreatedAt;
+        DateTimeOffset crashedAt = started + TimeSpan.FromMinutes(59);
+        DateTimeOffset shutdownAt = started + TimeSpan.FromHours(1);
+
+        AutoOcProfileValidationV1 record = AutoOcValidationPolicy.Activate(
+            Validation(), "boot-1", ProfileActivationSource.Manual, started);
+        record = AutoOcValidationPolicy.RecordActiveUseSample(
+            record, "boot-1", TimeSpan.FromSeconds(30), 95, started.AddSeconds(30));
+
+        AutoOcProfileValidationV1 closed = AutoOcValidationPolicy.Deactivate(
+            record, "boot-1", shutdownAt, countSuccessfulColdBoot: true);
+        Assert.Equal(1, closed.SuccessfulColdBoots);
+        Assert.Null(closed.ActiveSessionStartedAt);
+
+        AutoOcProfileValidationV1 late = AutoOcValidationPolicy.RecordStabilityEvents(
+            closed,
+            [new AutoOcStabilityEventV1(AutoOcStabilityEventKind.Whea, crashedAt, "WHEA observed")],
+            shutdownAt.AddSeconds(5));
+
+        Assert.Equal(AutoOcValidationState.Invalidated, late.State);
+        Assert.Equal(AutoOcStabilityEventKind.Whea, Assert.Single(late.RelevantEvents).Kind);
+    }
+
+    [Fact]
+    public void EventsOutsideEverySessionWindowAreNotAttributedToThisTune()
+    {
+        DateTimeOffset started = CreatedAt;
+        DateTimeOffset shutdownAt = started + TimeSpan.FromHours(1);
+
+        AutoOcProfileValidationV1 closed = AutoOcValidationPolicy.Deactivate(
+            AutoOcValidationPolicy.Activate(Validation(), "boot-1", ProfileActivationSource.Manual, started),
+            "boot-1",
+            shutdownAt,
+            countSuccessfulColdBoot: true);
+
+        // Before the tune ever ran, and well after it stopped: someone else's
+        // problem, not evidence against this tune.
+        AutoOcProfileValidationV1 unrelated = AutoOcValidationPolicy.RecordStabilityEvents(
+            closed,
+            [
+                new AutoOcStabilityEventV1(AutoOcStabilityEventKind.Whea, started - TimeSpan.FromHours(2), "before"),
+                new AutoOcStabilityEventV1(AutoOcStabilityEventKind.DisplayDriverReset, shutdownAt + TimeSpan.FromHours(3), "after")
+            ],
+            shutdownAt + TimeSpan.FromHours(4));
+
+        Assert.NotEqual(AutoOcValidationState.Invalidated, unrelated.State);
+        Assert.Empty(unrelated.RelevantEvents);
+    }
+
     [Theory]
     [InlineData(AutoOcValidationState.Rejected)]
     [InlineData(AutoOcValidationState.Invalidated)]

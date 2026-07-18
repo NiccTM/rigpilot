@@ -110,6 +110,8 @@ public static class AutoOcValidationPolicy
         {
             UpdatedAt = now,
             ActiveSessionStartedAt = now,
+            LastSessionStartedAt = now,
+            LastSessionEndedAt = null,
             ActiveServiceInstanceId = serviceInstanceId,
             SuccessfulManualApplications = record.SuccessfulManualApplications
                 + (source == ProfileActivationSource.Manual ? 1 : 0),
@@ -140,7 +142,10 @@ public static class AutoOcValidationPolicy
             UpdatedAt = now,
             SuccessfulColdBoots = record.SuccessfulColdBoots + (countSuccessfulColdBoot ? 1 : 0),
             ActiveSessionStartedAt = null,
-            ActiveServiceInstanceId = null
+            ActiveServiceInstanceId = null,
+            // Keep the window open for late-arriving stability signals.
+            LastSessionStartedAt = record.ActiveSessionStartedAt,
+            LastSessionEndedAt = now
         };
         return EvaluatePromotion(updated, now);
     }
@@ -221,12 +226,23 @@ public static class AutoOcValidationPolicy
                 "GPU identity, VBIOS, or display-driver evidence changed; the tune must be regenerated."),
             now);
 
+    /// <summary>
+    /// Attributes stability signals to this tune. An event counts when it falls
+    /// inside the open session, or inside the most recently closed one — WHEA
+    /// and display-reset detection lags, so a crash at 12:59 can surface after
+    /// a 13:00 shutdown closed the session and banked it as a successful cold
+    /// boot. Without the closed-session window that signal would be discarded
+    /// and the tune would keep marching toward Validated on evidence from a
+    /// session that actually crashed.
+    /// </summary>
     public static AutoOcProfileValidationV1 RecordStabilityEvents(
         AutoOcProfileValidationV1 record,
         IReadOnlyList<AutoOcStabilityEventV1> events,
         DateTimeOffset now)
     {
-        if (record.ActiveSessionStartedAt is null || events.Count == 0)
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(events);
+        if (events.Count == 0 || IsTerminal(record.State))
         {
             return record;
         }
@@ -234,12 +250,30 @@ public static class AutoOcValidationPolicy
         AutoOcProfileValidationV1 updated = record;
         foreach (AutoOcStabilityEventV1 stabilityEvent in events.OrderBy(item => item.ObservedAt))
         {
-            if (stabilityEvent.ObservedAt >= record.ActiveSessionStartedAt.Value)
+            if (BelongsToThisTune(record, stabilityEvent.ObservedAt))
             {
                 updated = Invalidate(updated, stabilityEvent, now);
             }
         }
         return updated;
+    }
+
+    /// <summary>
+    /// True when an event timestamp falls inside the open session or the last
+    /// closed session window. Events outside both belong to another owner of
+    /// the hardware and are never attributed to this tune.
+    /// </summary>
+    private static bool BelongsToThisTune(AutoOcProfileValidationV1 record, DateTimeOffset observedAt)
+    {
+        if (record.ActiveSessionStartedAt is DateTimeOffset open && observedAt >= open)
+        {
+            return true;
+        }
+
+        return record.LastSessionStartedAt is DateTimeOffset started
+            && record.LastSessionEndedAt is DateTimeOffset ended
+            && observedAt >= started
+            && observedAt <= ended;
     }
 
     public static AutoOcProfileValidationV1 MarkRecoveryRequired(
