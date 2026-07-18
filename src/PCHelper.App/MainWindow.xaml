@@ -246,6 +246,7 @@
             <ListBox x:Name="Navigation"
                      SelectionChanged="Navigation_SelectionChanged"
                      SelectedIndex="0"
+                     ItemContainerStyle="{StaticResource NavigationItemStyle}"
                      automation:AutomationProperties.Name="RigPilot pages"
                      automation:AutomationProperties.AutomationId="Navigation.Pages">
               <ListBoxItem ToolTip="Overview (Ctrl+1)" automation:AutomationProperties.Name="Overview" automation:AutomationProperties.AutomationId="Navigation.Overview">
@@ -278,7 +279,7 @@
                   <TextBlock Text="{loc:Loc Nav_Lighting}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Automation (Ctrl+6)" automation:AutomationProperties.Name="Automation" automation:AutomationProperties.AutomationId="Navigation.Automation">
+              <ListBoxItem Tag="AUTOMATION &amp; TOOLS" ToolTip="Automation (Ctrl+6)" automation:AutomationProperties.Name="Automation" automation:AutomationProperties.AutomationId="Navigation.Automation">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE823;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Automation}" />
@@ -290,7 +291,7 @@
                   <TextBlock Text="{loc:Loc Nav_GamesTools}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Devices (Ctrl+8)" automation:AutomationProperties.Name="Devices" automation:AutomationProperties.AutomationId="Navigation.Devices">
+              <ListBoxItem Tag="SYSTEM" ToolTip="Devices (Ctrl+8)" automation:AutomationProperties.Name="Devices" automation:AutomationProperties.AutomationId="Navigation.Devices">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE772;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Devices}" />
@@ -688,7 +689,7 @@
                     <Grid Margin="0,5">
                       <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                       <StackPanel Orientation="Horizontal">
-                        <Ellipse Width="8" Height="8" Fill="{StaticResource CriticalBrush}" VerticalAlignment="Center" Margin="0,0,9,0" />
+                        <Ellipse Width="8" Height="8" Fill="{StaticResource StateBlockedBrush}" VerticalAlignment="Center" Margin="0,0,9,0" />
                         <TextBlock Text="Blocked or unsupported" />
                       </StackPanel>
                       <TextBlock Grid.Column="1" Text="{Binding BlockedOrUnsupportedControlCount}" FontWeight="SemiBold" />
