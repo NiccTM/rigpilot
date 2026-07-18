@@ -106,6 +106,28 @@ if (args.Contains("--probe-smbus-rgb", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--probe-razer-usb", StringComparer.OrdinalIgnoreCase))
+{
+    // Read-only interface diagnostics for the audited Razer device: report
+    // lengths and openability per HID interface. No report is written.
+    Console.WriteLine(JsonSerializer.Serialize(RazerUsbRgbWriter.ProbeInterfaces(), JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--set-razer-usb-rgb", StringComparer.OrdinalIgnoreCase))
+{
+    // Disposable native Razer USB lighting child: one extended-matrix static
+    // command to the first audited Razer device, with the firmware status
+    // reply read back. No firmware/profile/EEPROM command class is issued;
+    // a native HID fault is contained by the parent.
+    int razerIndex = Array.FindIndex(args, argument => string.Equals(argument, "--set-razer-usb-rgb", StringComparison.OrdinalIgnoreCase));
+    string razerValue = razerIndex >= 0 && razerIndex + 1 < args.Length ? args[razerIndex + 1] : string.Empty;
+    bool razerOff = string.Equals(razerValue, "off", StringComparison.OrdinalIgnoreCase);
+    RazerRgbResultV1 razer = RazerUsbRgbWriter.Write(razerOff ? string.Empty : razerValue, razerOff);
+    Console.WriteLine(JsonSerializer.Serialize(razer, JsonDefaults.Options));
+    return;
+}
+
 if (args.Contains("--set-smbus-rgb", StringComparer.OrdinalIgnoreCase))
 {
     // Disposable DIMM RGB child: the production audited path. Detection +

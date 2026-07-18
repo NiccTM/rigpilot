@@ -360,6 +360,58 @@ public sealed record AuraLightingResultV1(
 }
 
 /// <summary>
+/// Requests a native Razer Chroma USB lighting write (RigPilot's own adapter,
+/// no Synapse dependency). Experimental and exact-device confirmed like the
+/// other native lighting requests; extended-matrix static effect only, and the
+/// firmware's status reply is read back.
+/// </summary>
+public sealed record RazerRgbRequestV1(
+    int SchemaVersion,
+    string Colour,
+    bool TurnOff,
+    bool ConfirmExperimental,
+    string? ConfirmDeviceId)
+{
+    public const int CurrentSchemaVersion = 1;
+    public const string ExactDeviceId = "razer:lianli-o11-dynamic";
+
+    public string? Validate()
+    {
+        if (SchemaVersion != CurrentSchemaVersion)
+        {
+            return $"Unsupported Razer lighting request schema {SchemaVersion}.";
+        }
+        if (!ConfirmExperimental)
+        {
+            return "Native Razer lighting is Experimental and requires explicit confirmation.";
+        }
+        if (!string.Equals(ConfirmDeviceId, ExactDeviceId, StringComparison.Ordinal))
+        {
+            return $"Razer lighting requires exact-device confirmation for '{ExactDeviceId}'.";
+        }
+
+        return null;
+    }
+}
+
+/// <summary>
+/// Result of RigPilot's native Razer USB lighting write. Unlike the other
+/// native lighting paths the Razer firmware acknowledges commands, so
+/// WriteIssued here means the firmware accepted the command (status 0x02).
+/// </summary>
+public sealed record RazerRgbResultV1(
+    int SchemaVersion,
+    KrakenLightingOutcome Outcome,
+    string? ProductName,
+    string Message)
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public static RazerRgbResultV1 Unavailable(KrakenLightingOutcome outcome, string message) =>
+        new(CurrentSchemaVersion, outcome, null, message);
+}
+
+/// <summary>
 /// Requests a DIMM RGB static-colour write over the system SMBus (G.Skill
 /// Trident Z RGB / ENE). Experimental and exact-device confirmed like the
 /// other native lighting requests. The write path is quadruple-gated: signed

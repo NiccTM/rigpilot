@@ -296,6 +296,111 @@ public sealed partial class MainViewModel
         return owners.Length == 0 ? null : string.Join(", ", owners);
     }
 
+    // --- Adaptive automatic cooling: pick the curve from live temperatures ----
+
+    private CoolingCurveMode? _lastAdaptiveCoolingMode;
+    private AsyncCommand? _startAdaptiveCoolingCommand;
+
+    public ICommand StartAdaptiveCoolingCommand => _startAdaptiveCoolingCommand ??= new AsyncCommand(
+        parameter => StartAdaptiveCoolingAsync(string.Equals(parameter as string, "gpu", StringComparison.OrdinalIgnoreCase)),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    /// <summary>
+    /// One-click adaptive cooling: reads the current CPU package and GPU core
+    /// temperatures and picks Silent, Balanced, or Cooling (with hysteresis so
+    /// the choice doesn't flap), then applies it through the same verified
+    /// graph engine as the explicit modes.
+    /// </summary>
+    public async Task StartAdaptiveCoolingAsync(bool gpuFans)
+    {
+        double? cpu = ReadLiveTemperature("CPU Package");
+        double? gpu = ReadLiveTemperature("GPU Core");
+        CoolingCurveMode mode = CoolingModeSelector.Choose(cpu, gpu, _lastAdaptiveCoolingMode);
+        _lastAdaptiveCoolingMode = mode;
+        ShowNotice($"Adaptive cooling picked {mode}: {CoolingModeSelector.Describe(mode, cpu, gpu)}", "Info");
+        await StartAutomaticCoolingAsync(gpuFans, mode);
+    }
+
+    private double? ReadLiveTemperature(string sensorName) => (_snapshot?.Sensors ?? [])
+        .Where(sensor => string.Equals(sensor.Unit, "°C", StringComparison.OrdinalIgnoreCase)
+            && sensor.Quality == SensorQuality.Good
+            && sensor.Value.HasValue
+            && sensor.Name.Contains(sensorName, StringComparison.OrdinalIgnoreCase))
+        .Select(sensor => sensor.Value)
+        .FirstOrDefault();
+
+    // --- Full Auto OC: core pass, wait for completion, then memory pass ------
+
+    private AsyncCommand? _startFullAutoOcCommand;
+    private string _fullAutoOcStatus = "Runs the core-clock auto-OC to completion, then the memory pass, unattended — each with the full safety envelope (83 °C ceiling, screening, rollback, boot sentinel).";
+
+    public ICommand StartFullAutoOcCommand => _startFullAutoOcCommand ??= new AsyncCommand(
+        _ => StartFullAutoOcAsync(),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    public string FullAutoOcStatus
+    {
+        get => _fullAutoOcStatus;
+        private set => Set(ref _fullAutoOcStatus, value);
+    }
+
+    /// <summary>
+    /// The complete unattended overclocking pass: core auto-OC, wait for the
+    /// bounded engine to finish (including its screening and restore), then
+    /// the memory auto-OC. A core pass that ends in anything but Completed
+    /// stops the sequence — memory is never tuned on top of a failed core run.
+    /// </summary>
+    public async Task StartFullAutoOcAsync()
+    {
+        FullAutoOcStatus = "Core clock pass starting…";
+        await StartGpuAutoOcAsync();
+        HardwareOperationState? coreOutcome = await WaitForOperationAsync("core clock");
+        if (coreOutcome != HardwareOperationState.Completed)
+        {
+            FullAutoOcStatus = $"Stopped after the core pass ({coreOutcome?.ToString() ?? "not started"}); the memory pass was not run.";
+            ShowNotice(FullAutoOcStatus, "Warning");
+            return;
+        }
+
+        FullAutoOcStatus = "Core pass completed. Memory clock pass starting…";
+        await StartGpuMemoryAutoOcAsync();
+        HardwareOperationState? memoryOutcome = await WaitForOperationAsync("memory clock");
+        FullAutoOcStatus = memoryOutcome == HardwareOperationState.Completed
+            ? "Full Auto OC finished: core and memory passes both completed with their safety margins applied. Run the benchmark on Games & tools to confirm the gain."
+            : $"Core pass completed; the memory pass ended {memoryOutcome?.ToString() ?? "without starting"}.";
+        ShowNotice(FullAutoOcStatus, memoryOutcome == HardwareOperationState.Completed ? "Success" : "Warning");
+    }
+
+    /// <summary>
+    /// Polls the service operation status until the current tune reaches a
+    /// terminal state (bounded at 45 minutes — far beyond any screening run).
+    /// </summary>
+    private async Task<HardwareOperationState?> WaitForOperationAsync(string label)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(45);
+        HardwareOperationState? last = _operation?.State;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (_operation is { } operation)
+            {
+                last = operation.State;
+                if (operation.State is not (HardwareOperationState.Pending or HardwareOperationState.Running or HardwareOperationState.Screening))
+                {
+                    return operation.State;
+                }
+
+                FullAutoOcStatus = $"Auto OC ({label}): {operation.State} — {operation.Message}";
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(5), _lifetime.Token);
+            await RefreshAsync(full: false, userInitiated: false);
+        }
+
+        return last;
+    }
+
     public async Task StartAutomaticCoolingAsync(bool gpuFans, CoolingCurveMode mode = CoolingCurveMode.Balanced)
     {
         if (!HardwareControlEnabled)

@@ -1088,6 +1088,10 @@
                           ToolTip="Temperature-biased curve: ramps early and steeply, reaching full speed at a lower temperature (78 °C)."
                           automation:AutomationProperties.Name="Enable cooling automatic fan curve for case fans"
                           automation:AutomationProperties.AutomationId="Cooling.CaseFansCooling" />
+                  <Button Content="Adaptive (pick for me)" Command="{Binding StartAdaptiveCoolingCommand}" CommandParameter="case" Margin="0,0,8,8"
+                          ToolTip="Reads the current CPU and GPU temperatures and picks Silent, Balanced, or Cooling for you — with hysteresis so it doesn't flap at a boundary. Cool (≤55 °C) → Silent; hot (≥75 °C) → Cooling; otherwise Balanced."
+                          automation:AutomationProperties.Name="Enable adaptive automatic fan curve chosen from live temperatures"
+                          automation:AutomationProperties.AutomationId="Cooling.CaseFansAdaptive" />
                 </WrapPanel>
                 <WrapPanel Margin="0,4,0,0">
                   <Button Content="Set up fan curves &amp; calibration" Command="{Binding ToggleAdvancedLabCommand}" Margin="0,0,8,8"
@@ -1534,7 +1538,48 @@
                       <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
                     </Border>
                   </Grid>
-                  <ItemsControl ItemsSource="{Binding PerformanceSensors}" ItemTemplate="{StaticResource SensorRowTemplate}" automation:AutomationProperties.Name="Live utilisation, clock, and power readings" automation:AutomationProperties.AutomationId="Performance.LiveReadings" />
+                  <ItemsControl automation:AutomationProperties.Name="Live utilisation, clock, and power readings" automation:AutomationProperties.AutomationId="Performance.LiveReadings">
+                    <!-- Grouped by device so the hardware name appears once as a
+                         header instead of repeating on every row. -->
+                    <ItemsControl.Resources>
+                      <CollectionViewSource x:Key="GroupedPerformanceSensors" Source="{Binding PerformanceSensors}">
+                        <CollectionViewSource.GroupDescriptions>
+                          <PropertyGroupDescription PropertyName="Device" />
+                        </CollectionViewSource.GroupDescriptions>
+                      </CollectionViewSource>
+                      <DataTemplate x:Key="SensorRowNoDeviceTemplate">
+                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
+                          <Grid>
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="30" />
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Width="25" Height="25" CornerRadius="6" Background="{StaticResource SurfaceRaisedBrush}">
+                              <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="12" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="7,0,10,0" />
+                            <TextBlock Grid.Column="2" Text="{Binding DisplayValue}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.Resources>
+                    <ItemsControl.ItemsSource>
+                      <Binding Source="{StaticResource GroupedPerformanceSensors}" />
+                    </ItemsControl.ItemsSource>
+                    <ItemsControl.ItemTemplate>
+                      <StaticResource ResourceKey="SensorRowNoDeviceTemplate" />
+                    </ItemsControl.ItemTemplate>
+                    <ItemsControl.GroupStyle>
+                      <GroupStyle>
+                        <GroupStyle.HeaderTemplate>
+                          <DataTemplate>
+                            <TextBlock Text="{Binding Name}" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,4" />
+                          </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                      </GroupStyle>
+                    </ItemsControl.GroupStyle>
+                  </ItemsControl>
                   <Border Margin="0,10,0,0">
                     <Border.Style>
                       <Style TargetType="Border" BasedOn="{StaticResource EmptyStateStyle}">
@@ -1655,8 +1700,13 @@
                           ToolTip="The same refined climb, edge-find, and back-off search applied to the GDDR6X memory clock offset (100 MHz safety margin). Often the larger real-world gain on this card. Same aborts, rollback, and boot sentinel; no voltage."
                           automation:AutomationProperties.Name="Start GPU memory auto overclock screening"
                           automation:AutomationProperties.AutomationId="Performance.AutoOcMemory" />
+                  <Button Content="Full Auto OC" Command="{Binding StartFullAutoOcCommand}" Margin="0,0,8,8"
+                          ToolTip="Unattended complete pass: runs the core-clock auto-OC to completion, then the memory pass — each with the full safety envelope (83 °C ceiling, screening, rollback, boot sentinel). Memory is never tuned on top of a failed core run."
+                          automation:AutomationProperties.Name="Start full unattended auto overclock (core then memory)"
+                          automation:AutomationProperties.AutomationId="Performance.FullAutoOc" />
                   <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Margin="0,0,8,8" />
                 </WrapPanel>
+                <TextBlock Text="{Binding FullAutoOcStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" />
                 <TextBlock Text="AUTOMATIC GPU FAN CURVE" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,5" />
                 <TextBlock Text="Binds the armed GPU fan to GPU temperature through the service graph engine, with a 50% safety floor, full speed at the mode's critical temperature, and stale-sensor maximum cooling." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />
                 <WrapPanel>
@@ -1793,7 +1843,9 @@
         <ScrollViewer x:Name="LightingPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="0,0,10,18">
             <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="380">
-              <Border Style="{StaticResource CardStyle}" Padding="22">
+              <!-- Hug content: this card is much shorter than its neighbour, so
+                   stretching it full-height reads as dead space. -->
+              <Border Style="{StaticResource CardStyle}" Padding="22" VerticalAlignment="Top">
                 <StackPanel>
                   <Grid>
                     <StackPanel Orientation="Horizontal">
@@ -1812,7 +1864,19 @@
                   <TextBlock Text="RigPilot connects only to 127.0.0.1:6742 after explicit opt-in. The service never opens this socket, and OpenRGB is never bundled." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,18,0,12" />
                   <CheckBox IsChecked="{Binding OpenRgbEnabled}" Content="Enable the local OpenRGB SDK bridge." />
                   <Separator />
-                  <TextBlock Text="{Binding OpenRgbStatus}" Foreground="{StaticResource SafeBrush}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <!-- Colour semantics: green only when the bridge is genuinely
+                       connected; a disabled/failed bridge reads as neutral text. -->
+                  <TextBlock Text="{Binding OpenRgbStatus}" FontWeight="SemiBold" TextWrapping="Wrap">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock" BasedOn="{StaticResource SubtleStyle}">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding OpenRgbConnected}" Value="True">
+                            <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
                   <TextBlock Text="{Binding LightingConflictReason}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,12" />
                   <Button Content="Test local SDK server" Command="{Binding ProbeOpenRgbCommand}" HorizontalAlignment="Left" ToolTipService.ShowOnDisabled="True" ToolTip="Enable the bridge and close competing lighting writers first." />
                 </StackPanel>
@@ -1870,7 +1934,16 @@
                             automation:AutomationProperties.Name="Stop ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StopAmbient" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="NATIVE KRAKEN LIGHTING (RIGPILOT ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="SYNC EVERYTHING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <WrapPanel>
+                    <Button Content="Sync colour to all devices" Command="{Binding SyncAllRgbCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                            ToolTip="One click: the chosen colour to the Kraken, both Aura headers (including the ELV8 GPU holder), the Trident Z RAM, and the Razer case — each through its own gated native path, with a combined result."
+                            automation:AutomationProperties.Name="Sync the chosen colour to every native RGB device" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgb" />
+                    <Button Content="All lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn every native RGB device off" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgbOff" />
+                  </WrapPanel>
+                  <Separator Margin="0,4" />
+                  <TextBlock Text="KRAKEN COOLER" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding KrakenLightingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingStatus" />
                   <WrapPanel>
                     <Button Content="Apply to Kraken" Command="{Binding ApplyKrakenLightingCommand}" Margin="0,0,8,8"
@@ -1880,7 +1953,7 @@
                             automation:AutomationProperties.Name="Turn Kraken lighting off via native adapter" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="NATIVE AURA LIGHTING (RIGPILOT ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="AURA HEADERS" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <WrapPanel>
                     <Button Content="Apply to Aura board" Command="{Binding ApplyAuraLightingCommand}" Margin="0,0,8,8"
                             ToolTip="Writes the static colour to both addressable AURA headers through RigPilot's own contained HID adapter (clean-room documented protocol). Lighting only; confirm visually."
@@ -1889,8 +1962,8 @@
                             automation:AutomationProperties.Name="Turn AURA lighting off via native adapter" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="GPU SAG BRACKET — COOLER MASTER ARGB (VIA AURA HEADER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
-                  <TextBlock Text="The bracket is a passive ARGB strip driven by the Aura header it's plugged into. Pick the header, then apply — the other header keeps its colour."
+                  <TextBlock Text="ELV8 GPU HOLDER" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="The ELV8's built-in ARGB strip is passive — it shows whatever the addressable header it's plugged into sends (plug it into a motherboard ARGB header, not the bundled button controller, for software control). Pick the header, then apply — the other header keeps its colour."
                              Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,6" />
                   <WrapPanel>
                     <ComboBox SelectedIndex="{Binding GpuBracketHeaderIndex}" Width="110" Margin="0,0,8,8" VerticalAlignment="Center"
@@ -1906,7 +1979,7 @@
                             automation:AutomationProperties.Name="Turn the GPU sag bracket header lighting off" automation:AutomationProperties.AutomationId="Lighting.GpuBracketOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="NATIVE RAM RGB — TRIDENT Z (RIGPILOT SMBUS ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="TRIDENT Z RAM" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <WrapPanel>
                     <Button Content="Apply to RAM" Command="{Binding ApplyDimmRgbCommand}" Margin="0,0,8,8"
                             ToolTip="Writes the static colour to the G.Skill Trident Z RGB sticks through RigPilot's own SMBus adapter (signed PawnIO transport, identity-verified ENE controller, first-light audited on this kit). All sticks change together; there is no read-back, so confirm visually."
@@ -1915,7 +1988,16 @@
                             automation:AutomationProperties.Name="Turn Trident Z RAM lighting off via native SMBus adapter" automation:AutomationProperties.AutomationId="Lighting.DimmRgbOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="NATIVE RAZER CHROMA (OFFICIAL SDK)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="RAZER CASE" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <WrapPanel>
+                    <Button Content="Apply to Razer case" Command="{Binding ApplyRazerUsbCommand}" Margin="0,0,8,8"
+                            ToolTip="Writes the static colour to the Lian Li O11 Dynamic Razer Edition through RigPilot's own USB adapter — no Razer Synapse needed. The firmware acknowledges the command, so this result is verified."
+                            automation:AutomationProperties.Name="Apply static colour to the Razer case via native adapter" automation:AutomationProperties.AutomationId="Lighting.ApplyRazerUsb" />
+                    <Button Content="Case lighting off" Command="{Binding ApplyRazerUsbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn the Razer case lighting off via native adapter" automation:AutomationProperties.AutomationId="Lighting.RazerUsbOff" />
+                  </WrapPanel>
+                  <Separator Margin="0,4" />
+                  <TextBlock Text="RAZER CHROMA (SYNAPSE)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding RazerChromaStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" />
                   <Button Content="Apply to Razer Chroma" Command="{Binding ApplyRazerChromaCommand}" HorizontalAlignment="Left"
                           ToolTip="Applies the static colour to every Razer Chroma device — the Lian Li O11 Razer Edition, keyboard, mouse, headset — through Razer's official Chroma SDK. Requires Razer Synapse with Chroma Connect running."

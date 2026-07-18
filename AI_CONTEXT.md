@@ -766,6 +766,30 @@ Version 1.0 is blocked by any unresolved BSOD, stuck fan, failed reset, unauthor
 - Suite 719 tests (341 core + 378 integration; convention contract tests auto-covered the new command/records), 0 warnings. NOT yet deployed — the installed service predates all of this; a deploy is needed before the app buttons work against the live service.
 - Remaining (future, separately gated): per-stick control needs the ENE remap procedure, which touches SPD page-select territory (forbidden range) — requires its own audit before ever being attempted. One process-discipline note recorded: the first identity pass queried 0x76 (ACK-only gating) before the pattern/name gates were tightened — one pointer word reached the unknown device with no observed ill effect; the gates now make that impossible.
 
+## Verification snapshot: 2026-07-17 (Native Razer USB writer — firmware-ACK-verified live; ELV8 = header-targeted Aura)
+
+- **`RazerUsbRgbWriter`**: clean-room native writer for Razer Chroma USB devices from the community-documented protocol (openrazer docs; protocol facts only). 90-byte command report [status, txid 0x1F, remaining(2 BE), proto, dataSize, class, cmd, args(80), crc = XOR bytes 2..87, reserved] sent as HID feature report; only the extended-matrix STATIC effect (class 0x0F, cmd 0x02, dataSize 0x09, args varstore/led0/static/…/1/RGB) is ever issued — no firmware/profile/EEPROM command class exists in the type. Audited-PID allowlist gates writes; currently only 0x0F13 (Lian Li O11 Dynamic Razer Edition).
+- **Interface lesson (live-diagnosed on the reference rig)**: the O11 exposes 7 HID interfaces; the vendor control interface (mi_02, feature length 91) REFUSES a normal read/write open even with nothing else running. Fix: zero-access-rights CreateFileW (desiredAccess 0, full sharing) + HidD_SetFeature/HidD_GetFeature — feature IOCTLs need no read/write access. `--probe-razer-usb` child prints per-interface diagnostics read-only.
+- **Live-verified**: static red → firmware replied status 0x02 (success ACK). This path has genuine read-back, unlike Aura/Kraken lighting.
+- Full chain wired mirroring the other native writers: `--set-razer-usb-rgb RRGGBB|off` child → `ContainedRazerRgb` → `IpcCommand.SetRazerRgb` + `RazerRgbRequestV1` (Experimental + exact-device 'razer:lianli-o11-dynamic') / `RazerRgbResultV1` → `SetRazerRgbAsync` → "Apply to Razer case" buttons on the Lighting page (distinct from the Chroma-SDK section, which still needs Synapse).
+- **Cooler Master ELV8 ARGB GPU holder**: passive 3-pin ARGB strip, no addressable controller of its own (the bundled button box is hardware-cycled only). Software control = the per-header Aura targeting built earlier; the Lighting-page section is now named for the ELV8 with plug-into-a-motherboard-header guidance.
+- Suite 745 tests (341 core + 404 integration), 0 warnings. All of this is uncommitted on master locally; the installed service still predates SetDimmRgb/SetRazerRgb — deploy pending (UAC declined twice earlier).
+
+## Verification snapshot: 2026-07-17 (Full Auto OC, adaptive fan mode, sync-all RGB)
+
+- **Full Auto OC** (`StartFullAutoOcAsync`, Performance page): runs the core auto-OC, polls the service operation to a terminal state (45-min bound, live `FullAutoOcStatus`), and only on `Completed` starts the memory pass — memory is never tuned on top of a failed core run. Reuses the bounded engine unchanged (83 °C ceiling, screening, rollback, boot sentinel).
+- **Adaptive fan mode** (`CoolingModeSelector` in Core, pure + 6 tests): picks Silent (≤55 °C) / Cooling (≥75 °C hottest of CPU package & GPU core) / Balanced with a 4 °C hysteresis band so the choice doesn't flap; "Adaptive (pick for me)" button beside the case-fan presets; applies through the same verified graph engine.
+- **Sync-all RGB** (`SyncAllRgbAsync`, Lighting page "SYNC EVERYTHING"): one click sends the chosen colour (or off) to Kraken + both Aura headers (carries the ELV8) + Trident Z RAM + Razer case through their own gated IPC paths, with a combined per-device ✓/✗ notice.
+- Suite 754 tests (350 core + 404 integration), 0 warnings. Still uncommitted locally on master; deploy still pending (installed service predates SetDimmRgb/SetRazerRgb).
+
+## Verification snapshot: 2026-07-17 (0.5.5-alpha deployed — user-approved UAC)
+
+- Version prefix is 0.5.5; user asked to deploy this line as "0.55". Full suite re-run first: **754 tests (350 core + 404 integration), 0 warnings**.
+- `publish.ps1 -Version 0.5.5-alpha` produced `artifacts\publish`; `Test-RuntimePayload.ps1` Passed (6 components, protocol 2).
+- **User-approved UAC deploy via `Update-LocalAlphaRuntime.ps1` succeeded** (restore-then-install; `RestoredExistingLocalAlpha=True` from the `0.5.0-alpha-20260717-102246` beta26 image). Post-deploy read-only checks: service Running/Automatic, `status` healthy with writes enabled, `runtime-preflight` Ready — dashboard 0.5.5-alpha, service 0.5.5-alpha, protocol 2. The live service now carries `SetDimmRgb` and `SetRazerRgb`, so the DIMM/Razer/sync-all Lighting buttons and Full Auto OC work end-to-end.
+- Dashboard relaunched from `artifacts\publish\app\PCHelper.App.exe` ("RigPilot — Overview", responding).
+- The 0.5.5 work itself remains uncommitted on master (commit was not requested this pass).
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.
