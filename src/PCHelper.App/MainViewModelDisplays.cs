@@ -88,7 +88,11 @@ public sealed record ProfileCardDisplay(
     bool IsExperimental,
     bool RequiresManualAcknowledgement)
 {
-    public static ProfileCardDisplay From(ProfileV1 profile, bool active, ProfileV2? suiteProfile = null)
+    public static ProfileCardDisplay From(
+        ProfileV1 profile,
+        bool active,
+        ProfileV2? suiteProfile = null,
+        AutoOcProfileValidationV1? autoOcValidation = null)
     {
         (string objective, string glyph) = profile.Id.ToLowerInvariant() switch
         {
@@ -119,6 +123,11 @@ public sealed record ProfileCardDisplay(
         {
             bundleParts.Add($"{manualOnlyCount} Manual Only");
         }
+        if (autoOcValidation is not null)
+        {
+            double ageDays = Math.Max(0, (DateTimeOffset.UtcNow - autoOcValidation.CreatedAt).TotalDays);
+            bundleParts.Add($"{autoOcValidation.State} · {autoOcValidation.ActiveUse.TotalHours:0.##}/10 h · {Math.Min(7, ageDays):0.##}/7 days · {autoOcValidation.SuccessfulColdBoots}/3 cold boots");
+        }
         string actionSummary = bundleParts.Count == 0
             ? "No hardware or companion actions in this build"
             : string.Join(" · ", bundleParts);
@@ -129,7 +138,11 @@ public sealed record ProfileCardDisplay(
             objective,
             glyph,
             actionSummary,
-            active ? "Active" : manualOnlyCount > 0 ? "Manual only" : profile.IsExperimental ? "Experimental" : "Stock-safe",
+            active
+                ? "Active"
+                : autoOcValidation is not null
+                    ? autoOcValidation.State.ToString()
+                    : manualOnlyCount > 0 ? "Manual only" : profile.IsExperimental ? "Experimental" : "Stock-safe",
             active,
             profile.IsExperimental,
             manualOnlyCount > 0);

@@ -208,6 +208,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _adapterPackManager = CreateAdapterPackManager();
         await RecoverPendingTransactionAsync(cancellationToken).ConfigureAwait(false);
         await RefreshAsync(persistSensors: true, cancellationToken).ConfigureAwait(false);
+        await EvaluateAutoOcProfilesOnStartupAsync(cancellationToken).ConfigureAwait(false);
         foreach (ProfileV2 profile in CapabilityProfileFactory.Create(GetSnapshot()))
         {
             await _store.SaveSuiteEntityAsync(SuiteEntityKind.ProfileV2, profile.Id, profile, cancellationToken).ConfigureAwait(false);
@@ -265,6 +266,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 .ToArray();
             await _store!.AppendAsync(history, cancellationToken).ConfigureAwait(false);
         }
+        await EvaluateActiveAutoOcFingerprintAsync(snapshot, cancellationToken).ConfigureAwait(false);
         await EvaluateHealthRulesAsync(snapshot, cancellationToken).ConfigureAwait(false);
         await TickCoolingGraphAsync(snapshot, cancellationToken).ConfigureAwait(false);
     }
@@ -352,6 +354,9 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.GetProfilesV2 => Success(
                     request,
                     await _store!.GetSuiteEntitiesAsync<ProfileV2>(SuiteEntityKind.ProfileV2, cancellationToken).ConfigureAwait(false)),
+                IpcCommand.GetAutoOcProfileValidations => Success(
+                    request,
+                    await _store!.GetSuiteEntitiesAsync<AutoOcProfileValidationV1>(SuiteEntityKind.AutoOcProfileValidation, cancellationToken).ConfigureAwait(false)),
                 IpcCommand.PreviewProfileV2 => await PreviewProfileV2Async(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SaveProfileV2 => await SaveProfileV2Async(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.GetCoolingGraphs => Success(
@@ -1316,6 +1321,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         EnsureExpectedRevision(request);
         ApplyProfileRequest payload = IpcJson.FromElement<ApplyProfileRequest>(request.Payload)
             ?? throw new InvalidDataException("ApplyProfile requires an ApplyProfileRequest payload.");
+        string? previousProfileId = _engine!.ActiveProfileId;
         string? protectionError = await ValidateProtectedCoolingActionsAsync(payload.Profile.Actions, cancellationToken).ConfigureAwait(false);
         if (protectionError is not null)
         {
@@ -1345,6 +1351,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
 
         await _store!.SaveProfileAsync(payload.Profile, cancellationToken).ConfigureAwait(false);
+        await CompleteAutoOcActiveSessionAsync(previousProfileId, countSuccessfulColdBoot: false, cancellationToken).ConfigureAwait(false);
         return Success(request, new ApplyProfileResult(transaction, _engine.ActiveProfileId));
     }
 
@@ -1362,6 +1369,15 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         EnsureExpectedRevision(request);
         ApplyProfileV2Request payload = IpcJson.FromElement<ApplyProfileV2Request>(request.Payload)
             ?? throw new InvalidDataException("ApplyProfileV2 requires an ApplyProfileV2Request payload.");
+        string? autoOcValidationError = await ValidateAutoOcProfileForApplyAsync(
+            payload.Profile,
+            payload.Source,
+            cancellationToken).ConfigureAwait(false);
+        if (autoOcValidationError is not null)
+        {
+            return Failure(request, "AUTO_OC_VALIDATION_REQUIRED", autoOcValidationError);
+        }
+        string? previousProfileId = _engine!.ActiveProfileId;
         Dictionary<string, CapabilityDescriptorV2> capabilitiesV2 = GetCapabilitiesV2()
             .ToDictionary(item => item.Capability.Id, StringComparer.Ordinal);
         ProfileValidationResult validation = ProfileV2Validator.Validate(
@@ -1466,6 +1482,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             payload.Profile.Id,
             payload.Profile,
             cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!string.Equals(previousProfileId, payload.Profile.Id, StringComparison.Ordinal))
+            {
+                await CompleteAutoOcActiveSessionAsync(previousProfileId, countSuccessfulColdBoot: false, cancellationToken).ConfigureAwait(false);
+            }
+            await ActivateAutoOcProfileAsync(payload.Profile.Id, payload.Source, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await FailClosedAfterAutoOcEvidenceErrorAsync(payload.Profile, exception).ConfigureAwait(false);
+            throw;
+        }
         return Success(request, new ApplyProfileResult(transaction, _engine.ActiveProfileId));
     }
 
@@ -1703,7 +1732,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return Failure(request, "RESET_NOT_AVAILABLE", "Only Verified capabilities with explicit reset semantics can be reset.");
         }
 
-        HardwareRecoveryResult recovery = await _engine!.RestoreDefaultsAsync(
+        string? activeProfileId = _engine!.ActiveProfileId;
+        HardwareRecoveryResult recovery = await _engine.RestoreDefaultsAsync(
             [new HardwareControlLeaseItemV1(capability.AdapterId, capability.Id)],
             cancellationToken).ConfigureAwait(false);
         if (!recovery.AllDefaultsVerified)
@@ -1712,12 +1742,14 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             string message = recovery.Errors.Count == 0
                 ? "The adapter did not return a successful default-state read-back."
                 : string.Join(" ", recovery.Errors);
+            await MarkAutoOcRecoveryRequiredAsync(activeProfileId, message, CancellationToken.None).ConfigureAwait(false);
             return Failure(
                 request,
                 "RECOVERY_REQUIRED",
                 $"Reset outcome is not verified; writes are locked until recovery succeeds. {message}");
         }
 
+        await CompleteAutoOcActiveSessionAsync(activeProfileId, countSuccessfulColdBoot: false, cancellationToken).ConfigureAwait(false);
         await RefreshAsync(persistSensors: false, cancellationToken).ConfigureAwait(false);
         return Success(request, capability.Id);
     }
@@ -3338,7 +3370,13 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 && result.AllRequestedFamiliesVerified
                 && result.RestorationProof is { PriorStateRestored: true, HardwareStateKnown: true })
             {
+                AutoOcProfileValidationV1 validation = AutoOcValidationPolicy.Create(result);
                 await _store!.SaveSuiteEntityAsync(
+                    SuiteEntityKind.AutoOcProfileValidation,
+                    validation.Id,
+                    validation,
+                    CancellationToken.None).ConfigureAwait(false);
+                await _store.SaveSuiteEntityAsync(
                     SuiteEntityKind.ProfileV2,
                     generated.Id,
                     generated,
@@ -5215,18 +5253,309 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             DateTimeOffset.UtcNow);
     }
 
+    private async Task<string?> ValidateAutoOcProfileForApplyAsync(
+        ProfileV2 profile,
+        ProfileActivationSource source,
+        CancellationToken cancellationToken)
+    {
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profile.Id,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return profile.Id.StartsWith("auto-oc-v3-", StringComparison.OrdinalIgnoreCase)
+                ? "This generated Auto OC profile has no local validation record. Imported or orphaned tune results remain inactive."
+                : null;
+        }
+
+        if (!HardwareFingerprintBuilder.TryCreate(
+                GetSnapshot(),
+                record.HardwareFingerprint.DeviceId,
+                [record.HardwareFingerprint.DeviceId],
+                out HardwareFingerprintV1? current,
+                out string fingerprintReason))
+        {
+            return fingerprintReason;
+        }
+        if (!AutoOcValidationPolicy.FingerprintMatches(record.HardwareFingerprint, current!))
+        {
+            AutoOcProfileValidationV1 invalidated = AutoOcValidationPolicy.InvalidateFingerprint(record, DateTimeOffset.UtcNow);
+            await SaveAutoOcValidationAsync(invalidated, cancellationToken).ConfigureAwait(false);
+            if (string.Equals(_engine!.ActiveProfileId, profile.Id, StringComparison.Ordinal))
+            {
+                await RestoreInvalidatedAutoOcProfileAsync(profile.Id, invalidated, CancellationToken.None).ConfigureAwait(false);
+            }
+            return invalidated.Message;
+        }
+
+        return AutoOcValidationPolicy.CanActivate(record, current!, source, out string reason)
+            ? null
+            : reason;
+    }
+
+    private async Task ActivateAutoOcProfileAsync(
+        string profileId,
+        ProfileActivationSource source,
+        CancellationToken cancellationToken)
+    {
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+
+        AutoOcProfileValidationV1 active = AutoOcValidationPolicy.Activate(
+            record,
+            _serviceInstanceId,
+            source,
+            DateTimeOffset.UtcNow);
+        await SaveAutoOcValidationAsync(active, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task CompleteAutoOcActiveSessionAsync(
+        string? profileId,
+        bool countSuccessfulColdBoot,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(profileId))
+        {
+            return;
+        }
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+
+        AutoOcProfileValidationV1 completed = AutoOcValidationPolicy.Deactivate(
+            record,
+            _serviceInstanceId,
+            DateTimeOffset.UtcNow,
+            countSuccessfulColdBoot);
+        if (completed != record)
+        {
+            await SaveAutoOcValidationAsync(completed, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task MarkAutoOcRecoveryRequiredAsync(
+        string? profileId,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(profileId))
+        {
+            return;
+        }
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+        await SaveAutoOcValidationAsync(
+            AutoOcValidationPolicy.MarkRecoveryRequired(record, DateTimeOffset.UtcNow, message),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task EvaluateAutoOcProfilesOnStartupAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<AutoOcProfileValidationV1> records = await _store!
+            .GetSuiteEntitiesAsync<AutoOcProfileValidationV1>(SuiteEntityKind.AutoOcProfileValidation, cancellationToken)
+            .ConfigureAwait(false);
+        HardwareSnapshot snapshot = GetSnapshot();
+        foreach (AutoOcProfileValidationV1 record in records)
+        {
+            AutoOcProfileValidationV1 updated = AutoOcValidationPolicy.InvalidateUncleanSession(
+                record,
+                _serviceInstanceId,
+                DateTimeOffset.UtcNow);
+            if (HardwareFingerprintBuilder.TryCreate(
+                    snapshot,
+                    record.HardwareFingerprint.DeviceId,
+                    [record.HardwareFingerprint.DeviceId],
+                    out HardwareFingerprintV1? current,
+                    out _)
+                && !AutoOcValidationPolicy.FingerprintMatches(record.HardwareFingerprint, current!))
+            {
+                updated = AutoOcValidationPolicy.InvalidateFingerprint(updated, DateTimeOffset.UtcNow);
+            }
+            if (updated != record)
+            {
+                await SaveAutoOcValidationAsync(updated, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task EvaluateActiveAutoOcFingerprintAsync(
+        HardwareSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        string? activeProfileId = _engine?.ActiveProfileId;
+        if (string.IsNullOrWhiteSpace(activeProfileId))
+        {
+            return;
+        }
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            activeProfileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+
+        bool fingerprintAvailable = HardwareFingerprintBuilder.TryCreate(
+            snapshot,
+            record.HardwareFingerprint.DeviceId,
+            [record.HardwareFingerprint.DeviceId],
+            out HardwareFingerprintV1? current,
+            out _);
+        if (fingerprintAvailable && AutoOcValidationPolicy.FingerprintMatches(record.HardwareFingerprint, current!))
+        {
+            return;
+        }
+
+        AutoOcProfileValidationV1 invalidated = AutoOcValidationPolicy.InvalidateFingerprint(record, DateTimeOffset.UtcNow);
+        await SaveAutoOcValidationAsync(invalidated, cancellationToken).ConfigureAwait(false);
+        await RestoreInvalidatedAutoOcProfileAsync(activeProfileId, invalidated, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task EvaluateAutoOcStabilitySignalsAsync(
+        IReadOnlyList<HealthSystemSignal> signals,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        string? activeProfileId = _engine?.ActiveProfileId;
+        if (string.IsNullOrWhiteSpace(activeProfileId) || signals.Count == 0)
+        {
+            return;
+        }
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            activeProfileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+
+        AutoOcStabilityEventV1[] relevant = signals.Select(signal => new AutoOcStabilityEventV1(
+            signal.Kind == HealthSystemSignalKind.Whea
+                ? AutoOcStabilityEventKind.Whea
+                : AutoOcStabilityEventKind.DisplayDriverReset,
+            signal.Timestamp,
+            signal.Message)).ToArray();
+        AutoOcProfileValidationV1 invalidated = AutoOcValidationPolicy.RecordStabilityEvents(record, relevant, now);
+        if (invalidated == record)
+        {
+            return;
+        }
+
+        await SaveAutoOcValidationAsync(invalidated, cancellationToken).ConfigureAwait(false);
+        await RestoreInvalidatedAutoOcProfileAsync(activeProfileId, invalidated, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task RestoreInvalidatedAutoOcProfileAsync(
+        string profileId,
+        AutoOcProfileValidationV1 record,
+        CancellationToken cancellationToken)
+    {
+        HardwareControlLeaseV1? lease = await _store!.GetSuiteEntityAsync<HardwareControlLeaseV1>(
+            SuiteEntityKind.HardwareControlLease,
+            HardwareControlLeaseV1.DefaultId,
+            cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<HardwareControlLeaseItemV1> controls = lease is { } activeLease
+            && string.Equals(activeLease.ActiveProfileId, profileId, StringComparison.Ordinal)
+            ? activeLease.Controls
+            : [];
+        if (controls.Count == 0)
+        {
+            ProfileV2? profile = await _store.GetSuiteEntityAsync<ProfileV2>(
+                SuiteEntityKind.ProfileV2,
+                profileId,
+                cancellationToken).ConfigureAwait(false);
+            controls = profile?.HardwareActions
+                .Select(item => new HardwareControlLeaseItemV1(item.AdapterId, item.CapabilityId))
+                .ToArray() ?? [];
+        }
+
+        SetGpuTransportRecoveryGate(armed: true);
+        HardwareRecoveryResult recovery;
+        try
+        {
+            recovery = await _engine!.RestoreDefaultsAsync(controls, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            SetGpuTransportRecoveryGate(armed: false);
+            _gpuFanArmed = false;
+            _gpuPowerArmed = false;
+            _gpuClockArmed = false;
+        }
+        if (!recovery.AllDefaultsVerified)
+        {
+            _rollbackBlocked = true;
+            string error = recovery.Errors.Count == 0
+                ? "Default-state read-back did not complete."
+                : string.Join(" ", recovery.Errors);
+            await SaveAutoOcValidationAsync(
+                AutoOcValidationPolicy.MarkRecoveryRequired(record, DateTimeOffset.UtcNow, error),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private async Task FailClosedAfterAutoOcEvidenceErrorAsync(ProfileV2 profile, Exception exception)
+    {
+        _rollbackBlocked = true;
+        await MarkAutoOcRecoveryRequiredAsync(
+            profile.Id,
+            $"The hardware profile committed but its active-use evidence could not be persisted: {exception.GetType().Name}.",
+            CancellationToken.None).ConfigureAwait(false);
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profile.Id,
+            CancellationToken.None).ConfigureAwait(false);
+        if (record is not null)
+        {
+            await RestoreInvalidatedAutoOcProfileAsync(profile.Id, record, CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private async Task SaveAutoOcValidationAsync(
+        AutoOcProfileValidationV1 record,
+        CancellationToken cancellationToken)
+    {
+        await _store!.SaveSuiteEntityAsync(
+            SuiteEntityKind.AutoOcProfileValidation,
+            record.Id,
+            record,
+            cancellationToken).ConfigureAwait(false);
+        IncrementSuiteRevision();
+    }
+
     private async Task EvaluateHealthRulesAsync(HardwareSnapshot snapshot, CancellationToken cancellationToken)
     {
         IReadOnlyList<HealthRuleV1> rules = await _store!
             .GetSuiteEntitiesAsync<HealthRuleV1>(SuiteEntityKind.HealthRule, cancellationToken)
             .ConfigureAwait(false);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        IReadOnlyList<HealthSystemSignal> signals = _healthSignalProbe.ReadSince(_lastHealthSignalScan, now);
+        _lastHealthSignalScan = now;
+        await EvaluateAutoOcStabilitySignalsAsync(signals, now, cancellationToken).ConfigureAwait(false);
         if (rules.Count == 0)
         {
             return;
         }
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        IReadOnlyList<HealthSystemSignal> signals = _healthSignalProbe.ReadSince(_lastHealthSignalScan, now);
-        _lastHealthSignalScan = now;
         IReadOnlyList<HealthAlertEventV1> existing = await GetHealthAlertsAsync(cancellationToken).ConfigureAwait(false);
         IReadOnlyList<HealthAlertEventV1> changes = _healthRuleEngine.Evaluate(rules, snapshot.Sensors, signals, existing, now);
         foreach (HealthAlertEventV1 change in changes)
@@ -5520,6 +5849,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             HardwareControlLeaseV1.DefaultId,
             CancellationToken.None).ConfigureAwait(false);
         HardwareControlLeaseItemV1[] controls = lease?.Controls.ToArray() ?? [];
+        string? activeProfileId = _engine.ActiveProfileId ?? lease?.ActiveProfileId;
         SetGpuTransportRecoveryGate(armed: true);
         HardwareRecoveryResult recovery;
         try
@@ -5545,6 +5875,20 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             marker,
             CancellationToken.None).ConfigureAwait(false);
         _rollbackBlocked = !recovery.AllDefaultsVerified;
+        if (recovery.AllDefaultsVerified)
+        {
+            await CompleteAutoOcActiveSessionAsync(
+                activeProfileId,
+                countSuccessfulColdBoot: true,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        else
+        {
+            string message = recovery.Errors.Count == 0
+                ? "Clean-shutdown default-state verification did not complete."
+                : string.Join(" ", recovery.Errors);
+            await MarkAutoOcRecoveryRequiredAsync(activeProfileId, message, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     private IpcResponse Success<T>(IpcRequest request, T payload) => new(

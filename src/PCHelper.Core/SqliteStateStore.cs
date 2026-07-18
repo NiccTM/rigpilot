@@ -666,6 +666,7 @@ public sealed class SqliteStateStore :
             SuiteEntityKind.TakeoverPlan => typeof(TakeoverPlanV1),
             SuiteEntityKind.TakeoverTransaction => typeof(TakeoverTransactionV1),
             SuiteEntityKind.HardwareControlLease => typeof(HardwareControlLeaseV1),
+            SuiteEntityKind.AutoOcProfileValidation => typeof(AutoOcProfileValidationV1),
             _ => throw new ArgumentOutOfRangeException(nameof(kind))
         };
         if (typeof(T) != expected)

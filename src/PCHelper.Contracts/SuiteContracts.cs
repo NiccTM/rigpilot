@@ -323,7 +323,8 @@ public enum SuiteEntityKind
     AdapterPackInspection,
     TakeoverPlan,
     TakeoverTransaction,
-    HardwareControlLease
+    HardwareControlLease,
+    AutoOcProfileValidation
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<GameStoreKind>))]

@@ -106,6 +106,40 @@ public sealed record AutoOcResultV3(
     public const int CurrentSchemaVersion = 3;
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<AutoOcStabilityEventKind>))]
+public enum AutoOcStabilityEventKind
+{
+    Whea,
+    DisplayDriverReset,
+    UncleanShutdown,
+    HardwareFingerprintChanged,
+    RestorationFailed
+}
+
+public sealed record AutoOcStabilityEventV1(
+    AutoOcStabilityEventKind Kind,
+    DateTimeOffset ObservedAt,
+    string Message);
+
+public sealed record AutoOcProfileValidationV1(
+    int SchemaVersion,
+    string Id,
+    string ProfileId,
+    HardwareFingerprintV1 HardwareFingerprint,
+    AutoOcValidationState State,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    TimeSpan ActiveUse,
+    int SuccessfulColdBoots,
+    int SuccessfulManualApplications,
+    DateTimeOffset? ActiveSessionStartedAt,
+    string? ActiveServiceInstanceId,
+    IReadOnlyList<AutoOcStabilityEventV1> RelevantEvents,
+    string Message)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
 public sealed record ControlSessionMetricsV1(
     double? AverageFramesPerSecond,
     double? OnePercentLowFramesPerSecond,

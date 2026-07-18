@@ -38,6 +38,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly AutomationRuleStateMachine _automationMachine = new();
     private readonly List<DeviceDisplay> _allDevices = [];
     private readonly Dictionary<string, ProfileV2> _suiteProfilesById = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AutoOcProfileValidationV1> _autoOcValidationsByProfileId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CoolingGraphV1> _coolingGraphsById = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FanCalibrationV2> _fanCalibrationsByCapability = new(StringComparer.Ordinal);
     private readonly List<OpenRgbController> _openRgbControllers = [];
@@ -4420,9 +4421,28 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task RefreshProfilesAsync(CancellationToken cancellationToken)
     {
-        IpcResponse legacyResponse = await _client.SendAsync(
+        Task<IpcResponse> legacyTask = _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(IpcCommand.GetProfiles),
             cancellationToken);
+        Task<IpcResponse> suiteTask = _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetProfilesV2),
+            cancellationToken);
+        Task<IpcResponse> graphTask = _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetCoolingGraphs),
+            cancellationToken);
+        Task<IpcResponse>? validationTask = _serviceFeatures.Contains(ServiceRuntimeFeatures.AutoOcValidationV1)
+            ? _client.SendAsync(
+                NamedPipeRequestClient.CreateRequest(IpcCommand.GetAutoOcProfileValidations),
+                cancellationToken)
+            : null;
+        List<Task<IpcResponse>> requests = [legacyTask, suiteTask, graphTask];
+        if (validationTask is not null)
+        {
+            requests.Add(validationTask);
+        }
+        await Task.WhenAll(requests);
+
+        IpcResponse legacyResponse = await legacyTask;
         EnsureSuccess(legacyResponse);
         IReadOnlyList<ProfileV1> legacyProfiles = IpcJson.FromElement<IReadOnlyList<ProfileV1>>(legacyResponse.Payload) ?? [];
 
@@ -4430,21 +4450,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         // A legacy service must leave the dashboard usable rather than forcing
         // it into local-probe mode simply because it cannot enumerate V2 data.
         IReadOnlyList<ProfileV2> suiteProfiles = [];
-        IpcResponse suiteResponse = await _client.SendAsync(
-            NamedPipeRequestClient.CreateRequest(IpcCommand.GetProfilesV2),
-            cancellationToken);
+        IpcResponse suiteResponse = await suiteTask;
         if (suiteResponse.Success)
         {
             suiteProfiles = IpcJson.FromElement<IReadOnlyList<ProfileV2>>(suiteResponse.Payload) ?? [];
         }
 
         IReadOnlyList<CoolingGraphV1> coolingGraphs = [];
-        IpcResponse graphResponse = await _client.SendAsync(
-            NamedPipeRequestClient.CreateRequest(IpcCommand.GetCoolingGraphs),
-            cancellationToken);
+        IpcResponse graphResponse = await graphTask;
         if (graphResponse.Success)
         {
             coolingGraphs = IpcJson.FromElement<IReadOnlyList<CoolingGraphV1>>(graphResponse.Payload) ?? [];
+        }
+        IReadOnlyList<AutoOcProfileValidationV1> autoOcValidations = [];
+        if (validationTask is not null)
+        {
+            IpcResponse validationResponse = await validationTask;
+            if (validationResponse.Success)
+            {
+                autoOcValidations = IpcJson.FromElement<IReadOnlyList<AutoOcProfileValidationV1>>(validationResponse.Payload) ?? [];
+            }
         }
 
         string? selectedRuleId = NewRuleProfile?.Id;
@@ -4453,6 +4478,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         foreach (ProfileV2 profile in suiteProfiles.Where(profile => profile.SchemaVersion == ProfileV2.CurrentSchemaVersion))
         {
             _suiteProfilesById[profile.Id] = profile;
+        }
+        _autoOcValidationsByProfileId.Clear();
+        foreach (AutoOcProfileValidationV1 validation in autoOcValidations.Where(item =>
+                     item.SchemaVersion == AutoOcProfileValidationV1.CurrentSchemaVersion))
+        {
+            _autoOcValidationsByProfileId[validation.ProfileId] = validation;
         }
         _coolingGraphsById.Clear();
         foreach (CoolingGraphV1 graph in coolingGraphs.Where(graph => graph.SchemaVersion == CoolingGraphV1.CurrentSchemaVersion))
@@ -5070,7 +5101,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         Replace(ProfileCards, Profiles.Select(profile =>
         {
             _suiteProfilesById.TryGetValue(profile.Id, out ProfileV2? suiteProfile);
-            return ProfileCardDisplay.From(profile, profile.Id == _status?.ActiveProfileId, suiteProfile);
+            _autoOcValidationsByProfileId.TryGetValue(profile.Id, out AutoOcProfileValidationV1? validation);
+            return ProfileCardDisplay.From(profile, profile.Id == _status?.ActiveProfileId, suiteProfile, validation);
         }), card => card.Profile.Id, StringComparer.Ordinal);
 
         Replace(ImportantSensors, SelectImportantSensors(_snapshot).Select(sensor => new SensorDisplay(

@@ -62,6 +62,7 @@ public enum IpcCommand
     GetServiceStatus,
     GetCapabilitiesV2,
     GetProfilesV2,
+    GetAutoOcProfileValidations,
     SaveProfileV2,
     GetCoolingGraphs,
     SaveCoolingGraph,
@@ -185,6 +186,7 @@ public static class IpcCommandPolicy
         IpcCommand.GetDeviceQualificationPlans or
         IpcCommand.GetCapabilitiesV2 or
         IpcCommand.GetProfilesV2 or
+        IpcCommand.GetAutoOcProfileValidations or
         IpcCommand.GetCoolingGraphs or
         IpcCommand.GetCoolingOutputAssignments or
         IpcCommand.GetFanCommissioningSessions or
