@@ -62,6 +62,21 @@ public sealed class CoolingGraphRuntimeTests
         Assert.Equal(100, tick.Evaluation.OutputValues["fan"]);
     }
 
+    [Fact]
+    public void OldGoodSampleCountsAsStaleTelemetry()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        CoolingGraphRuntimeTick tick = new CoolingGraphRuntime().Evaluate(
+            Graph(),
+            [Sample(now.AddSeconds(-10), 60, SensorQuality.Good)],
+            new Dictionary<string, FanCalibrationV2>(),
+            stalePollLimit: 3,
+            now);
+
+        Assert.True(tick.Evaluation.Emergency);
+        Assert.Equal(1, tick.StalePollCounts["cpu"]);
+    }
+
     private static CoolingGraphV1 Graph() => new(
         CoolingGraphV1.CurrentSchemaVersion,
         "graph.case1",

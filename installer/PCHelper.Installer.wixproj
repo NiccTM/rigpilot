@@ -5,7 +5,7 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <Platform>x64</Platform>
     <NuGetLockFilePath>packages.installer.lock.json</NuGetLockFilePath>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">0.5.0</ProductVersion>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">$(VersionPrefix)</ProductVersion>
     <PublishDir Condition="'$(PublishDir)' == ''">$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)..\artifacts\publish'))</PublishDir>
     <DefineConstants>ProductVersion=$(ProductVersion);PublishDir=$(PublishDir)</DefineConstants>
     <SuppressValidation>false</SuppressValidation>
@@ -21,6 +21,7 @@
     <Error Condition="!Exists('$(PublishDir)\app\PCHelper.App.exe')" Text="Publish payload missing. Run scripts\publish.ps1 first." />
     <Error Condition="!Exists('$(PublishDir)\service\PCHelper.Service.exe')" Text="Service publish payload missing." />
     <Error Condition="!Exists('$(PublishDir)\effect-host\PCHelper.EffectHost.exe')" Text="Effect Host publish payload missing." />
+    <Error Condition="!Exists('$(PublishDir)\workload-host\PCHelper.WorkloadHost.exe')" Text="Workload Host publish payload missing." />
     <Error Condition="!Exists('$(PublishDir)\runtime-contract.json')" Text="Runtime contract missing. Run scripts\publish.ps1 before building the installer." />
   </Target>
 </Project>

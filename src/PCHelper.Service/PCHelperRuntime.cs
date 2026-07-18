@@ -21,6 +21,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private readonly ConcurrentDictionary<string, IpcResponse> _idempotentResponses = new(StringComparer.Ordinal);
     private readonly OwnershipLeaseManager _ownershipLeases = new();
     private readonly HealthRuleEngine _healthRuleEngine = new();
+    private readonly ReleaseTrustPolicy _releaseTrust = ReleaseTrustPolicy.FromAssembly(typeof(PCHelperRuntime).Assembly);
     private readonly string _serviceInstanceId = Guid.NewGuid().ToString("N");
     private readonly WindowsSystemHealthSignalProbe _healthSignalProbe = new();
     private SqliteStateStore? _store;
@@ -52,6 +53,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private CancellationTokenSource? _operationCancellation;
     private Task? _activeOperationTask;
     private ActiveCoolingGraphRuntime? _activeCoolingGraph;
+    private CoolingRuntimeStatusV1 _coolingRuntimeStatus = CoolingRuntimeStatusV1.Inactive(
+        "No service-owned cooling graph is active; firmware/default control is in effect.");
     private SafetyRecoveryStateV1 _safetyRecoveryState = new(
         SafetyRecoveryStateV1.CurrentSchemaVersion,
         SafetyRecoveryStateV1.DefaultId,
@@ -230,6 +233,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                     .ToArray()
             };
         }
+        if (!_releaseTrust.WritesAllowed)
+        {
+            snapshot = snapshot with
+            {
+                Warnings = snapshot.Warnings
+                    .Append(new DiagnosticWarning(
+                        "PUBLIC_PREVIEW_READ_ONLY",
+                        "Information",
+                        ReleaseTrustPolicy.WriteLockReason,
+                        "Install a signed RigPilot beta after verifying its signature and publisher."))
+                    .ToArray()
+            };
+        }
         await _snapshotGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -303,6 +319,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 request,
                 "NOT_AUTHORIZED",
                 "Hardware and profile changes require membership of the installed RigPilot operator group or an elevated session. Group membership added by the installer takes effect after you sign out and back in.");
+        }
+
+        if (_releaseTrust.GetMutationRejection(request.Command) is string releaseRejection)
+        {
+            return Failure(request, "PUBLIC_PREVIEW_READ_ONLY", releaseRejection);
         }
 
         if (IsMutatingCommand(request.Command) && _rollbackBlocked)
@@ -391,6 +412,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.ResetHardware => await ResetHardwareAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StartCalibration => await StartCalibrationAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StartTune => await StartTuneAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.StartAutoOc => await StartAutoOcAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.AbortOperation => AbortOperation(request),
                 IpcCommand.GetOperationStatus => Success(request, GetOperationStatus()),
                 IpcCommand.GetOperationById => await GetOperationByIdAsync(request, cancellationToken).ConfigureAwait(false),
@@ -473,19 +495,28 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
         try
         {
-            await _coolingGraphGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            await _hardwareMutationGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
             try
             {
-                ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
-                _activeCoolingGraph = null;
-                if (active is not null && _coordinator is not null)
+                await _coolingGraphGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                try
                 {
-                    await ResetCoolingGraphOutputsAsync(active.Graph, GetSnapshot(), CancellationToken.None).ConfigureAwait(false);
+                    ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
+                    _activeCoolingGraph = null;
+                    if (active is not null && _coordinator is not null)
+                    {
+                        await ResetCoolingGraphOutputsAsync(active.Graph, GetSnapshot(), CancellationToken.None).ConfigureAwait(false);
+                    }
+                    PublishInactiveCoolingStatus("Service shutdown restored firmware/default cooling control.");
+                }
+                finally
+                {
+                    _coolingGraphGate.Release();
                 }
             }
             finally
             {
-                _coolingGraphGate.Release();
+                _hardwareMutationGate.Release();
             }
         }
         catch (Exception exception)
@@ -554,19 +585,28 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
     private ServiceStatus GetStatus()
     {
-        bool writesAvailable = !_rollbackBlocked;
+        bool writesAvailable = !_rollbackBlocked && _releaseTrust.WritesAllowed;
+        CoolingRuntimeStatusV1 cooling = Volatile.Read(ref _coolingRuntimeStatus);
+        bool coolingEmergency = cooling.State is CoolingRuntimeState.EmergencyMaximum or CoolingRuntimeState.RecoveryRequired;
         return new ServiceStatus(
             Version,
             _startedAt,
             CurrentRevision,
             _engine!.ActiveProfileId,
             writesAvailable,
-            EmergencyMode: _rollbackBlocked,
+            EmergencyMode: _rollbackBlocked || coolingEmergency,
             _rollbackBlocked
                 ? "RecoveryRequired: hardware writes are locked because default-state read-back did not complete."
-                : "Service is healthy; Verified controls and explicitly confirmed Experimental controls can be written.",
+                : !_releaseTrust.WritesAllowed
+                    ? ReleaseTrustPolicy.WriteLockReason
+                    : coolingEmergency
+                        ? cooling.Reason
+                        : "Service is healthy; Verified controls and explicitly confirmed Experimental controls can be written.",
             RecoveryRequired: _rollbackBlocked,
-            HardwareControlArmed: IsHardwareControlFullyArmed());
+            HardwareControlArmed: IsHardwareControlFullyArmed(),
+            Cooling: cooling,
+            ReleaseWritesLocked: !_releaseTrust.WritesAllowed,
+            WriteLockReason: _releaseTrust.WritesAllowed ? null : ReleaseTrustPolicy.WriteLockReason);
     }
 
     private bool IsHardwareControlFullyArmed()
@@ -1390,12 +1430,22 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ProfileV1 hardwareProfile = ProfileMigration.Downgrade(payload.Profile);
         IReadOnlyDictionary<string, CapabilityDescriptor> capabilities = capabilitiesV2
             .ToDictionary(pair => pair.Key, pair => pair.Value.Capability, StringComparer.Ordinal);
+        Func<CancellationToken, Task>? activateCooling = requestedCoolingGraph is null
+            ? null
+            : token => ReplaceActiveCoolingGraphTransactionAsync(requestedCoolingGraph, token);
+        IReadOnlyList<HardwareControlLeaseItemV1> coolingControls = requestedCoolingGraph is null
+            ? []
+            : requestedCoolingGraph.Graph.Outputs.Select(output => new HardwareControlLeaseItemV1(
+                capabilitiesV2[output.CapabilityId].Capability.AdapterId,
+                output.CapabilityId)).ToArray();
         (ProfileTransaction transaction, ProfileValidationResult legacyValidation) = await _engine!.ApplyAsync(
             hardwareProfile,
             capabilities,
             _engine.Revision,
             payload.ConfirmExperimental && unconfirmed.Length == 0,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            activateCooling,
+            coolingControls).ConfigureAwait(false);
         if (transaction.State == ProfileTransactionState.RecoveryRequired)
         {
             _rollbackBlocked = true;
@@ -1409,31 +1459,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         {
             return Failure(request, "PROFILE_REJECTED", transaction.Error ?? string.Join(" ", legacyValidation.Errors));
         }
-        string? coolingActivationError = await ConfigureActiveCoolingGraphAsync(
-            requestedCoolingGraph,
-            cancellationToken).ConfigureAwait(false);
-        if (coolingActivationError is null && requestedCoolingGraph is not null)
-        {
-            await _engine.RecordActiveControlsAsync(
-                payload.Profile.Id,
-                transaction.Id,
-                requestedCoolingGraph.Graph.Outputs.Select(output => new HardwareControlLeaseItemV1(
-                    capabilitiesV2[output.CapabilityId].Capability.AdapterId,
-                    output.CapabilityId)),
-                cancellationToken).ConfigureAwait(false);
-        }
         await _store!.SaveSuiteEntityAsync(
             SuiteEntityKind.ProfileV2,
             payload.Profile.Id,
             payload.Profile,
             cancellationToken).ConfigureAwait(false);
-        if (coolingActivationError is not null)
-        {
-            return Failure(
-                request,
-                "COOLING_GRAPH_ACTIVATION_FAILED",
-                $"The hardware profile committed, but its cooling graph was disabled and reset to firmware/default: {coolingActivationError}");
-        }
         return Success(request, new ApplyProfileResult(transaction, _engine.ActiveProfileId));
     }
 
@@ -2373,6 +2403,137 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
+    private async Task<IpcResponse> StartAutoOcAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        if (_rollbackBlocked)
+        {
+            return Failure(request, "ROLLBACK_BLOCKED", "Auto OC is blocked until pending hardware recovery succeeds.");
+        }
+
+        EnsureExpectedRevision(request);
+        StartAutoOcV2Request payload = IpcJson.FromElement<StartAutoOcV2Request>(request.Payload)
+            ?? throw new InvalidDataException("StartAutoOc requires a StartAutoOcV2Request payload.");
+        if (payload.SchemaVersion != StartAutoOcV2Request.CurrentSchemaVersion
+            || !payload.ConfirmExperimental
+            || !payload.ConfirmDevice
+            || !string.Equals(payload.DeviceId, payload.WorkloadHost.TargetDeviceId, StringComparison.Ordinal))
+        {
+            return Failure(request, "AUTO_OC_NOT_CONFIRMED", "Auto OC requires Experimental and exact-device confirmation for the workload and both clock controls.");
+        }
+
+        HardwareSnapshot snapshot = GetSnapshot();
+        CapabilityDescriptor? core = snapshot.Capabilities.FirstOrDefault(capability =>
+            string.Equals(capability.Id, payload.CoreCapabilityId, StringComparison.Ordinal));
+        CapabilityDescriptor? memory = snapshot.Capabilities.FirstOrDefault(capability =>
+            string.Equals(capability.Id, payload.MemoryCapabilityId, StringComparison.Ordinal));
+        if (core is null
+            || memory is null
+            || !core.Id.StartsWith("gpuclock.core:", StringComparison.Ordinal)
+            || !memory.Id.StartsWith("gpuclock.memory:", StringComparison.Ordinal)
+            || !string.Equals(core.DeviceId, payload.DeviceId, StringComparison.Ordinal)
+            || !string.Equals(memory.DeviceId, payload.DeviceId, StringComparison.Ordinal)
+            || core.Range is null
+            || memory.Range is null)
+        {
+            return Failure(request, "AUTO_OC_TARGET_INVALID", "Auto OC requires the exact bounded core and memory clock controls on one GPU.");
+        }
+
+        StartTuneRequest coreRequest = CreateAutoOcTuneRequest(core, safetyMargin: 15);
+        StartTuneRequest memoryRequest = CreateAutoOcTuneRequest(memory, safetyMargin: 100);
+        HardwareOperationEligibility coreEligibility = HardwareOperationEligibilityEvaluator.ForTuning(
+            core, coreRequest.Plan, payload.ConfirmExperimental, payload.ConfirmDevice);
+        HardwareOperationEligibility memoryEligibility = HardwareOperationEligibilityEvaluator.ForTuning(
+            memory, memoryRequest.Plan, payload.ConfirmExperimental, payload.ConfirmDevice);
+        if (!coreEligibility.Eligible || !memoryEligibility.Eligible)
+        {
+            return Failure(
+                request,
+                "AUTO_OC_NOT_ELIGIBLE",
+                !coreEligibility.Eligible ? coreEligibility.Reason : memoryEligibility.Reason);
+        }
+
+        TuneSensorBindingV2 binding;
+        WorkloadHostController workload;
+        try
+        {
+            binding = GpuTuneSensorBindingResolver.Resolve(snapshot, payload.DeviceId);
+            workload = new WorkloadHostController(payload.WorkloadHost);
+            WorkloadHostStatusV1 ready = await workload.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            if (!ready.Ready || ready.Running || ready.Mode != AutoOcWorkloadMode.Stopped)
+            {
+                return Failure(request, "WORKLOAD_HOST_NOT_READY", ready.Error ?? "The workload host did not start in a clean stopped state.");
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Failure(request, "WORKLOAD_HOST_NOT_READY", exception.Message);
+        }
+
+        HardwareOperationStatus status = CreateOperationStatus(
+            HardwareOperationKind.AutoOc,
+            core,
+            "Full Auto OC is queued; the workload is stopped and no offset has been applied.");
+        if (!TryReserveOperation(status, out CancellationTokenSource? operationCancellation))
+        {
+            return Failure(request, "OPERATION_ACTIVE", "Another calibration or tuning operation is already active.");
+        }
+
+        try
+        {
+            await _store!.SaveOperationAsync(status, cancellationToken).ConfigureAwait(false);
+            Task task = RunAutoOcOperationAsync(
+                status.Id,
+                payload.DeviceId,
+                coreRequest,
+                core,
+                memoryRequest,
+                memory,
+                binding,
+                workload,
+                operationCancellation!);
+            RegisterOperationTask(status.Id, task);
+            return Success(request, status);
+        }
+        catch
+        {
+            ReleaseOperationReservation(status.Id);
+            try { await workload.StopAsync(CancellationToken.None).ConfigureAwait(false); } catch { }
+            throw;
+        }
+    }
+
+    private static StartTuneRequest CreateAutoOcTuneRequest(CapabilityDescriptor capability, double safetyMargin)
+    {
+        NumericRange range = capability.Range
+            ?? throw new InvalidOperationException("Auto OC target has no numeric bounds.");
+        TunePlan plan = new(
+            Guid.NewGuid().ToString("N"),
+            capability.DeviceId,
+            TuningObjective.Performance,
+            new Dictionary<string, TuneBounds>(StringComparer.Ordinal)
+            {
+                [capability.Id] = new TuneBounds(Math.Max(0, range.Minimum), range.Maximum, range.Step)
+            },
+            TimeSpan.FromMinutes(10),
+            TemperatureCeilingCelsius: 83,
+            PowerCeilingWatts: null,
+            Provisional: true,
+            SoakStartedAt: null,
+            ActiveUseRequired: TimeSpan.FromHours(10),
+            ColdBootsRequired: 3);
+        return new StartTuneRequest(
+            plan,
+            capability.Id,
+            TuneDirection.Maximize,
+            ConfirmExperimental: true,
+            ConfirmDevice: true,
+            CandidateScreeningTime: TimeSpan.FromSeconds(30),
+            MaximumCandidates: 12,
+            RefinementCandidates: 5,
+            SafetyMargin: safetyMargin,
+            ThermalHeadroomCelsius: 4);
+    }
+
     private IpcResponse AbortOperation(IpcRequest request)
     {
         EnsureExpectedRevision(request);
@@ -2680,6 +2841,89 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
+    private async Task RunAutoOcOperationAsync(
+        string operationId,
+        string deviceId,
+        StartTuneRequest coreRequest,
+        CapabilityDescriptor coreCapability,
+        StartTuneRequest memoryRequest,
+        CapabilityDescriptor memoryCapability,
+        TuneSensorBindingV2 binding,
+        WorkloadHostController workload,
+        CancellationTokenSource operationCancellation)
+    {
+        try
+        {
+            await TransitionOperationAsync(
+                operationId,
+                HardwareOperationState.Running,
+                "Exact-GPU workload host authenticated; capturing the prior core and memory state.").ConfigureAwait(false);
+            IHardwareAdapter coreAdapter = FindAdapter(coreCapability.AdapterId);
+            IHardwareAdapter memoryAdapter = FindAdapter(memoryCapability.AdapterId);
+            AutoOcResultV2 result = await FullAutoOcEngine.RunAsync(
+                deviceId,
+                coreRequest,
+                coreCapability,
+                coreAdapter,
+                memoryRequest,
+                memoryCapability,
+                memoryAdapter,
+                TimeSpan.FromMinutes(15),
+                mode => new RuntimeTuneScreeningMonitor(
+                    GetSnapshot,
+                    mode == AutoOcWorkloadMode.Memory ? memoryCapability : coreCapability,
+                    sensorBinding: binding,
+                    workload: workload,
+                    requiredWorkloadMode: mode,
+                    requiredAverageLoadPercent: 70),
+                workload,
+                (progress, message) => ReportOperationProgress(
+                    operationId,
+                    message.Contains("screen", StringComparison.OrdinalIgnoreCase)
+                        ? HardwareOperationState.Screening
+                        : HardwareOperationState.Running,
+                    progress,
+                    message),
+                operationCancellation.Token).ConfigureAwait(false);
+            if (result.GeneratedProfile is ProfileV2 generated
+                && result.AllRequestedFamiliesVerified
+                && result.PriorStateRestored
+                && result.HardwareStateKnown)
+            {
+                await _store!.SaveSuiteEntityAsync(
+                    SuiteEntityKind.ProfileV2,
+                    generated.Id,
+                    generated,
+                    CancellationToken.None).ConfigureAwait(false);
+                IncrementSuiteRevision();
+            }
+
+            await CompleteOperationAsync(
+                operationId,
+                result.Message,
+                calibrationResult: null,
+                tuneResult: null,
+                autoOcResult: result).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+        {
+            await AbortOperationAsync(operationId).ConfigureAwait(false);
+        }
+        catch (HardwareOperationRecoveryException exception)
+        {
+            _rollbackBlocked = true;
+            await FailOperationAsync(operationId, exception, recoveryRequired: true).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await FailOperationAsync(operationId, exception, recoveryRequired: false).ConfigureAwait(false);
+        }
+        finally
+        {
+            await FinishOperationTaskAsync(operationId, operationCancellation).ConfigureAwait(false);
+        }
+    }
+
     private HardwareOperationStatus? GetOperationStatus()
     {
         lock (_operationSync)
@@ -2801,7 +3045,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         string operationId,
         string message,
         FanCalibrationResult? calibrationResult,
-        TuneResult? tuneResult)
+        TuneResult? tuneResult,
+        AutoOcResultV2? autoOcResult = null)
     {
         HardwareOperationStatus status = UpdateOperation(
             operationId,
@@ -2813,6 +3058,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 Message = message,
                 CalibrationResult = calibrationResult,
                 TuneResult = tuneResult,
+                AutoOcResult = autoOcResult,
                 Error = null
             });
         await _store!.SaveOperationAsync(status, CancellationToken.None).ConfigureAwait(false);
@@ -4040,28 +4286,109 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         return new ActiveCoolingGraphRuntime(profileId, graph, selected, limits);
     }
 
-    private async Task<string?> ConfigureActiveCoolingGraphAsync(
-        ActiveCoolingGraphRuntime? requested,
+    /// <summary>
+    /// Replaces the active graph as a verified pre-commit step of a hardware
+    /// profile transaction. A null profile graph never calls this method, so a
+    /// hardware-only profile preserves the independent base cooling policy.
+    /// </summary>
+    private async Task ReplaceActiveCoolingGraphTransactionAsync(
+        ActiveCoolingGraphRuntime requested,
         CancellationToken cancellationToken)
     {
         await _coolingGraphGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        ActiveCoolingGraphRuntime? previous = _activeCoolingGraph;
+        HardwareSnapshot snapshot = GetSnapshot();
         try
         {
-            ActiveCoolingGraphRuntime? previous = _activeCoolingGraph;
-            _activeCoolingGraph = null;
+            CoolingGraphRuntimeTick firstTick = requested.Runtime.Evaluate(
+                requested.Graph,
+                snapshot.Sensors,
+                requested.Calibrations,
+                requested.SafetyLimits.StalePollLimit,
+                snapshot.CapturedAt);
+            CoolingSafetyDecision firstDecision = requested.Supervisor.Evaluate(
+                requested.Graph,
+                firstTick,
+                snapshot.Sensors,
+                requested.SafetyLimits,
+                snapshot.CapturedAt);
+            if (firstDecision.State == CoolingRuntimeState.EmergencyMaximum)
+            {
+                throw new InvalidOperationException(
+                    $"Cooling policy activation was refused before commit: {firstDecision.Reason}");
+            }
+
+            await ApplyCoolingGraphOutputsAsync(requested, snapshot, firstDecision.Evaluation, cancellationToken).ConfigureAwait(false);
+
             if (previous is not null)
             {
-                await ResetCoolingGraphOutputsAsync(previous.Graph, GetSnapshot(), cancellationToken).ConfigureAwait(false);
+                HashSet<string> retainedOutputs = requested.Graph.Outputs
+                    .Select(output => output.CapabilityId)
+                    .ToHashSet(StringComparer.Ordinal);
+                await ResetCoolingGraphOutputsAsync(
+                    previous.Graph,
+                    snapshot,
+                    cancellationToken,
+                    retainedOutputs).ConfigureAwait(false);
             }
 
             _activeCoolingGraph = requested;
-            return null;
+            PublishCoolingStatus(requested, firstDecision, firstTick);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception)
         {
-            _activeCoolingGraph = null;
-            ServiceLog.CoolingGraphDeactivated(logger, exception);
-            return exception.Message;
+            List<string> recoveryErrors = [];
+            try
+            {
+                await ResetCoolingGraphOutputsAsync(requested.Graph, snapshot, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception resetException)
+            {
+                recoveryErrors.Add($"new cooling policy reset failed: {resetException.Message}");
+            }
+
+            if (previous is not null)
+            {
+                try
+                {
+                    CoolingGraphRuntimeTick restoreTick = previous.Runtime.Evaluate(
+                        previous.Graph,
+                        snapshot.Sensors,
+                        previous.Calibrations,
+                        previous.SafetyLimits.StalePollLimit,
+                        snapshot.CapturedAt);
+                    CoolingSafetyDecision restoreDecision = previous.Supervisor.Evaluate(
+                        previous.Graph,
+                        restoreTick,
+                        snapshot.Sensors,
+                        previous.SafetyLimits,
+                        snapshot.CapturedAt);
+                    await ApplyCoolingGraphOutputsAsync(previous, snapshot, restoreDecision.Evaluation, CancellationToken.None).ConfigureAwait(false);
+                    _activeCoolingGraph = previous;
+                    PublishCoolingStatus(previous, restoreDecision, restoreTick);
+                }
+                catch (Exception restoreException)
+                {
+                    recoveryErrors.Add($"previous cooling policy restore failed: {restoreException.Message}");
+                    _activeCoolingGraph = null;
+                }
+            }
+            else
+            {
+                _activeCoolingGraph = null;
+                PublishInactiveCoolingStatus("Cooling policy activation failed; no previous service-owned graph was active.");
+            }
+
+            if (recoveryErrors.Count > 0)
+            {
+                throw new HardwareStateUnknownException(
+                    "cooling-policy",
+                    "ReplaceActiveCoolingGraph",
+                    $"{exception.Message} Recovery errors: {string.Join("; ", recoveryErrors)}",
+                    exception);
+            }
+
+            throw;
         }
         finally
         {
@@ -4071,13 +4398,35 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
     private async Task TickCoolingGraphAsync(HardwareSnapshot snapshot, CancellationToken cancellationToken)
     {
-        if (_rollbackBlocked || HasActiveOperation() || !await _coolingGraphGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+        if (_rollbackBlocked)
+        {
+            CoolingRuntimeStatusV1 current = Volatile.Read(ref _coolingRuntimeStatus);
+            if (current.State != CoolingRuntimeState.Inactive)
+            {
+                Volatile.Write(ref _coolingRuntimeStatus, current with
+                {
+                    State = CoolingRuntimeState.RecoveryRequired,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    Reason = "Cooling updates are blocked because hardware default-state recovery is required."
+                });
+            }
+            return;
+        }
+
+        if (!await _hardwareMutationGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
 
+        bool coolingGateHeld = false;
         try
         {
+            coolingGateHeld = await _coolingGraphGate.WaitAsync(0, cancellationToken).ConfigureAwait(false);
+            if (!coolingGateHeld)
+            {
+                return;
+            }
+
             ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
             if (active is null)
             {
@@ -4090,22 +4439,60 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 active.Calibrations,
                 active.SafetyLimits.StalePollLimit,
                 snapshot.CapturedAt);
+            CoolingSafetyDecision decision = active.Supervisor.Evaluate(
+                active.Graph,
+                tick,
+                snapshot.Sensors,
+                active.SafetyLimits,
+                snapshot.CapturedAt);
+            string? excludedCapabilityId = GetActiveCoolingOperationCapabilityId(snapshot);
+            if (decision.State == CoolingRuntimeState.EmergencyMaximum && excludedCapabilityId is not null)
+            {
+                RequestActiveOperationCancellation(excludedCapabilityId);
+            }
+
             try
             {
-                await ApplyCoolingGraphOutputsAsync(active, snapshot, tick.Evaluation, cancellationToken).ConfigureAwait(false);
-                if (tick.Evaluation.Emergency)
-                {
-                    await RecoverCoolingGraphAsync(active, snapshot, tick.Evaluation.Reason, cancellationToken).ConfigureAwait(false);
-                }
+                await ApplyCoolingGraphOutputsAsync(
+                    active,
+                    snapshot,
+                    decision.Evaluation,
+                    cancellationToken,
+                    excludedCapabilityId).ConfigureAwait(false);
+                PublishCoolingStatus(active, decision, tick, excludedCapabilityId);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                await RecoverCoolingGraphAsync(active, snapshot, exception.Message, cancellationToken).ConfigureAwait(false);
+                CoolingSafetyDecision forced = active.Supervisor.ForceEmergency(
+                    active.Graph,
+                    snapshot.CapturedAt,
+                    $"A cooling output update failed: {exception.Message}");
+                try
+                {
+                    await ApplyCoolingGraphOutputsAsync(
+                        active,
+                        snapshot,
+                        forced.Evaluation,
+                        CancellationToken.None,
+                        excludedCapabilityId).ConfigureAwait(false);
+                    PublishCoolingStatus(active, forced, tick, excludedCapabilityId);
+                }
+                catch (Exception maximumException)
+                {
+                    await RecoverCoolingGraphFailureAsync(
+                        active,
+                        snapshot,
+                        $"{forced.Reason} Maximum-cooling fallback also failed: {maximumException.Message}").ConfigureAwait(false);
+                }
             }
         }
         finally
         {
-            _coolingGraphGate.Release();
+            if (coolingGateHeld)
+            {
+                _coolingGraphGate.Release();
+            }
+            _hardwareMutationGate.Release();
         }
     }
 
@@ -4113,10 +4500,16 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ActiveCoolingGraphRuntime active,
         HardwareSnapshot snapshot,
         CoolingGraphEvaluation evaluation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? excludedCapabilityId = null)
     {
         foreach (CoolingGraphOutputV1 output in active.Graph.Outputs)
         {
+            if (string.Equals(output.CapabilityId, excludedCapabilityId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             if (!evaluation.OutputValues.TryGetValue(output.CapabilityId, out double target))
             {
                 throw new InvalidOperationException($"Cooling graph '{active.Graph.Id}' did not produce '{output.CapabilityId}'.");
@@ -4126,6 +4519,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 ?? throw new InvalidOperationException($"Cooling output '{output.CapabilityId}' is no longer available.");
             NumericRange range = capability.Range
                 ?? throw new InvalidOperationException($"Cooling output '{capability.Name}' no longer exposes numeric bounds.");
+            if (evaluation.Emergency)
+            {
+                // Emergency duty is fixed by the hardware capability, not by a
+                // profile's output cap; profiles cannot weaken maximum cooling.
+                target = range.Maximum;
+            }
             if (capability.State is not (CapabilityAccessState.Verified or CapabilityAccessState.Experimental)
                 || capability.Domain is not (ControlDomain.Cooling or ControlDomain.CoolingSafety)
                 || !capability.CanResetToDefault
@@ -4135,12 +4534,24 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 throw new InvalidOperationException($"Cooling output '{capability.Name}' no longer meets its active safety contract.");
             }
 
+            if (!evaluation.Emergency
+                && active.LastApplied.TryGetValue(capability.Id, out double applied)
+                && active.LastAppliedAt.TryGetValue(capability.Id, out DateTimeOffset appliedAt))
+            {
+                double seconds = Math.Max(0, (evaluation.Timestamp - appliedAt).TotalSeconds);
+                double maximumDelta = target >= applied
+                    ? output.StepUpPerSecond * seconds
+                    : output.StepDownPerSecond * seconds;
+                target = Math.Clamp(target, applied - maximumDelta, applied + maximumDelta);
+            }
+
             double threshold = Math.Max(0.25, range.Step / 2d);
             bool changed = !active.LastApplied.TryGetValue(capability.Id, out double previous)
                 || Math.Abs(previous - target) >= threshold;
             if (evaluation.Emergency || changed)
             {
                 await ApplyCoolingDutyAsync(active, capability, target, cancellationToken).ConfigureAwait(false);
+                active.LastAppliedAt[capability.Id] = evaluation.Timestamp;
             }
         }
     }
@@ -4170,50 +4581,128 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         active.LastApplied[capability.Id] = dutyPercent;
     }
 
-    private async Task RecoverCoolingGraphAsync(
+    private async Task RecoverCoolingGraphFailureAsync(
         ActiveCoolingGraphRuntime active,
         HardwareSnapshot snapshot,
-        string reason,
-        CancellationToken cancellationToken)
+        string reason)
     {
         List<string> errors = [];
-        foreach (CoolingGraphOutputV1 output in active.Graph.Outputs)
-        {
-            try
-            {
-                CapabilityDescriptor capability = snapshot.Capabilities.FirstOrDefault(item => item.Id == output.CapabilityId)
-                    ?? throw new InvalidOperationException("Cooling output disappeared.");
-                NumericRange range = capability.Range
-                    ?? throw new InvalidOperationException("Cooling output no longer exposes numeric bounds.");
-                await ApplyCoolingDutyAsync(active, capability, range.Maximum, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                errors.Add($"{output.CapabilityId}: maximum command failed ({exception.Message})");
-            }
-        }
-
         try
         {
-            await ResetCoolingGraphOutputsAsync(active.Graph, snapshot, cancellationToken).ConfigureAwait(false);
+            await ResetCoolingGraphOutputsAsync(active.Graph, snapshot, CancellationToken.None).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception)
         {
             errors.Add($"firmware/default recovery failed ({exception.Message})");
         }
 
         _activeCoolingGraph = null;
+        if (errors.Count > 0)
+        {
+            _rollbackBlocked = true;
+            Volatile.Write(ref _coolingRuntimeStatus, new CoolingRuntimeStatusV1(
+                CoolingRuntimeStatusV1.CurrentSchemaVersion,
+                active.ProfileId,
+                active.Graph.Id,
+                CoolingRuntimeState.RecoveryRequired,
+                DateTimeOffset.UtcNow,
+                active.Supervisor.EmergencySince,
+                new Dictionary<string, double>(active.LastApplied, StringComparer.Ordinal),
+                [],
+                new Dictionary<string, int>(),
+                $"RecoveryRequired: {reason} {string.Join("; ", errors)}"));
+        }
+        else
+        {
+            PublishInactiveCoolingStatus($"The active cooling writer failed; firmware/default control was restored and read back. {reason}");
+        }
         ServiceLog.CoolingGraphEmergency(logger, active.Graph.Id, reason, errors.Count == 0 ? null : string.Join("; ", errors));
     }
+
+    private string? GetActiveCoolingOperationCapabilityId(HardwareSnapshot snapshot)
+    {
+        HardwareOperationStatus? operation;
+        lock (_operationSync)
+        {
+            operation = _operationStatus is not null && IsActive(_operationStatus.State)
+                ? _operationStatus
+                : null;
+        }
+
+        return SelectCoolingOperationExclusion(operation, snapshot);
+    }
+
+    internal static string? SelectCoolingOperationExclusion(
+        HardwareOperationStatus? operation,
+        HardwareSnapshot snapshot)
+    {
+        if (operation is null || !IsActive(operation.State))
+        {
+            return null;
+        }
+
+        CapabilityDescriptor? capability = snapshot.Capabilities.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, operation.CapabilityId, StringComparison.Ordinal));
+        return capability?.Domain is ControlDomain.Cooling or ControlDomain.CoolingSafety
+            ? capability.Id
+            : null;
+    }
+
+    private void RequestActiveOperationCancellation(string capabilityId)
+    {
+        CancellationTokenSource? cancellation = null;
+        lock (_operationSync)
+        {
+            if (_operationStatus is not null
+                && IsActive(_operationStatus.State)
+                && string.Equals(_operationStatus.CapabilityId, capabilityId, StringComparison.Ordinal))
+            {
+                cancellation = _operationCancellation;
+            }
+        }
+
+        cancellation?.Cancel();
+    }
+
+    private void PublishCoolingStatus(
+        ActiveCoolingGraphRuntime active,
+        CoolingSafetyDecision decision,
+        CoolingGraphRuntimeTick tick,
+        string? excludedCapabilityId = null)
+    {
+        string reason = excludedCapabilityId is null
+            ? decision.Reason
+            : $"{decision.Reason} Output '{excludedCapabilityId}' is temporarily owned by an active cooling safety operation.";
+        Volatile.Write(ref _coolingRuntimeStatus, new CoolingRuntimeStatusV1(
+            CoolingRuntimeStatusV1.CurrentSchemaVersion,
+            active.ProfileId,
+            active.Graph.Id,
+            decision.State,
+            decision.Evaluation.Timestamp,
+            decision.State == CoolingRuntimeState.EmergencyMaximum ? decision.EmergencySince : null,
+            new Dictionary<string, double>(active.LastApplied, StringComparer.Ordinal),
+            tick.HeldSensorIds.OrderBy(id => id, StringComparer.Ordinal).ToArray(),
+            new Dictionary<string, int>(tick.StalePollCounts, StringComparer.Ordinal),
+            reason));
+    }
+
+    private void PublishInactiveCoolingStatus(string reason) =>
+        Volatile.Write(ref _coolingRuntimeStatus, CoolingRuntimeStatusV1.Inactive(reason));
 
     private async Task ResetCoolingGraphOutputsAsync(
         CoolingGraphV1 graph,
         HardwareSnapshot snapshot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<string>? excludedCapabilityIds = null)
     {
         List<string> errors = [];
         foreach (CoolingGraphOutputV1 output in graph.Outputs)
         {
+            if (excludedCapabilityIds?.Contains(output.CapabilityId) == true)
+            {
+                continue;
+            }
+
             try
             {
                 CapabilityDescriptor capability = snapshot.Capabilities.FirstOrDefault(item => item.Id == output.CapabilityId)
@@ -4222,7 +4711,20 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 {
                     throw new InvalidOperationException("Cooling output has no firmware/default reset path.");
                 }
-                await FindAdapter(capability.AdapterId).ResetToDefaultAsync(capability.Id, cancellationToken).ConfigureAwait(false);
+                IHardwareAdapter adapter = FindAdapter(capability.AdapterId);
+                await adapter.ResetToDefaultAsync(capability.Id, cancellationToken).ConfigureAwait(false);
+                if (adapter is not IHardwareStateVerifier verifier)
+                {
+                    throw new InvalidOperationException("Cooling output adapter does not support default-state read-back verification.");
+                }
+
+                HardwareStateVerification verification = await verifier
+                    .VerifyDefaultStateAsync(capability.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!verification.Success)
+                {
+                    throw new InvalidOperationException($"Default-state read-back failed: {verification.Message}");
+                }
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -4720,7 +5222,9 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         public IReadOnlyDictionary<string, FanCalibrationV2> Calibrations { get; } = calibrations;
         public SafetyLimits SafetyLimits { get; } = safetyLimits;
         public CoolingGraphRuntime Runtime { get; } = new();
+        public CoolingSafetySupervisor Supervisor { get; } = new();
         public Dictionary<string, double> LastApplied { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, DateTimeOffset> LastAppliedAt { get; } = new(StringComparer.Ordinal);
     }
 
     private static HardwareSnapshot EmptySnapshot() => new(

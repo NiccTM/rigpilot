@@ -10,7 +10,7 @@ RigPilot is a GPL-3.0 Windows desktop control suite inspired by G-Helper's low-f
 
 RigPilot is the public display brand as of 13 July 2026. `PCHelper` remains the deliberate internal identity for namespaces, service name, named-pipe names, CLI executable, local operator group, and `%ProgramData%\PCHelper` state. Do not rename those identifiers without a separately tested data and service migration.
 
-Current workspace target: `0.4.0-alpha`, a protocol-v2 desktop-suite alpha with commissioning, user-agent gaming workflow, lighting-layout, Game Bar, and vendor-telemetry foundations. It is not a qualified release and it does not claim certified CPU, GPU, motherboard-fan, pump, AIO, firmware, or RGB writes. Two controlled live passes provide single-system evidence for Windows power, RTX 3090 fan, and NCT6798D fan operations; that evidence is Experimental and does not satisfy the certification gate.
+Current workspace target: `0.5.5-alpha`, a protocol-v2 desktop-suite development line with transactional GPU control, continuous cooling, exact-route RGB, commissioning, gaming workflow, recovery, and contained adapter hosts. It is not a qualified release and it does not claim certified CPU, GPU, motherboard-fan, pump, AIO, firmware, or RGB families. Controlled reference-system passes remain Experimental and do not satisfy the certification gate. The unsigned `0.5.5-preview.1` release shape is compiled read-only: every service mutation returns `PUBLIC_PREVIEW_READ_ONLY` while monitoring remains available.
 
 Supported operating-system target:
 
@@ -846,6 +846,14 @@ Version 1.0 is blocked by any unresolved BSOD, stuck fan, failed reset, unauthor
 - `publish.ps1 -Version 0.5.5-alpha` produced the six-component runtime under `artifacts\publish`; `Test-RuntimePayload.ps1 -ExpectedProductVersion 0.5.5` passed with protocol 2. The payload is an unsigned development build, so automatic process takeover remains hard-blocked.
 - The user-approved UAC update through `Update-LocalAlphaRuntime.ps1` completed successfully. The PCHelper service is Running/Automatic from `C:\ProgramData\RigPilot\LocalAlpha\0.5.0-alpha-20260718-010606\payload\service\PCHelper.Service.exe`.
 - Post-deploy `runtime-preflight --json` is Ready: dashboard/service `0.5.5-alpha`, negotiated protocol 2, no missing features, service writes available. `status --json` reports healthy, `recoveryRequired=false`, and `hardwareControlArmed=false`. The published dashboard was launched and is responsive on `RigPilot — Overview`. Deployment itself issued no hardware control or RGB command.
+
+## Verification snapshot: 2026-07-18 (0.5.5 preview trust and release pipeline)
+
+- One product version source in `Directory.Build.props` now feeds CI, publish, Game Bar, MSI, bundle, and local-alpha validation. PR #24's stale CI `0.4.0` packaging arguments were removed; prerelease SemVer is converted to a legal numeric MSI version.
+- Unsigned public previews compile the service with `RigPilotPublicUnsignedPreview=true`. Every `IpcCommandPolicy` mutation returns `PUBLIC_PREVIEW_READ_ONLY`; read-only monitoring remains available. `runtime-contract.json` records the trust policy, and payload validation executes the published service's `--print-release-policy` probe rather than trusting the manifest alone.
+- The release workflow supports staged SignPath signing of runtime components, MSI, and bundle, followed by Authenticode verification, runtime hash refresh, checksums, SPDX SBOM, and provenance attestations. SignPath organisation/project/configuration values remain external enrolment inputs. A PFX path remains as a fallback.
+- Public startup is offline: the GitHub update request now runs only from the explicit dashboard action. `CODE_SIGNING.md` and `PRIVACY.md` define roles, approval, local data, and every network route.
+- Verification: 376 core + 453 integration tests passed (829 total), workflow files parsed as YAML, `0.5.5-preview.1` published locally with `publicUnsignedPreview=true;writesAllowed=false`, runtime payload validation passed, and WiX built `RigPilot.Installer.msi` with 0 warnings/errors. No service deployment, installation, or hardware write occurred.
 
 ## Change discipline
 

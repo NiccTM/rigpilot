@@ -706,7 +706,7 @@ internal static class Cli
             HardwareSnapshot snapshot = await coordinator.CaptureAsync(CancellationToken.None);
             report = CompatibilityReportBuilder.Build(
                 snapshot,
-                "0.5.0-alpha",
+                "0.5.5-alpha",
                 new Dictionary<string, string>
                 {
                     ["framework"] = Environment.Version.ToString(),

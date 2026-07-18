@@ -19,6 +19,7 @@
     <ProjectReference Include="..\PCHelper.Core\PCHelper.Core.csproj" />
     <ProjectReference Include="..\PCHelper.Ipc\PCHelper.Ipc.csproj" />
     <ProjectReference Include="..\PCHelper.AutomationHost\PCHelper.AutomationHost.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\PCHelper.WorkloadHost\PCHelper.WorkloadHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
@@ -37,5 +38,14 @@
       <AutomationHostFiles Include="..\PCHelper.AutomationHost\bin\$(Configuration)\net10.0-windows10.0.19041.0\PCHelper.AutomationHost.*" />
     </ItemGroup>
     <Copy SourceFiles="@(AutomationHostFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopyWorkloadHost" AfterTargets="Build">
+    <ItemGroup>
+      <WorkloadHostFiles Include="..\PCHelper.WorkloadHost\bin\$(Configuration)\net10.0-windows10.0.19041.0\PCHelper.WorkloadHost.*" />
+      <WorkloadHostDependencies Include="..\PCHelper.WorkloadHost\bin\$(Configuration)\net10.0-windows10.0.19041.0\Vortice*.dll" />
+      <WorkloadHostDependencies Include="..\PCHelper.WorkloadHost\bin\$(Configuration)\net10.0-windows10.0.19041.0\SharpGen.Runtime*.dll" />
+      <WorkloadShader Include="..\PCHelper.WorkloadHost\bin\$(Configuration)\net10.0-windows10.0.19041.0\Workload.hlsl" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WorkloadHostFiles);@(WorkloadHostDependencies);@(WorkloadShader)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

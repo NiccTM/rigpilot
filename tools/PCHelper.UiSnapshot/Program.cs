@@ -86,7 +86,7 @@ internal static class Program
             // Load data before any WPF control subscribes to the view model. This keeps
             // initialization thread-safe and lets the requested page render completely
             // in its first presentation frame.
-            viewModel.InitialiseAsync().GetAwaiter().GetResult();
+            viewModel.InitialiseAsync(startAutomaticRefresh: false).GetAwaiter().GetResult();
             viewModel.IsAdvancedLab = advancedLab;
         }
         catch (Exception exception)
@@ -161,7 +161,7 @@ internal static class Program
         using MainViewModel viewModel = new();
         try
         {
-            viewModel.InitialiseAsync().GetAwaiter().GetResult();
+            viewModel.InitialiseAsync(startAutomaticRefresh: false).GetAwaiter().GetResult();
         }
         catch (Exception exception)
         {
@@ -444,6 +444,7 @@ internal static class Program
             "Games.GameOsd",
             "Games.GameCapture",
             "Games.SaveBundle",
+            "Games.ApplyBundle",
             "Games.DesktopOsdLayout",
             "Games.ShowDesktopOsd",
             "Games.HideDesktopOsd",
@@ -495,7 +496,8 @@ internal static class Program
             "Lighting.ApplyDimmRgb",
             "Lighting.DimmRgbOff",
             "Lighting.ApplyRazerUsb",
-            "Lighting.RazerUsbOff"
+            "Lighting.RazerUsbOff",
+            "Games.ApplyBundle"
         ];
 
         FrameworkElement[] elements = Descendants(window).OfType<FrameworkElement>().ToArray();

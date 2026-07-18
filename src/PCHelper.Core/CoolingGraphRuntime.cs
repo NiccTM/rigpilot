@@ -19,11 +19,18 @@ public sealed class CoolingGraphRuntime
         IReadOnlyList<SensorSample> samples,
         IReadOnlyDictionary<string, FanCalibrationV2> calibrations,
         int stalePollLimit,
-        DateTimeOffset timestamp)
+        DateTimeOffset timestamp,
+        TimeSpan? maximumSampleAge = null)
     {
         if (stalePollLimit < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(stalePollLimit), "The stale poll limit must be at least one.");
+        }
+
+        TimeSpan sampleAgeLimit = maximumSampleAge ?? TimeSpan.FromSeconds(3);
+        if (sampleAgeLimit <= TimeSpan.Zero || sampleAgeLimit > TimeSpan.FromSeconds(30))
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumSampleAge), "Cooling sensor age must be greater than zero and at most 30 seconds.");
         }
 
         Dictionary<string, SensorSample> latest = samples
@@ -47,7 +54,9 @@ public sealed class CoolingGraphRuntime
             if (latest.TryGetValue(sensorId, out SensorSample? sample)
                 && sample.Quality == SensorQuality.Good
                 && sample.Value is double value
-                && double.IsFinite(value))
+                && double.IsFinite(value)
+                && timestamp - sample.Timestamp <= sampleAgeLimit
+                && sample.Timestamp - timestamp <= TimeSpan.FromSeconds(1))
             {
                 _lastGoodValues[sensorId] = value;
                 _stalePollCounts.Remove(sensorId);

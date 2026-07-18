@@ -85,6 +85,37 @@ public sealed class RgbRoutingPolicyTests
     }
 
     [Fact]
+    public void VendorOwnerBlocksOnlyItsMatchingEndpointFamily()
+    {
+        HardwareSnapshot snapshot = Snapshot(conflicts:
+        [
+            new ConflictDescriptor(
+                "nzxt-cam",
+                "NZXT CAM",
+                "NZXT CAM",
+                ["Aio", "Lighting"],
+                true,
+                "Use one owner for the Kraken.")
+        ]);
+
+        IReadOnlyList<RgbRouteAssessment> routes = RgbRoutingPolicy.Assess(
+            snapshot,
+            [],
+            [
+                new RgbBridgeEndpoint("0", "NZXT Kraken X63", "NZXT", 16, true, "OpenRGB"),
+                new RgbBridgeEndpoint("1", "ASUS Aura LED Controller", "ASUS", 48, true, "OpenRGB")
+            ],
+            openRgbEnabled: true,
+            openRgbConnected: true);
+
+        RgbRouteAssessment kraken = routes.Single(route => route.Id == "openrgb:0");
+        RgbRouteAssessment aura = routes.Single(route => route.Id == "openrgb:1");
+        Assert.Equal(RgbRouteState.Blocked, kraken.State);
+        Assert.Contains("NZXT CAM", kraken.Summary, StringComparison.Ordinal);
+        Assert.Equal(RgbRouteState.Ready, aura.State);
+    }
+
+    [Fact]
     public void ConnectedLocalOpenRgbBridgePausesDynamicLightingToAvoidUnknownOverlap()
     {
         IReadOnlyList<RgbRouteAssessment> routes = RgbRoutingPolicy.Assess(

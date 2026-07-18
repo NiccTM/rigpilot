@@ -2,7 +2,7 @@
 
 Report vulnerabilities privately through the repository security-advisory feature. Do not open public issues for vulnerabilities that could enable arbitrary privileged commands, named-pipe impersonation, unsafe hardware writes, or report-data disclosure.
 
-PC Helper follows these rules:
+RigPilot follows these rules:
 
 - The privileged service accepts only typed, versioned commands from authorised local users.
 - Profiles cannot contain scripts or executable paths.

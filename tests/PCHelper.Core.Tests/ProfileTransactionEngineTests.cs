@@ -232,6 +232,66 @@ public sealed class ProfileTransactionEngineTests
         Assert.Equal(ProfileTransactionState.Committed, transaction.State);
     }
 
+    [Fact]
+    public async Task FailedCompositePreCommitStepRollsBackVerifiedHardware()
+    {
+        FakeAdapter adapter = new() { CurrentValue = 25 };
+        using ProfileTransactionEngine engine = new([adapter], new MemoryJournal());
+        bool hookObservedAppliedValue = false;
+
+        (ProfileTransaction transaction, _) = await engine.ApplyAsync(
+            ProfileValidatorTests.Profile(ProfileValidatorTests.Action(required: true), experimental: false),
+            Capabilities(),
+            expectedRevision: 0,
+            confirmExperimental: false,
+            CancellationToken.None,
+            beforeCommit: _ =>
+            {
+                hookObservedAppliedValue = adapter.CurrentValue == 50;
+                throw new InvalidOperationException("Injected dependent cooling failure.");
+            });
+
+        Assert.True(hookObservedAppliedValue);
+        Assert.Equal(ProfileTransactionState.RolledBack, transaction.State);
+        Assert.Equal(25, adapter.CurrentValue);
+        Assert.Contains("rollback", adapter.Calls);
+        Assert.Equal(0, engine.Revision);
+    }
+
+    [Fact]
+    public async Task CompositeControlsJoinTheLeaseBeforeCommit()
+    {
+        FakeAdapter adapter = new();
+        MemorySuiteStore suiteStore = new();
+        using ProfileTransactionEngine engine = new(
+            [adapter],
+            new MemoryJournal(),
+            suiteStore: suiteStore,
+            serviceInstanceId: "service-test");
+
+        (ProfileTransaction transaction, _) = await engine.ApplyAsync(
+            ProfileValidatorTests.Profile(ProfileValidatorTests.Action(required: true), experimental: false),
+            Capabilities(),
+            expectedRevision: 0,
+            confirmExperimental: false,
+            CancellationToken.None,
+            additionalLeasedControls:
+            [
+                new HardwareControlLeaseItemV1("cooling.adapter", "cooling.output")
+            ]);
+
+        HardwareControlLeaseV1? lease = await suiteStore.GetSuiteEntityAsync<HardwareControlLeaseV1>(
+            SuiteEntityKind.HardwareControlLease,
+            HardwareControlLeaseV1.DefaultId,
+            CancellationToken.None);
+        Assert.Equal(ProfileTransactionState.Committed, transaction.State);
+        Assert.NotNull(lease);
+        Assert.Collection(
+            lease.Controls,
+            control => Assert.Equal("cooling.adapter", control.AdapterId),
+            control => Assert.Equal("test.adapter", control.AdapterId));
+    }
+
     private static Dictionary<string, CapabilityDescriptor> Capabilities() =>
         new Dictionary<string, CapabilityDescriptor>
         {

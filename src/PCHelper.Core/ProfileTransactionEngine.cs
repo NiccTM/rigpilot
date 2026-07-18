@@ -38,7 +38,9 @@ public sealed class ProfileTransactionEngine : IDisposable
         IReadOnlyDictionary<string, CapabilityDescriptor> capabilities,
         long? expectedRevision,
         bool confirmExperimental,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommit = null,
+        IReadOnlyList<HardwareControlLeaseItemV1>? additionalLeasedControls = null)
     {
         ProfileValidationResult validation = ProfileValidator.Validate(profile, capabilities, confirmExperimental);
         if (!validation.Valid)
@@ -120,12 +122,23 @@ public sealed class ProfileTransactionEngine : IDisposable
                     }
                 }
 
+                // Composite callers use this hook for a dependent state change (for
+                // example, activating and read-back-verifying a cooling policy). It
+                // deliberately runs while the hardware mutation lock is still held
+                // and before either the transaction or its control lease is committed.
+                // Any exception enters the normal rollback path below.
+                if (beforeCommit is not null)
+                {
+                    await beforeCommit(cancellationToken).ConfigureAwait(false);
+                }
+
                 await RecordActiveControlsUnsafeAsync(
                     profile.Id,
                     transaction.Id,
                     prepared.Select(item => new HardwareControlLeaseItemV1(
                         item.Action.AdapterId,
-                        item.Action.CapabilityId)),
+                        item.Action.CapabilityId))
+                        .Concat(additionalLeasedControls ?? []),
                     cancellationToken).ConfigureAwait(false);
 
                 long committedRevision = Interlocked.Increment(ref _revision);

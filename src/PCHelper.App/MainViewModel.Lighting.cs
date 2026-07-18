@@ -83,26 +83,61 @@ public sealed partial class MainViewModel
     {
         LightingSceneV1 scene = SelectedLightingScene
             ?? throw new InvalidOperationException("Select a saved lighting layout first.");
-        if (HasDynamicLightingConflict)
-        {
-            throw new InvalidOperationException(DynamicLightingConflictReason);
-        }
         if (!TryParseOpenRgbInputs(out string colour, out _))
         {
             throw new InvalidOperationException("Enter a six-digit RGB colour and brightness from 0 to 100.");
         }
+
+        string[] readyDeviceIds = DynamicLightingDevices
+            .Where(device => RgbRouteAssessments.Any(route =>
+                string.Equals(route.Id, $"dynamic:{device.Id}", StringComparison.Ordinal)
+                && route.State == RgbRouteState.Ready))
+            .Select(device => device.Id)
+            .ToArray();
+        string[] sceneDeviceIds = scene.Zones
+            .Select(zone => zone.DeviceId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        string[] blockedSceneDevices = sceneDeviceIds
+            .Except(readyDeviceIds, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (blockedSceneDevices.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"The scene contains {blockedSceneDevices.Length} endpoint(s) that are not ready. No scene output was sent; review the RGB route matrix.");
+        }
+
+        if (readyDeviceIds.Length == 0)
+        {
+            throw new InvalidOperationException("No Windows Dynamic Lighting endpoint is ready.");
+        }
+
+        await _rgbMutationGate.WaitAsync(_lifetime.Token);
         BusyMessage = "Applying Windows Dynamic Lighting scene";
         IsBusy = true;
         try
         {
-            await DynamicLightingBridge.ApplyStaticSceneAsync(scene, colour, _lifetime.Token);
-            DynamicLightingStatus = $"Applied '{scene.Name}' through Windows Dynamic Lighting.";
+            if (scene.Zones.Count == 0)
+            {
+                await DynamicLightingBridge.ApplyStaticColourAsync(
+                    readyDeviceIds,
+                    colour,
+                    scene.BrightnessPercent,
+                    _lifetime.Token);
+            }
+            else
+            {
+                await DynamicLightingBridge.ApplyStaticSceneAsync(scene, colour, _lifetime.Token);
+            }
+
+            DynamicLightingStatus = $"Windows accepted '{scene.Name}' on {readyDeviceIds.Length} ready endpoint(s). Confirm physical colour visually where no read-back exists.";
             RebuildRgbRouteAssessments();
             ShowNotice(DynamicLightingStatus, "Success");
         }
         finally
         {
             IsBusy = false;
+            _rgbMutationGate.Release();
         }
     }
 
@@ -307,11 +342,22 @@ public sealed partial class MainViewModel
     /// and an absent installation just falls through to the normal
     /// connection-failed message.
     /// </summary>
-    private static async Task EnsureOpenRgbServerRunningAsync()
+    private static async Task EnsureOpenRgbServerRunningAsync(CancellationToken cancellationToken)
     {
-        if (System.Diagnostics.Process.GetProcessesByName("OpenRGB").Length > 0)
+        System.Diagnostics.Process[] running = System.Diagnostics.Process.GetProcessesByName("OpenRGB");
+        try
         {
-            return;
+            if (running.Length > 0)
+            {
+                return;
+            }
+        }
+        finally
+        {
+            foreach (System.Diagnostics.Process process in running)
+            {
+                process.Dispose();
+            }
         }
 
         string[] candidates =
@@ -329,13 +375,13 @@ public sealed partial class MainViewModel
             return;
         }
 
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(executable)
+        using System.Diagnostics.Process? launched = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(executable)
         {
             Arguments = "--server --startminimized",
             UseShellExecute = true
         });
         // Give device enumeration a moment before the first SDK negotiation.
-        await Task.Delay(TimeSpan.FromSeconds(8));
+        await Task.Delay(TimeSpan.FromSeconds(8), cancellationToken);
     }
 
     private void EnsureServiceWritesAvailable()
@@ -377,16 +423,11 @@ public sealed partial class MainViewModel
             throw new InvalidOperationException("Enable the OpenRGB bridge before connecting.");
         }
 
-        if (HasLightingConflict)
-        {
-            throw new InvalidOperationException(LightingConflictReason);
-        }
-
         BusyMessage = "Negotiating with the local OpenRGB SDK server";
         IsBusy = true;
         try
         {
-            await EnsureOpenRgbServerRunningAsync();
+            await EnsureOpenRgbServerRunningAsync(_lifetime.Token);
             OpenRgbSdkClient client = new();
             OpenRgbConnectionResult result = await client.ProbeAsync(_lifetime.Token);
             SetOpenRgbControllers(result.Controllers);
@@ -414,11 +455,6 @@ public sealed partial class MainViewModel
             throw new InvalidOperationException("Connect to the local OpenRGB SDK server first.");
         }
 
-        if (HasLightingConflict)
-        {
-            throw new InvalidOperationException(LightingConflictReason);
-        }
-
         if (!TryParseOpenRgbInputs(out string colour, out int brightness))
         {
             throw new InvalidOperationException("Use a #RRGGBB colour and brightness from 0 to 100%.");
@@ -429,33 +465,59 @@ public sealed partial class MainViewModel
             brightness = 0;
         }
 
-        BusyMessage = turnOff ? "Turning OpenRGB lighting off" : "Applying OpenRGB lighting";
+        uint[] readyControllerIds = GetReadyOpenRgbControllerIds();
+        if (readyControllerIds.Length == 0)
+        {
+            string blocked = string.Join(
+                "; ",
+                RgbRouteAssessments
+                    .Where(route => route.Id.StartsWith("openrgb:", StringComparison.Ordinal))
+                    .Select(route => $"{route.DeviceName}: {route.Summary}"));
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(blocked)
+                    ? "No OpenRGB controller is ready in this session. Test the local SDK server first."
+                    : $"No OpenRGB controller is ready. {blocked}");
+        }
+
+        await _rgbMutationGate.WaitAsync(_lifetime.Token);
+        BusyMessage = turnOff ? "Turning ready OpenRGB lighting off" : "Applying ready OpenRGB lighting";
         IsBusy = true;
         try
         {
+            if (AmbientRunning)
+            {
+                await StopAmbientLightingAsync();
+            }
+
             OpenRgbSdkClient client = new();
             OpenRgbConnectionResult result = turnOff || SelectedColourway is null or { Id: "static" }
-                ? await client.SetStaticColourAsync(colour, brightness, _lifetime.Token)
-                : await client.SetColourwayAsync(SelectedColourway.Id, colour, brightness, _lifetime.Token);
+                ? await client.SetStaticColourAsync(colour, brightness, readyControllerIds, _lifetime.Token)
+                : await client.SetColourwayAsync(SelectedColourway.Id, colour, brightness, readyControllerIds, _lifetime.Token);
             SetOpenRgbControllers(result.Controllers);
             OpenRgbConnected = true;
             OpenRgbStatus = turnOff
-                ? $"Lighting off on {result.Controllers.Count} controller(s)."
-                : result.Message;
+                ? $"Lighting off was issued to {readyControllerIds.Length} ready controller(s); visually confirm devices without read-back."
+                : $"{result.Message} Visually confirm devices without colour read-back.";
             ShowNotice(OpenRgbStatus, "Success");
         }
         catch (Exception exception)
         {
-            OpenRgbConnected = false;
-            SetOpenRgbControllers([]);
-            OpenRgbStatus = $"Lighting update failed: {exception.Message}";
+            OpenRgbStatus = $"Lighting update ended without a final result: {exception.Message} Selected controller state is unknown; inspect it before retrying.";
             throw;
         }
         finally
         {
             IsBusy = false;
+            _rgbMutationGate.Release();
         }
     }
+
+    private uint[] GetReadyOpenRgbControllerIds() => _openRgbControllers
+        .Where(controller => RgbRouteAssessments.Any(route =>
+            string.Equals(route.Id, $"openrgb:{controller.Id}", StringComparison.Ordinal)
+            && route.State == RgbRouteState.Ready))
+        .Select(controller => controller.Id)
+        .ToArray();
 
     private bool TryParseOpenRgbInputs(out string colour, out int brightness)
     {

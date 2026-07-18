@@ -98,13 +98,30 @@ public sealed record ProfileCardDisplay(
         };
         int manualOnlyCount = suiteProfile?.ManualOnlyActionIds.Count ?? 0;
         bool hasCoolingGraph = !string.IsNullOrWhiteSpace(suiteProfile?.CoolingGraphId);
-        string actionSummary = profile.Actions.Count == 0
-            ? hasCoolingGraph
-                ? "Calibrated cooling graph; apply manually"
-                : "No hardware writes in this build"
-            : manualOnlyCount > 0
-                ? $"{profile.Actions.Count} typed action{(profile.Actions.Count == 1 ? string.Empty : "s")} · {manualOnlyCount} Manual Only"
-            : $"{profile.Actions.Count} typed action{(profile.Actions.Count == 1 ? string.Empty : "s")}";
+        List<string> bundleParts = [];
+        if (profile.Actions.Count > 0)
+        {
+            bundleParts.Add($"{profile.Actions.Count} typed action{(profile.Actions.Count == 1 ? string.Empty : "s")}");
+        }
+        if (hasCoolingGraph)
+        {
+            bundleParts.Add("continuous cooling graph");
+        }
+        if (!string.IsNullOrWhiteSpace(suiteProfile?.LightingSceneId))
+        {
+            bundleParts.Add("user-session lighting scene");
+        }
+        if (!string.IsNullOrWhiteSpace(suiteProfile?.OsdLayoutId))
+        {
+            bundleParts.Add("OSD layout");
+        }
+        if (manualOnlyCount > 0)
+        {
+            bundleParts.Add($"{manualOnlyCount} Manual Only");
+        }
+        string actionSummary = bundleParts.Count == 0
+            ? "No hardware or companion actions in this build"
+            : string.Join(" · ", bundleParts);
         return new ProfileCardDisplay(
             profile,
             profile.Name,

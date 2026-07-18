@@ -522,10 +522,10 @@ public sealed partial class MainViewModel
         .Select(sensor => sensor.Value)
         .FirstOrDefault();
 
-    // --- Full Auto OC: core pass, wait for completion, then memory pass ------
+    // --- Full Auto OC: one service-owned core + memory transaction -----------
 
     private AsyncCommand? _startFullAutoOcCommand;
-    private string _fullAutoOcStatus = "Runs the core-clock auto-OC to completion, then the memory pass, unattended — each with the full safety envelope (83 °C ceiling, screening, rollback, boot sentinel).";
+    private string _fullAutoOcStatus = "Runs an isolated exact-GPU workload while the service tunes core and memory as one operation, performs a combined screen, then restores and reads back the prior state.";
 
     public ICommand StartFullAutoOcCommand => _startFullAutoOcCommand ??= new AsyncCommand(
         _ => StartFullAutoOcAsync(),
@@ -540,49 +540,79 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>
-    /// The complete unattended overclocking pass: core auto-OC, wait for the
-    /// bounded engine to finish (including its screening and restore), then
-    /// the memory auto-OC. A core pass that ends in anything but Completed
-    /// stops the sequence — memory is never tuned on top of a failed core run.
+    /// Launches the constrained workload host in the signed-in user session;
+    /// the service owns the composite core, memory, combined-screen, and
+    /// restoration transaction.
     /// </summary>
     public async Task StartFullAutoOcAsync()
     {
-        FullAutoOcStatus = "Core clock pass starting…";
-        string? coreOperationId = await StartGpuClockAutoOcAsync(
-            "gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz);
-        if (coreOperationId is null)
+        if (!HardwareControlEnabled || _snapshot is null)
         {
-            FullAutoOcStatus = "The core pass did not start; the memory pass was not run.";
+            ShowNotice("Turn on Hardware control and refresh before starting Full Auto OC.", "Warning");
             return;
         }
 
-        HardwareOperationState? coreOutcome = await WaitForOperationAsync(coreOperationId, "core clock");
-        if (coreOutcome != HardwareOperationState.Completed)
+        CapabilityDescriptor? core = _snapshot.Capabilities.FirstOrDefault(capability =>
+            capability.Id.StartsWith("gpuclock.core:", StringComparison.Ordinal)
+            && capability.Range is not null
+            && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified);
+        CapabilityDescriptor? memory = _snapshot.Capabilities.FirstOrDefault(capability =>
+            capability.Id.StartsWith("gpuclock.memory:", StringComparison.Ordinal)
+            && capability.Range is not null
+            && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified);
+        if (core is null
+            || memory is null
+            || !string.Equals(core.DeviceId, memory.DeviceId, StringComparison.Ordinal))
         {
-            FullAutoOcStatus = $"Stopped after the core pass ({coreOutcome?.ToString() ?? "not started"}); the memory pass was not run.";
+            FullAutoOcStatus = "Full Auto OC requires armed, bounded core and memory controls on one exact GPU.";
             ShowNotice(FullAutoOcStatus, "Warning");
             return;
         }
 
-        FullAutoOcStatus = "Core pass completed. Memory clock pass starting…";
-        string? memoryOperationId = await StartGpuClockAutoOcAsync(
-            "gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz);
-        HardwareOperationState? memoryOutcome = memoryOperationId is null
-            ? null
-            : await WaitForOperationAsync(memoryOperationId, "memory clock");
-        FullAutoOcStatus = memoryOutcome == HardwareOperationState.Completed
-            ? "Full Auto OC finished: core and memory passes both completed with their safety margins applied. Run the benchmark on Games & tools to confirm the gain."
-            : $"Core pass completed; the memory pass ended {memoryOutcome?.ToString() ?? "without starting"}.";
-        ShowNotice(FullAutoOcStatus, memoryOutcome == HardwareOperationState.Completed ? "Success" : "Warning");
+        FullAutoOcStatus = "Starting the isolated Direct3D workload host…";
+        await using WorkloadHostSession workload = await WorkloadHostSession.StartAsync(core.DeviceId, _lifetime.Token);
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.StartAutoOc,
+                new StartAutoOcV2Request(
+                    StartAutoOcV2Request.CurrentSchemaVersion,
+                    core.DeviceId,
+                    core.Id,
+                    memory.Id,
+                    workload.Descriptor,
+                    ConfirmExperimental: true,
+                    ConfirmDevice: true),
+                _status?.StateRevision,
+                Guid.NewGuid().ToString("N")),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        _operation = IpcJson.FromElement<HardwareOperationStatus>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty Full Auto OC operation.");
+        NotifyOperationProperties();
+        HardwareOperationState? outcome = await WaitForOperationAsync(_operation.Id, "core + memory");
+        AutoOcResultV2? result = _operation?.AutoOcResult;
+        bool usable = outcome == HardwareOperationState.Completed
+            && result is
+            {
+                AllRequestedFamiliesVerified: true,
+                PriorStateRestored: true,
+                HardwareStateKnown: true,
+                GeneratedProfile: not null
+            };
+        FullAutoOcStatus = usable
+            ? $"Full Auto OC screened core {result!.CoreOffsetMegahertz:0} MHz and memory {result.MemoryOffsetMegahertz:0} MHz. Prior hardware state was restored; apply the saved profile explicitly from Profiles."
+            : result?.Message ?? $"Full Auto OC ended {outcome?.ToString() ?? "without a final result"}.";
+        ShowNotice(FullAutoOcStatus, usable ? "Success" : "Warning");
+        await RefreshAsync(full: true, userInitiated: false);
     }
 
     /// <summary>
     /// Polls the service operation status until the current tune reaches a
-    /// terminal state (bounded at 45 minutes — far beyond any screening run).
+    /// terminal state (bounded at 90 minutes for the composite screening run).
     /// </summary>
     private async Task<HardwareOperationState?> WaitForOperationAsync(string operationId, string label)
     {
-        DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(45);
+        DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(90);
         HardwareOperationState? last = null;
         while (DateTimeOffset.UtcNow < deadline)
         {
@@ -735,7 +765,7 @@ public sealed partial class MainViewModel
         await RefreshAsync(full: true, userInitiated: false);
     }
 
-    // --- Guided undervolt (power-limit based; documented APIs only) -----------
+    // --- Efficiency power target (documented power-limit APIs only) -----------
 
     private string _undervoltStatus = "Lowers the GPU power target through the same transactional, read-back-verified path as the slider. Frame rates stay close to stock in most games while heat and fan noise drop. This is not a voltage-frequency curve editor.";
 
@@ -765,7 +795,7 @@ public sealed partial class MainViewModel
         double? target = UndervoltPresets.ComputeTargetWatts(power.Minimum, power.Maximum, power.Default, preset);
         if (target is not double watts)
         {
-            ShowNotice("That undervolt preset is not available for this GPU's reported power range.", "Warning");
+            ShowNotice("That efficiency power target is not available for this GPU's reported power range.", "Warning");
             return;
         }
 

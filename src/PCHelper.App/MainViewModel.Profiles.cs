@@ -53,6 +53,7 @@ public sealed partial class MainViewModel
             }
 
             _automationMachine.SetCurrentProfile(result.ActiveProfileId);
+            ProfileActivationStatus = $"{profile.Name}: legacy hardware profile committed. Legacy profiles do not carry a linked lighting scene.";
             if (manualSelection)
             {
                 _manualProfileId = profile.Id;
@@ -81,7 +82,11 @@ public sealed partial class MainViewModel
         return ApplyProfileAsync(card.Profile);
     }
 
-    private async Task ApplyProfileV2Async(ProfileV2 profile, bool manualSelection = true)
+    private async Task ApplyProfileV2Async(
+        ProfileV2 profile,
+        bool manualSelection = true,
+        bool applyLinkedLighting = true,
+        bool applyLinkedOsd = true)
     {
         EnsureServiceWritesAvailable();
         if (!IsServiceOnline)
@@ -116,11 +121,22 @@ public sealed partial class MainViewModel
             ApplyProfileResult result = IpcJson.FromElement<ApplyProfileResult>(response.Payload)
                 ?? throw new InvalidDataException("Service returned an empty profile result.");
             UpdateAppliedProfileStatus(response, result);
+            (string lightingMessage, bool lightingWarning) = applyLinkedLighting
+                ? await ApplyLinkedLightingSceneAsync(profile)
+                : ("Lighting activation was deferred to the enclosing bundle.", false);
+            (string osdMessage, bool osdWarning) = applyLinkedOsd
+                ? ApplyLinkedOsdLayout(profile)
+                : ("OSD activation was deferred to the enclosing bundle.", false);
+            bool companionWarning = lightingWarning || osdWarning;
+            string companionMessage = $"{lightingMessage} {osdMessage}";
+            ProfileActivationStatus = $"{profile.Name}: hardware transaction committed and verified. {companionMessage}";
             if (manualSelection)
             {
                 _manualProfileId = profile.Id;
                 await RefreshAsync(full: true, userInitiated: false);
-                ShowNotice($"{profile.Name} is now the active profile. Manual override is active.", "Success");
+                ShowNotice(
+                    $"{profile.Name} is now the active profile. Manual override is active. {companionMessage}",
+                    companionWarning ? "Warning" : "Success");
             }
             else
             {
@@ -167,6 +183,52 @@ public sealed partial class MainViewModel
             };
         }
         _automationMachine.SetCurrentProfile(result.ActiveProfileId);
+    }
+
+    private async Task<(string Message, bool Warning)> ApplyLinkedLightingSceneAsync(ProfileV2 profile)
+    {
+        if (string.IsNullOrWhiteSpace(profile.LightingSceneId))
+        {
+            return ("No lighting scene is linked to this profile.", false);
+        }
+
+        LightingSceneV1? scene = LightingScenes.FirstOrDefault(item =>
+            string.Equals(item.Id, profile.LightingSceneId, StringComparison.Ordinal));
+        if (scene is null)
+        {
+            return ($"Linked lighting scene '{profile.LightingSceneId}' is unavailable in the signed-in user session; hardware remains committed.", true);
+        }
+
+        (string message, bool warning) = await ApplySavedLightingSceneAsync(scene, "Linked scene");
+        return warning
+            ? ($"{message} The verified hardware profile remains committed.", true)
+            : (message, false);
+    }
+
+    private (string Message, bool Warning) ApplyLinkedOsdLayout(ProfileV2 profile)
+    {
+        if (string.IsNullOrWhiteSpace(profile.OsdLayoutId))
+        {
+            return ("No OSD layout is linked to this profile.", false);
+        }
+
+        OsdLayoutV1? layout = OsdLayouts.FirstOrDefault(item =>
+            string.Equals(item.Id, profile.OsdLayoutId, StringComparison.Ordinal));
+        if (layout is null)
+        {
+            return ($"Linked OSD layout '{profile.OsdLayoutId}' is unavailable in the signed-in user session; hardware remains committed.", true);
+        }
+
+        try
+        {
+            SelectedDesktopOsdLayout = layout;
+            ApplyDesktopOsdLayout(layout);
+            return ($"Linked OSD '{layout.Name}' is visible.", false);
+        }
+        catch (Exception exception) when (exception is not (OperationCanceledException or OutOfMemoryException))
+        {
+            return ($"Linked OSD '{layout.Name}' was not shown after the verified hardware commit: {exception.Message}", true);
+        }
     }
 
     private async Task ResetVerifiedControlsCoreAsync()

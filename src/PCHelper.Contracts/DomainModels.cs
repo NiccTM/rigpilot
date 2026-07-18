@@ -126,7 +126,8 @@ public enum HardwareOperationKind
 {
     Calibration,
     CommissioningPulse,
-    Tuning
+    Tuning,
+    AutoOc
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<HardwareOperationState>))]
@@ -358,6 +359,97 @@ public sealed record StartTuneRequest(
     // instead of only stability headroom. 0 = climb purely to the stability edge.
     double ThermalHeadroomCelsius = 0);
 
+[JsonConverter(typeof(JsonStringEnumConverter<AutoOcWorkloadMode>))]
+public enum AutoOcWorkloadMode
+{
+    Stopped,
+    Core,
+    Memory,
+    Combined
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<WorkloadHostCommand>))]
+public enum WorkloadHostCommand
+{
+    Ping,
+    SetMode,
+    Stop
+}
+
+/// <summary>
+/// Private per-operation endpoint created by the signed-in dashboard. The
+/// service never launches a GPU workload from session zero; it authenticates
+/// this random pipe and refuses an ambiguous adapter mapping.
+/// </summary>
+public sealed record WorkloadHostDescriptorV1(
+    int SchemaVersion,
+    string SessionId,
+    string PipeName,
+    string AuthenticationToken,
+    string TargetDeviceId,
+    int VendorId,
+    uint AdapterIndex,
+    int HostProcessId)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
+public sealed record WorkloadHostRequestV1(
+    int SchemaVersion,
+    string SessionId,
+    string AuthenticationToken,
+    WorkloadHostCommand Command,
+    AutoOcWorkloadMode Mode)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
+public sealed record WorkloadHostStatusV1(
+    int SchemaVersion,
+    string SessionId,
+    bool Authenticated,
+    bool Ready,
+    bool Running,
+    AutoOcWorkloadMode Mode,
+    string AdapterDescription,
+    int VendorId,
+    int DeviceId,
+    long AdapterLuid,
+    uint AdapterIndex,
+    int MatchingHardwareAdapterCount,
+    long DispatchCount,
+    DateTimeOffset HeartbeatAt,
+    string? Error)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
+/// <summary>Exact telemetry binding used by a tune; no same-kind sensor fallback is permitted.</summary>
+public sealed record TuneSensorBindingV2(
+    int SchemaVersion,
+    string TargetDeviceId,
+    IReadOnlyList<string> BoundDeviceIds,
+    IReadOnlyList<string> TemperatureSensorIds,
+    string UtilizationSensorId,
+    string CoreClockSensorId,
+    string MemoryClockSensorId,
+    string? PowerSensorId)
+{
+    public const int CurrentSchemaVersion = 2;
+}
+
+public sealed record StartAutoOcV2Request(
+    int SchemaVersion,
+    string DeviceId,
+    string CoreCapabilityId,
+    string MemoryCapabilityId,
+    WorkloadHostDescriptorV1 WorkloadHost,
+    bool ConfirmExperimental,
+    bool ConfirmDevice)
+{
+    public const int CurrentSchemaVersion = 2;
+}
+
 public sealed record TuneScreeningResult(
     bool Passed,
     string Message,
@@ -378,6 +470,25 @@ public sealed record TuneResult(
     IReadOnlyList<TuneCandidateResult> Candidates,
     ProfileV1? GeneratedProfile);
 
+public sealed record AutoOcResultV2(
+    int SchemaVersion,
+    string DeviceId,
+    TuneResult? CoreResult,
+    TuneResult? MemoryResult,
+    TuneScreeningResult? CombinedScreening,
+    double? CoreOffsetMegahertz,
+    double? MemoryOffsetMegahertz,
+    bool AllRequestedFamiliesVerified,
+    bool PriorStateRestored,
+    bool HardwareStateKnown,
+    ProfileV2? GeneratedProfile,
+    DateTimeOffset StartedAt,
+    DateTimeOffset FinishedAt,
+    string Message)
+{
+    public const int CurrentSchemaVersion = 2;
+}
+
 public sealed record HardwareOperationStatus(
     string Id,
     HardwareOperationKind Kind,
@@ -390,7 +501,8 @@ public sealed record HardwareOperationStatus(
     string Message,
     FanCalibrationResult? CalibrationResult,
     TuneResult? TuneResult,
-    string? Error);
+    string? Error,
+    AutoOcResultV2? AutoOcResult = null);
 
 public sealed record AutomationRuleV1(
     int SchemaVersion,

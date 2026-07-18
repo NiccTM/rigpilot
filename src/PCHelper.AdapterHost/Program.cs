@@ -245,7 +245,7 @@ async Task<IpcResponse> HandleAsync(IpcRequest request, CancellationToken cancel
             IpcCommand.AdapterDiagnostics => Diagnostics(request),
             IpcCommand.AdapterShutdown => Shutdown(request),
             IpcCommand.GetServiceStatus => Success(request, new ServiceStatus(
-                "0.5.0-alpha",
+                "0.5.5-alpha",
                 DateTimeOffset.UtcNow,
                 0,
                 null,
@@ -269,7 +269,7 @@ IpcResponse Handshake(IpcRequest request)
     _ = Unwrap<HandshakeRequest>(request);
     return Success(request, new HandshakeResponse(
         ProtocolConstants.Version,
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.5.0-alpha",
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.5.5-alpha",
         0));
 }
 

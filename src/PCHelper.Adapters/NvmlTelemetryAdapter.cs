@@ -24,7 +24,7 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
         "NVIDIA Management Library telemetry",
-        "0.5.0-alpha",
+        "0.5.5-alpha",
         "NVIDIA NVML runtime supplied by the installed display driver",
         "NVIDIA display driver",
         AdapterExecutionContext.SystemService,

@@ -49,6 +49,7 @@ public static class ServiceRuntimeFeatures
     public const string CoolingGraphs = "cooling-graphs";
     public const string CoolingOutputRoles = "cooling-output-roles";
     public const string VerifiedHardwareControl = "verified-hardware-control";
+    public const string ReleaseWritePolicy = "release-write-policy";
 
     public static IReadOnlyList<string> RequiredByDashboard { get; } =
     [
@@ -72,7 +73,8 @@ public static class ServiceRuntimeFeatures
         AdapterTrace,
         CoolingGraphs,
         CoolingOutputRoles,
-        VerifiedHardwareControl
+        VerifiedHardwareControl,
+        ReleaseWritePolicy
     ];
 }
 

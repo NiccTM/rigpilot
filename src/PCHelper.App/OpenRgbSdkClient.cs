@@ -11,12 +11,14 @@ public sealed record OpenRgbController(uint Id, string Name, int LedCount);
 public sealed record OpenRgbConnectionResult(
     int ProtocolVersion,
     IReadOnlyList<OpenRgbController> Controllers,
-    string Message);
+    string Message,
+    IReadOnlyList<uint>? UpdatedControllerIds = null);
 
 public sealed class OpenRgbSdkClient(
     string host = "127.0.0.1",
     int port = 6742,
-    TimeSpan? timeout = null)
+    TimeSpan? timeout = null,
+    TimeSpan? operationTimeout = null)
 {
     private const uint RequestControllerCount = 0;
     private const uint RequestControllerData = 1;
@@ -32,6 +34,7 @@ public sealed class OpenRgbSdkClient(
         ? port
         : throw new ArgumentOutOfRangeException(nameof(port));
     private readonly TimeSpan _timeout = timeout ?? TimeSpan.FromSeconds(2);
+    private readonly TimeSpan _operationTimeout = operationTimeout ?? TimeSpan.FromSeconds(10);
 
     public async Task<OpenRgbConnectionResult> ProbeAsync(CancellationToken cancellationToken)
     {
@@ -45,38 +48,65 @@ public sealed class OpenRgbSdkClient(
     public async Task<OpenRgbConnectionResult> SetStaticColourAsync(
         string rgbHex,
         int brightnessPercent,
+        CancellationToken cancellationToken) => await SetStaticColourAsync(
+            rgbHex,
+            brightnessPercent,
+            controllerIds: null,
+            cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Writes only the controller IDs selected by the current route plan. This
+    /// prevents a local OpenRGB bridge from touching an endpoint whose vendor
+    /// application still owns it.
+    /// </summary>
+    public async Task<OpenRgbConnectionResult> SetStaticColourAsync(
+        string rgbHex,
+        int brightnessPercent,
+        IReadOnlyCollection<uint>? controllerIds,
         CancellationToken cancellationToken)
     {
         uint colour = ParseColour(rgbHex, brightnessPercent);
-        await using OpenRgbSession session = await ConnectAsync(cancellationToken).ConfigureAwait(false);
-        foreach (OpenRgbController controller in session.Controllers.Where(item => item.LedCount > 0))
+        await using OpenRgbSession session = await ConnectForMutationAsync(cancellationToken).ConfigureAwait(false);
+        OpenRgbController[] selected = SelectControllers(session.Controllers, controllerIds);
+        using CancellationTokenSource operation = CreateOperationTimeout(cancellationToken);
+        try
         {
-            await WritePacketAsync(
-                session.Stream,
-                controller.Id,
-                SetCustomMode,
-                ReadOnlyMemory<byte>.Empty,
-                cancellationToken).ConfigureAwait(false);
-            byte[] payload = new byte[checked(6 + (controller.LedCount * 4))];
-            BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, 4), (uint)payload.Length);
-            BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4, 2), checked((ushort)controller.LedCount));
-            for (int index = 0; index < controller.LedCount; index++)
+            foreach (OpenRgbController controller in selected)
             {
-                BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(6 + (index * 4), 4), colour);
+                await WritePacketAsync(
+                    session.Stream,
+                    controller.Id,
+                    SetCustomMode,
+                    ReadOnlyMemory<byte>.Empty,
+                    operation.Token).ConfigureAwait(false);
+                byte[] payload = new byte[checked(6 + (controller.LedCount * 4))];
+                BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, 4), (uint)payload.Length);
+                BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4, 2), checked((ushort)controller.LedCount));
+                for (int index = 0; index < controller.LedCount; index++)
+                {
+                    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(6 + (index * 4), 4), colour);
+                }
+
+                await WritePacketAsync(
+                    session.Stream,
+                    controller.Id,
+                    UpdateLeds,
+                    payload,
+                    operation.Token).ConfigureAwait(false);
             }
 
-            await WritePacketAsync(
-                session.Stream,
-                controller.Id,
-                UpdateLeds,
-                payload,
-                cancellationToken).ConfigureAwait(false);
+            return new OpenRgbConnectionResult(
+                session.ProtocolVersion,
+                session.Controllers,
+                $"Applied {rgbHex.ToUpperInvariant()} at {brightnessPercent}% to {selected.Length} controller(s).",
+                selected.Select(controller => controller.Id).ToArray());
         }
-
-        return new OpenRgbConnectionResult(
-            session.ProtocolVersion,
-            session.Controllers,
-            $"Applied {rgbHex.ToUpperInvariant()} at {brightnessPercent}% to {session.Controllers.Count(item => item.LedCount > 0)} controller(s).");
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"OpenRGB did not finish the lighting operation within {_operationTimeout.TotalSeconds:0.#} seconds. Some selected controllers may have changed; their state is unknown.",
+                exception);
+        }
     }
 
     /// <summary>
@@ -88,31 +118,107 @@ public sealed class OpenRgbSdkClient(
         string colourwayId,
         string rgbHex,
         int brightnessPercent,
+        CancellationToken cancellationToken) => await SetColourwayAsync(
+            colourwayId,
+            rgbHex,
+            brightnessPercent,
+            controllerIds: null,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<OpenRgbConnectionResult> SetColourwayAsync(
+        string colourwayId,
+        string rgbHex,
+        int brightnessPercent,
+        IReadOnlyCollection<uint>? controllerIds,
         CancellationToken cancellationToken)
     {
         uint staticColour = ParseColour(rgbHex, 100);
         (byte R, byte G, byte B) staticRgb = ((byte)staticColour, (byte)(staticColour >> 8), (byte)(staticColour >> 16));
-        await using OpenRgbSession session = await ConnectAsync(cancellationToken).ConfigureAwait(false);
-        foreach (OpenRgbController controller in session.Controllers.Where(item => item.LedCount > 0))
+        await using OpenRgbSession session = await ConnectForMutationAsync(cancellationToken).ConfigureAwait(false);
+        OpenRgbController[] selected = SelectControllers(session.Controllers, controllerIds);
+        using CancellationTokenSource operation = CreateOperationTimeout(cancellationToken);
+        try
         {
-            await WritePacketAsync(
-                session.Stream, controller.Id, SetCustomMode, ReadOnlyMemory<byte>.Empty, cancellationToken).ConfigureAwait(false);
-            uint[] frame = LightingColourways.Generate(colourwayId, controller.LedCount, staticRgb, brightnessPercent);
-            byte[] payload = new byte[checked(6 + (controller.LedCount * 4))];
-            BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, 4), (uint)payload.Length);
-            BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4, 2), checked((ushort)controller.LedCount));
-            for (int index = 0; index < controller.LedCount; index++)
+            foreach (OpenRgbController controller in selected)
             {
-                BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(6 + (index * 4), 4), frame[index]);
+                await WritePacketAsync(
+                    session.Stream, controller.Id, SetCustomMode, ReadOnlyMemory<byte>.Empty, operation.Token).ConfigureAwait(false);
+                uint[] frame = LightingColourways.Generate(colourwayId, controller.LedCount, staticRgb, brightnessPercent);
+                byte[] payload = new byte[checked(6 + (controller.LedCount * 4))];
+                BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, 4), (uint)payload.Length);
+                BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4, 2), checked((ushort)controller.LedCount));
+                for (int index = 0; index < controller.LedCount; index++)
+                {
+                    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(6 + (index * 4), 4), frame[index]);
+                }
+
+                await WritePacketAsync(session.Stream, controller.Id, UpdateLeds, payload, operation.Token).ConfigureAwait(false);
             }
 
-            await WritePacketAsync(session.Stream, controller.Id, UpdateLeds, payload, cancellationToken).ConfigureAwait(false);
+            return new OpenRgbConnectionResult(
+                session.ProtocolVersion,
+                session.Controllers,
+                $"Applied the '{colourwayId}' colourway at {brightnessPercent}% to {selected.Length} controller(s).",
+                selected.Select(controller => controller.Id).ToArray());
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"OpenRGB did not finish the lighting operation within {_operationTimeout.TotalSeconds:0.#} seconds. Some selected controllers may have changed; their state is unknown.",
+                exception);
+        }
+    }
+
+    private async Task<OpenRgbSession> ConnectForMutationAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                $"OpenRGB could not complete its local connection and inventory handshake before any lighting write. No lighting output was sent. {exception.Message}",
+                exception);
+        }
+    }
+
+    private CancellationTokenSource CreateOperationTimeout(CancellationToken cancellationToken)
+    {
+        CancellationTokenSource operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        operation.CancelAfter(_operationTimeout);
+        return operation;
+    }
+
+    private static OpenRgbController[] SelectControllers(
+        IReadOnlyList<OpenRgbController> controllers,
+        IReadOnlyCollection<uint>? controllerIds)
+    {
+        OpenRgbController[] writable = controllers.Where(controller => controller.LedCount > 0).ToArray();
+        if (controllerIds is null)
+        {
+            return writable;
         }
 
-        return new OpenRgbConnectionResult(
-            session.ProtocolVersion,
-            session.Controllers,
-            $"Applied the '{colourwayId}' colourway at {brightnessPercent}% to {session.Controllers.Count(item => item.LedCount > 0)} controller(s).");
+        HashSet<uint> requested = controllerIds.ToHashSet();
+        uint[] missing = requested.Except(controllers.Select(controller => controller.Id)).Order().ToArray();
+        if (missing.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"OpenRGB controller route(s) {string.Join(", ", missing)} disappeared before apply. No lighting output was sent.");
+        }
+
+        OpenRgbController[] selected = writable.Where(controller => requested.Contains(controller.Id)).ToArray();
+        if (selected.Length == 0)
+        {
+            throw new InvalidOperationException("No selected OpenRGB controller exposes a writable LED. No lighting output was sent.");
+        }
+
+        return selected;
     }
 
     /// <summary>

@@ -2,17 +2,21 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "0.5.0-alpha",
+    [string]$Version,
     [string]$OutputDirectory,
     [string]$SigningCertificateThumbprint,
     [string]$TimestampServer = "https://timestamp.digicert.com",
-    [switch]$RequireSigning
+    [switch]$RequireSigning,
+    [switch]$LockServiceWrites
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = & (Join-Path $PSScriptRoot "Get-ProductVersion.ps1") -IncludeSuffix
+}
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $repoRoot "artifacts\publish"
 }
@@ -122,6 +126,7 @@ $projects = [ordered]@{
     "service" = "src\PCHelper.Service\PCHelper.Service.csproj"
     "adapter-host" = "src\PCHelper.AdapterHost\PCHelper.AdapterHost.csproj"
     "automation-host" = "src\PCHelper.AutomationHost\PCHelper.AutomationHost.csproj"
+    "workload-host" = "src\PCHelper.WorkloadHost\PCHelper.WorkloadHost.csproj"
     "effect-host" = "src\PCHelper.EffectHost\PCHelper.EffectHost.csproj"
     "cli" = "src\PCHelper.Cli\PCHelper.Cli.csproj"
 }
@@ -131,6 +136,7 @@ $runtimeExecutables = [ordered]@{
     "service" = "service\PCHelper.Service.exe"
     "adapter-host" = "adapter-host\PCHelper.AdapterHost.exe"
     "automation-host" = "automation-host\PCHelper.AutomationHost.exe"
+    "workload-host" = "workload-host\PCHelper.WorkloadHost.exe"
     "effect-host" = "effect-host\PCHelper.EffectHost.exe"
     "cli" = "cli\pchelper-cli.exe"
 }
@@ -145,6 +151,7 @@ foreach ($entry in $projects.GetEnumerator()) {
         throw "Locked restore failed for $($entry.Value)."
     }
 
+    $writeLockProperty = if ($LockServiceWrites -and $entry.Key -eq "service") { "true" } else { "false" }
     & $dotnet publish $projectPath `
         --configuration $Configuration `
         --runtime $Runtime `
@@ -152,6 +159,7 @@ foreach ($entry in $projects.GetEnumerator()) {
         --no-restore `
         --output $destination `
         -p:Version=$Version `
+        -p:RigPilotPublicUnsignedPreview=$writeLockProperty `
         -p:ContinuousIntegrationBuild=true
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet publish failed for $($entry.Value)."
@@ -214,14 +222,21 @@ $runtimeContract = [ordered]@{
     product = "RigPilot"
     productVersion = $Version
     protocolVersion = 2
+    releaseTrust = [ordered]@{
+        signed = $null -ne $signingCertificate
+        serviceWritesLocked = [bool]$LockServiceWrites
+        policy = if ($LockServiceWrites) { "PublicUnsignedPreview" } elseif ($null -ne $signingCertificate) { "SignedRelease" } else { "UnsignedDevelopment" }
+    }
     requiredServiceFeatures = @(
         "service-status",
         "capability-v2",
         "fan-commissioning",
         "fan-calibrations",
+        "auto-oc-workload-v1",
         "reliability",
         "adapter-trace",
         "cooling-output-roles"
+        "release-write-policy"
     )
     components = @($runtimeComponents)
 }
@@ -238,5 +253,6 @@ Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
 if ($null -ne $signingCertificate) {
     Write-Host "Published signed RigPilot $Version to $outputRoot"
 } else {
-    Write-Host "Published unsigned development RigPilot $Version to $outputRoot. Automatic takeover remains hard-blocked."
+    $writeStatus = if ($LockServiceWrites) { "All service mutations are build-locked." } else { "This payload is for local development only; service mutations are not release-locked." }
+    Write-Host "Published unsigned RigPilot $Version to $outputRoot. $writeStatus"
 }

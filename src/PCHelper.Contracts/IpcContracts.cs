@@ -31,6 +31,7 @@ public enum IpcCommand
     CancelFanCommissioning,
     RecoverFanCommissioning,
     StartTune,
+    StartAutoOc,
     AbortOperation,
     GetOperationStatus,
     GetOperationById,
@@ -259,7 +260,47 @@ public sealed record ServiceStatus(
     bool EmergencyMode,
     string Message,
     bool RecoveryRequired = false,
-    bool HardwareControlArmed = false);
+    bool HardwareControlArmed = false,
+    CoolingRuntimeStatusV1? Cooling = null,
+    bool ReleaseWritesLocked = false,
+    string? WriteLockReason = null);
+
+[JsonConverter(typeof(JsonStringEnumConverter<CoolingRuntimeState>))]
+public enum CoolingRuntimeState
+{
+    Inactive,
+    Normal,
+    SensorHold,
+    EmergencyMaximum,
+    RecoveryRequired
+}
+
+public sealed record CoolingRuntimeStatusV1(
+    int SchemaVersion,
+    string? ProfileId,
+    string? GraphId,
+    CoolingRuntimeState State,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? EmergencySince,
+    IReadOnlyDictionary<string, double> OutputValues,
+    IReadOnlyList<string> HeldSensorIds,
+    IReadOnlyDictionary<string, int> StalePollCounts,
+    string Reason)
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public static CoolingRuntimeStatusV1 Inactive(string reason) => new(
+        CurrentSchemaVersion,
+        null,
+        null,
+        CoolingRuntimeState.Inactive,
+        DateTimeOffset.UtcNow,
+        null,
+        new Dictionary<string, double>(),
+        [],
+        new Dictionary<string, int>(),
+        reason);
+}
 
 public sealed record ProfileValidationResult(
     bool Valid,

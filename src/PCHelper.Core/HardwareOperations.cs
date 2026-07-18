@@ -1010,7 +1010,8 @@ public static class HardwareTuneEngine
         IHardwareAdapter adapter,
         ITuneScreeningMonitor monitor,
         Action<double, string>? reportProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool retainSelectedOnSuccess = false)
     {
         HardwareOperationEligibility eligibility = HardwareOperationEligibilityEvaluator.ForTuning(
             capability,
@@ -1043,6 +1044,7 @@ public static class HardwareTuneEngine
                 .ToArray()
             : generatedCandidates;
         bool operationSucceeded = false;
+        bool retainedForCompositeScreening = false;
         try
         {
             if (candidates.Length == 0)
@@ -1192,12 +1194,20 @@ public static class HardwareTuneEngine
                 : "Passed test screening";
             reportProgress?.Invoke(95, "Restoring the prior control state and saving the generated profile.");
             operationSucceeded = true;
+            retainedForCompositeScreening = retainSelectedOnSuccess;
             return new TuneResult(capability.Id, label, shipValue, results, generated);
         }
         finally
         {
-            await RestoreOriginalAsync(capability, original, adapter, operationSucceeded).ConfigureAwait(false);
-            reportProgress?.Invoke(100, "Tuning finished; the prior control state was restored.");
+            if (!retainedForCompositeScreening)
+            {
+                await RestoreOriginalAsync(capability, original, adapter, operationSucceeded).ConfigureAwait(false);
+                reportProgress?.Invoke(100, "Tuning finished; the prior control state was restored.");
+            }
+            else
+            {
+                reportProgress?.Invoke(100, "Candidate retained temporarily for composite screening.");
+            }
         }
     }
 

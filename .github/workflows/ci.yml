@@ -20,6 +20,11 @@ jobs:
           global-json-file: global.json
           cache: true
           cache-dependency-path: "**/packages.lock.json"
+      - name: Resolve product version
+        shell: pwsh
+        run: |
+          $version = ./scripts/Get-ProductVersion.ps1 -IncludeSuffix
+          "PRODUCT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Restore locked dependencies
         run: dotnet restore PCHelper.sln --locked-mode
       - name: Build
@@ -30,10 +35,10 @@ jobs:
         run: dotnet package list --project PCHelper.sln --vulnerable --include-transitive
       - name: Publish framework-dependent x64 payload
         shell: pwsh
-        run: ./scripts/publish.ps1 -Version 0.4.0
+        run: ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION
       - name: Compile MSI authoring
         shell: pwsh
-        run: ./scripts/build-installer.ps1 -Version 0.4.0 -SkipPublish
+        run: ./scripts/build-installer.ps1 -Version $env:PRODUCT_VERSION -SkipPublish
       - uses: actions/upload-artifact@v7
         if: always()
         with:

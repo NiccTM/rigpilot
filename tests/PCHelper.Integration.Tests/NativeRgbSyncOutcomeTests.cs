@@ -50,6 +50,28 @@ public sealed class NativeRgbSyncOutcomeTests
         Assert.True(outcome.Succeeded);
     }
 
+    [Theory]
+    [InlineData("NZXT Kraken X63", "nzxt-kraken")]
+    [InlineData("ASUS Aura LED Controller", "asus-aura")]
+    [InlineData("G.Skill Trident Z DRAM", "dimm-rgb")]
+    [InlineData("Razer Lian Li O11 Dynamic", "razer-lianli")]
+    public void BridgeNamesMapToTheSameFamilyAsNativeFallbacks(string name, string expected)
+    {
+        Assert.Equal(expected, RgbEndpointFamily.Resolve(name));
+    }
+
+    [Theory]
+    [InlineData("#804020", 50, "#402010")]
+    [InlineData("FFFFFF", 0, "#000000")]
+    [InlineData("#0A84FF", 100, "#0A84FF")]
+    public void NativeFallbackHonoursTheSharedBrightnessSetting(
+        string colour,
+        int brightness,
+        string expected)
+    {
+        Assert.Equal(expected, MainViewModel.ScaleRgbHex(colour, brightness));
+    }
+
     private static IpcResponse Response(
         bool success,
         string? errorCode = null,

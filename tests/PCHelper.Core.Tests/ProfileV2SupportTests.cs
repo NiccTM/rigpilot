@@ -66,6 +66,24 @@ public sealed class ProfileV2SupportTests
         Assert.Single(optional.SkippedOptionalActions);
     }
 
+    [Fact]
+    public void V2ProfileCannotExtendTheStaleTelemetryWindow()
+    {
+        ProfileV2 profile = Profile([]) with
+        {
+            SafetyLimits = new SafetyLimits(StalePollLimit: 10)
+        };
+
+        ProfileValidationResult result = ProfileV2Validator.Validate(
+            profile,
+            new Dictionary<string, CapabilityDescriptorV2>(),
+            ProfileActivationSource.Manual,
+            confirmManualVoltage: false);
+
+        Assert.False(result.Valid);
+        Assert.Contains(result.Errors, error => error.Contains("stale-poll", StringComparison.Ordinal));
+    }
+
     private static ProfileV2 Profile(
         IReadOnlyList<ProfileAction> actions,
         IReadOnlyList<string>? manualOnly = null,

@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
     [string]$PayloadRoot,
-    [string]$ExpectedProductVersion
+    [string]$ExpectedProductVersion,
+    [switch]$RequireServiceWritesLocked
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,6 +55,16 @@ if ([string]$contract.product -ne "RigPilot") {
 if ([int]$contract.protocolVersion -ne 2) {
     throw "Runtime contract protocol version is invalid: $($contract.protocolVersion)"
 }
+if ($RequireServiceWritesLocked -and -not [bool]$contract.releaseTrust.serviceWritesLocked) {
+    throw "The runtime payload is not build-locked for an unsigned public preview."
+}
+if ($RequireServiceWritesLocked) {
+    $servicePath = Resolve-ContainedFile $root "service\PCHelper.Service.exe"
+    $policyOutput = (& $servicePath --print-release-policy | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $policyOutput -ne "publicUnsignedPreview=true;writesAllowed=false") {
+        throw "The published service does not report the required preview write lock: $policyOutput"
+    }
+}
 if ([string]::IsNullOrWhiteSpace([string]$contract.productVersion)) {
     throw "Runtime contract productVersion is required."
 }
@@ -66,7 +77,7 @@ if ($components.Count -eq 0) {
     throw "Runtime contract has no component records."
 }
 
-$requiredFeatures = @("service-status", "capability-v2", "fan-commissioning", "fan-calibrations", "reliability", "adapter-trace", "cooling-output-roles")
+$requiredFeatures = @("service-status", "capability-v2", "fan-commissioning", "fan-calibrations", "reliability", "adapter-trace", "cooling-output-roles", "release-write-policy")
 $advertisedFeatures = @($contract.requiredServiceFeatures | ForEach-Object { [string]$_ })
 foreach ($requiredFeature in $requiredFeatures) {
     if ($advertisedFeatures -notcontains $requiredFeature) {

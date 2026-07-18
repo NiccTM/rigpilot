@@ -1,7 +1,7 @@
 namespace PCHelper.App;
 
 /// <summary>
-/// The guided GPU "undervolt" workflow, built strictly from documented public
+/// The guided GPU efficiency power-target workflow, built strictly from documented public
 /// APIs: it lowers the NVML power-management limit (and nothing else), which
 /// drops voltage and heat at near-identical frame rates in most games. It is
 /// deliberately NOT a voltage-frequency curve editor — per-point VF control on

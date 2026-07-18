@@ -24,7 +24,7 @@ param(
 Runs a reversible protocol-2 alpha service smoke test.
 
 .DESCRIPTION
-Stages the already-validated 0.4 alpha payload under ProgramData, starts it
+Stages the already-validated current alpha payload under ProgramData, starts it
 with a private state directory, verifies a protocol-2 handshake and read-only
 inventory probe, and restores the installed PCHelper service before returning.
 
@@ -41,6 +41,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $testPayloadScript = Join-Path $PSScriptRoot "Test-RuntimePayload.ps1"
+$expectedProductVersion = & (Join-Path $PSScriptRoot "Get-ProductVersion.ps1")
 $serviceName = "PCHelper"
 
 if ([string]::IsNullOrWhiteSpace($PayloadRoot)) {
@@ -282,7 +283,7 @@ if (-not (Test-Path -LiteralPath $payload -PathType Container)) {
 }
 
 # Contract validation occurs before any service configuration change.
-& $testPayloadScript -PayloadRoot $payload -ExpectedProductVersion "0.5.0"
+& $testPayloadScript -PayloadRoot $payload -ExpectedProductVersion $expectedProductVersion
 
 $appProcess = Get-Process -Name "PCHelper.App" -ErrorAction SilentlyContinue
 if ($null -ne $appProcess) {
@@ -314,7 +315,7 @@ $report = [ordered]@{
 try {
     New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
     Copy-Item -LiteralPath $payload -Destination $stagePayload -Recurse -Force
-    & $testPayloadScript -PayloadRoot $stagePayload -ExpectedProductVersion "0.5.0"
+    & $testPayloadScript -PayloadRoot $stagePayload -ExpectedProductVersion $expectedProductVersion
 
     $acl = & icacls.exe $stageRoot
     if (-not ($acl | Where-Object { $_ -match 'SYSTEM:.*\(F\)' })) {

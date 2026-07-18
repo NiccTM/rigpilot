@@ -39,6 +39,27 @@ public sealed class OpenRgbSdkClientTests
         Assert.Contains("local machine", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task SelectiveApplyWritesOnlyTheReadyControllerRoute()
+    {
+        TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        Task<uint> server = RunSelectiveFakeServerAsync(listener);
+        OpenRgbSdkClient client = new(port: port, timeout: TimeSpan.FromSeconds(5));
+
+        OpenRgbConnectionResult result = await client.SetStaticColourAsync(
+            "#00FF00",
+            brightnessPercent: 100,
+            controllerIds: [1],
+            CancellationToken.None);
+        uint updatedDeviceId = await server;
+
+        Assert.Equal(1u, updatedDeviceId);
+        Assert.Equal([1u], result.UpdatedControllerIds);
+        Assert.Equal(2, result.Controllers.Count);
+    }
+
     private static async Task<uint[]> RunFakeServerAsync(TcpListener listener)
     {
         using (listener)
@@ -80,13 +101,44 @@ public sealed class OpenRgbSdkClientTests
         }
     }
 
-    private static byte[] ControllerPayload()
+    private static async Task<uint> RunSelectiveFakeServerAsync(TcpListener listener)
+    {
+        using (listener)
+        using (TcpClient client = await listener.AcceptTcpClientAsync())
+        {
+            NetworkStream stream = client.GetStream();
+            _ = await ReadPacketAsync(stream);
+            await WritePacketAsync(stream, 0, 40, UInt32Payload(5));
+            _ = await ReadPacketAsync(stream);
+            _ = await ReadPacketAsync(stream);
+            await WritePacketAsync(stream, 0, 0, UInt32Payload(2));
+
+            Packet firstData = await ReadPacketAsync(stream);
+            Assert.Equal(0u, firstData.Device);
+            await WritePacketAsync(stream, 0, 1, ControllerPayload("Blocked Kraken", ledCount: 2));
+            Packet secondData = await ReadPacketAsync(stream);
+            Assert.Equal(1u, secondData.Device);
+            await WritePacketAsync(stream, 1, 1, ControllerPayload("Ready Aura", ledCount: 3));
+
+            Packet custom = await ReadPacketAsync(stream);
+            Assert.Equal(1u, custom.Device);
+            Assert.Equal(1100u, custom.Id);
+            Packet update = await ReadPacketAsync(stream);
+            Assert.Equal(1u, update.Device);
+            Assert.Equal(1050u, update.Id);
+            return update.Device;
+        }
+    }
+
+    private static byte[] ControllerPayload() => ControllerPayload("Test Controller", ledCount: 2);
+
+    private static byte[] ControllerPayload(string name, int ledCount)
     {
         using MemoryStream stream = new();
         using BinaryWriter writer = new(stream, Encoding.UTF8, leaveOpen: true);
         writer.Write(0u);
         writer.Write(0);
-        WriteString(writer, "Test Controller");
+        WriteString(writer, name);
         WriteString(writer, "PC Helper Tests");
         WriteString(writer, "Fake controller");
         WriteString(writer, "1.0");
@@ -95,11 +147,12 @@ public sealed class OpenRgbSdkClientTests
         writer.Write((ushort)0);
         writer.Write(0);
         writer.Write((ushort)0);
-        writer.Write((ushort)2);
-        WriteString(writer, "LED 1");
-        writer.Write(0u);
-        WriteString(writer, "LED 2");
-        writer.Write(1u);
+        writer.Write(checked((ushort)ledCount));
+        for (int index = 0; index < ledCount; index++)
+        {
+            WriteString(writer, $"LED {index + 1}");
+            writer.Write((uint)index);
+        }
         writer.Flush();
         byte[] payload = stream.ToArray();
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, 4), (uint)payload.Length);
