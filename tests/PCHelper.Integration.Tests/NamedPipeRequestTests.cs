@@ -168,21 +168,21 @@ public sealed class NamedPipeRequestTests
     public async Task SlowResponseWithinTheOperationTimeoutStillSucceeds()
     {
         // Regression: a transactional apply can take longer than the short
-        // connect timeout. The response here arrives after 700 ms, well past a
-        // 250 ms connect timeout but inside the 10 s operation timeout, and must
-        // still succeed — connect and operation timeouts are independent now.
+        // connect timeout. The response here arrives after 2.5 s, past the
+        // production 2 s connect timeout but inside the 10 s operation timeout,
+        // and must still succeed — connect and operation timeouts are independent.
         string pipeName = $"pchelper.tests.{Guid.NewGuid():N}";
         using CancellationTokenSource shutdown = new(TimeSpan.FromSeconds(15));
         NamedPipeRequestServer server = new(pipeName, async (request, cancellationToken) =>
         {
-            await Task.Delay(700, cancellationToken);
+            await Task.Delay(TimeSpan.FromMilliseconds(2500), cancellationToken);
             return new IpcResponse(
                 ProtocolConstants.Version, request.RequestId, true, 5, null, null, IpcJson.ToElement("ok"));
         });
         Task serverTask = server.RunAsync(shutdown.Token);
         NamedPipeRequestClient client = new(
             pipeName,
-            connectTimeout: TimeSpan.FromMilliseconds(250),
+            connectTimeout: TimeSpan.FromSeconds(2),
             operationTimeout: TimeSpan.FromSeconds(10));
 
         IpcResponse response = await client.SendAsync(
