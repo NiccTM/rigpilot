@@ -72,6 +72,10 @@
                     <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}" />
                   </DataTrigger>
+                  <DataTrigger Binding="{Binding StateTone}" Value="Blocked">
+                    <Setter Property="Background" Value="{StaticResource StateBlockedSoftBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource StateBlockedBrush}" />
+                  </DataTrigger>
                   <DataTrigger Binding="{Binding StateTone}" Value="Critical">
                     <Setter Property="Background" Value="{StaticResource CriticalSoftBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource CriticalBrush}" />
@@ -242,6 +246,7 @@
             <ListBox x:Name="Navigation"
                      SelectionChanged="Navigation_SelectionChanged"
                      SelectedIndex="0"
+                     ItemContainerStyle="{StaticResource NavigationItemStyle}"
                      automation:AutomationProperties.Name="RigPilot pages"
                      automation:AutomationProperties.AutomationId="Navigation.Pages">
               <ListBoxItem ToolTip="Overview (Ctrl+1)" automation:AutomationProperties.Name="Overview" automation:AutomationProperties.AutomationId="Navigation.Overview">
@@ -274,7 +279,7 @@
                   <TextBlock Text="{loc:Loc Nav_Lighting}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Automation (Ctrl+6)" automation:AutomationProperties.Name="Automation" automation:AutomationProperties.AutomationId="Navigation.Automation">
+              <ListBoxItem Tag="AUTOMATION &amp; TOOLS" ToolTip="Automation (Ctrl+6)" automation:AutomationProperties.Name="Automation" automation:AutomationProperties.AutomationId="Navigation.Automation">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE823;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Automation}" />
@@ -286,7 +291,7 @@
                   <TextBlock Text="{loc:Loc Nav_GamesTools}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Devices (Ctrl+8)" automation:AutomationProperties.Name="Devices" automation:AutomationProperties.AutomationId="Navigation.Devices">
+              <ListBoxItem Tag="SYSTEM" ToolTip="Devices (Ctrl+8)" automation:AutomationProperties.Name="Devices" automation:AutomationProperties.AutomationId="Navigation.Devices">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE772;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Devices}" />
@@ -684,7 +689,7 @@
                     <Grid Margin="0,5">
                       <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                       <StackPanel Orientation="Horizontal">
-                        <Ellipse Width="8" Height="8" Fill="{StaticResource CriticalBrush}" VerticalAlignment="Center" Margin="0,0,9,0" />
+                        <Ellipse Width="8" Height="8" Fill="{StaticResource StateBlockedBrush}" VerticalAlignment="Center" Margin="0,0,9,0" />
                         <TextBlock Text="Blocked or unsupported" />
                       </StackPanel>
                       <TextBlock Grid.Column="1" Text="{Binding BlockedOrUnsupportedControlCount}" FontWeight="SemiBold" />
@@ -997,35 +1002,142 @@
               </Grid>
             </Border>
 
-            <Border Style="{StaticResource CardStyle}" Margin="0,12,0,0">
-              <StackPanel>
+            <!-- Conflict status surfaces once, at the top of the page, instead
+                 of per-card. Informational tone by design: a competing
+                 controller is a normal, recoverable situation, not a fault. -->
+            <Border Margin="0,12,0,0" Padding="{StaticResource BannerPadding}" CornerRadius="{StaticResource RadiusInset}"
+                    Background="{DynamicResource StateBlockedSoftBrush}" BorderBrush="{DynamicResource StateBlockedBrush}" BorderThickness="1"
+                    automation:AutomationProperties.LiveSetting="Polite">
+              <Border.Style>
+                <Style TargetType="Border">
+                  <Setter Property="Visibility" Value="Collapsed" />
+                  <Style.Triggers><DataTrigger Binding="{Binding HasRunningConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                </Style>
+              </Border.Style>
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock Text="&#xE72E;" FontFamily="{StaticResource IconFont}" Foreground="{DynamicResource StateBlockedBrush}" VerticalAlignment="Center" Margin="{StaticResource Space2}" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="{StaticResource Space2}">
+                  <TextBlock Text="Some fan controls are locked while other controller apps run" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks only the overlapping controls rather than fight over them — close those apps to free its fan controls." /></TextBlock>
+                </StackPanel>
+                <Button Grid.Column="2" Content="{Binding CloseConflictingAppsLabel}" Command="{Binding CloseConflictingAppsCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center" Margin="{StaticResource Space2}"
+                        ToolTip="Closes the detected controllers so RigPilot's gated controls unlock. Equivalent to closing them in Task Manager; relaunching hands control back."
+                        automation:AutomationProperties.Name="Close conflicting controller apps" automation:AutomationProperties.AutomationId="Cooling.CloseConflictingApps" />
+              </Grid>
+            </Border>
+
+            <!-- Viewing area first (read-only live readings), interaction area
+                 (fan/pump controls) below — matching the Performance page. -->
+            <Grid x:Name="SimpleCoolingStatus" Style="{StaticResource SimpleOnlyPanelStyle}">
+             <StackPanel>
+              <Border Style="{StaticResource CardStyle}" Padding="20" Margin="0,12,0,0">
+                <StackPanel>
+                  <Grid Margin="0,0,0,8">
+                    <StackPanel>
+                      <TextBlock Text="Fans, pumps, and liquid" Style="{StaticResource CardTitleStyle}" />
+                      <TextBlock Text="Read-only live readings; nothing in this card writes hardware" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
+                    </StackPanel>
+                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="{StaticResource RadiusBadge}" Padding="{StaticResource BadgePadding}">
+                      <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
+                    </Border>
+                  </Grid>
+                  <ItemsControl ItemsSource="{Binding CoolingSensors}" ItemTemplate="{StaticResource SensorRowTemplate}" automation:AutomationProperties.Name="Live fan, pump, and liquid readings" automation:AutomationProperties.AutomationId="Cooling.LiveReadings" />
+                  <Border Margin="0,10,0,0">
+                    <Border.Style>
+                      <Style TargetType="Border" BasedOn="{StaticResource EmptyStateStyle}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding HasCoolingSensors}" Value="False">
+                            <Setter Property="Visibility" Value="Visible" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
+                    <StackPanel HorizontalAlignment="Center">
+                      <TextBlock Text="&#xE9CA;" FontFamily="{StaticResource IconFont}" FontSize="22" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" />
+                      <TextBlock Text="No fan or pump readings yet" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,0" />
+                      <TextBlock Text="Refresh after hardware discovery completes." Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </Border>
+              <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="330" Margin="0,12,0,0">
+                <Border Style="{StaticResource CardStyle}" Padding="18">
+                  <StackPanel>
+                    <TextBlock Text="Cooling status" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="{Binding CalibrationAvailabilityLabel}" FontWeight="SemiBold" Margin="0,7,0,4">
+                      <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                          <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding CalibrationAvailabilityTone}" Value="Safe">
+                              <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </TextBlock.Style>
+                    </TextBlock>
+                    <TextBlock Text="{Binding CoolingCapabilities.Count, StringFormat={}{0} cooling controls detected}" Style="{StaticResource SubtleStyle}" />
+                    <TextBlock Text="Simple mode keeps fan commissioning, calibration, curves, imports, and controller evidence out of the way. Firmware/default control remains the safe fallback." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,10,0,0" />
+                  </StackPanel>
+                </Border>
+                <Border Style="{StaticResource CardStyle}" Padding="18">
+                  <StackPanel>
+                    <TextBlock Text="Always-on protection" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="Three stale sensor polls request maximum cooling, firmware/default control, and a safety event. CPU fans and pumps cannot be stopped." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,7,0,0" />
+                  </StackPanel>
+                </Border>
+              </local:AdaptiveUniformGrid>
+             </StackPanel>
+            </Grid>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,12,0,0" Padding="0">
+             <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+              <!-- Capability rail: availability is scannable before reading —
+                   green when controls are live, blue-grey while a competing
+                   writer blocks them, neutral when control is off. Colour never
+                   carries this alone; the badge and banner name the state. -->
+              <Border Width="3" CornerRadius="11,0,0,11" VerticalAlignment="Stretch">
+                <Border.Style>
+                  <Style TargetType="Border">
+                    <Setter Property="Background" Value="{DynamicResource StateUnavailableBrush}" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource StateVerifiedBrush}" />
+                      </DataTrigger>
+                      <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Border.Style>
+              </Border>
+              <StackPanel Grid.Column="1" Margin="24">
                 <Grid>
                   <StackPanel>
                     <TextBlock Text="Fan controls" Style="{StaticResource CardTitleStyle}" />
                     <TextBlock Text="Set any fan directly. Every apply is bounds-clamped and read-back verified; pump and CPU-fan protections always hold." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
                   </StackPanel>
-                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
-                    <TextBlock Text="{Binding FanControlSliders.Count, StringFormat={}{0} outputs}" Style="{StaticResource BadgeTextStyle}" />
-                  </Border>
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                    <ContentControl Content="Blocked" Margin="0,0,8,0">
+                      <ContentControl.Style>
+                        <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
+                          <Setter Property="Visibility" Value="Collapsed" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                              <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </ContentControl.Style>
+                    </ContentControl>
+                    <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="{StaticResource RadiusBadge}" Padding="{StaticResource BadgePadding}">
+                      <TextBlock Text="{Binding FanControlSliders.Count, StringFormat={}{0} outputs}" Style="{StaticResource BadgeTextStyle}" />
+                    </Border>
+                  </StackPanel>
                 </Grid>
-                <Border Margin="0,12,0,0" Padding="13,11" CornerRadius="10" Background="{StaticResource WarningSoftBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
-                  <Border.Style>
-                    <Style TargetType="Border">
-                      <Setter Property="Visibility" Value="Collapsed" />
-                      <Style.Triggers><DataTrigger Binding="{Binding HasRunningConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
-                    </Style>
-                  </Border.Style>
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
-                      <TextBlock Text="Another app is controlling these fans" FontWeight="SemiBold" />
-                      <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks overlapping controls rather than fight them — close them to free its fan controls." /></TextBlock>
-                    </StackPanel>
-                    <Button Grid.Column="1" Content="{Binding CloseConflictingAppsLabel}" Command="{Binding CloseConflictingAppsCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center"
-                            ToolTip="Closes the detected controllers so RigPilot's gated controls unlock. Equivalent to closing them in Task Manager; relaunching hands control back."
-                            automation:AutomationProperties.Name="Close conflicting controller apps" automation:AutomationProperties.AutomationId="Cooling.CloseConflictingApps" />
-                  </Grid>
-                </Border>
                 <ItemsControl ItemsSource="{Binding FanControlSliders}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
@@ -1088,6 +1200,10 @@
                           ToolTip="Temperature-biased curve: ramps early and steeply, reaching full speed at a lower temperature (78 °C)."
                           automation:AutomationProperties.Name="Enable cooling automatic fan curve for case fans"
                           automation:AutomationProperties.AutomationId="Cooling.CaseFansCooling" />
+                  <Button Content="Adaptive (pick for me)" Command="{Binding StartAdaptiveCoolingCommand}" CommandParameter="case" Margin="0,0,8,8"
+                          ToolTip="Reads the current CPU and GPU temperatures and picks Silent, Balanced, or Cooling for you — with hysteresis so it doesn't flap at a boundary. Cool (≤55 °C) → Silent; hot (≥75 °C) → Cooling; otherwise Balanced."
+                          automation:AutomationProperties.Name="Enable adaptive automatic fan curve chosen from live temperatures"
+                          automation:AutomationProperties.AutomationId="Cooling.CaseFansAdaptive" />
                 </WrapPanel>
                 <WrapPanel Margin="0,4,0,0">
                   <Button Content="Set up fan curves &amp; calibration" Command="{Binding ToggleAdvancedLabCommand}" Margin="0,0,8,8"
@@ -1106,70 +1222,28 @@
                 </WrapPanel>
                 <TextBlock Text="Turn on Hardware control in the header to apply. Fans return to firmware control when the service restarts or a cooling profile takes over. Curve creation and calibration live in the studio below (Advanced Lab)." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
               </StackPanel>
+             </Grid>
             </Border>
 
-            <Grid x:Name="SimpleCoolingStatus" Style="{StaticResource SimpleOnlyPanelStyle}">
-             <StackPanel>
-              <Border Style="{StaticResource CardStyle}" Padding="20" Margin="0,12,0,0">
-                <StackPanel>
-                  <Grid Margin="0,0,0,8">
-                    <StackPanel>
-                      <TextBlock Text="Fans, pumps, and liquid" Style="{StaticResource CardTitleStyle}" />
-                      <TextBlock Text="Read-only live readings; nothing on this page writes hardware" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
-                    </StackPanel>
-                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
-                      <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
-                    </Border>
-                  </Grid>
-                  <ItemsControl ItemsSource="{Binding CoolingSensors}" ItemTemplate="{StaticResource SensorRowTemplate}" automation:AutomationProperties.Name="Live fan, pump, and liquid readings" automation:AutomationProperties.AutomationId="Cooling.LiveReadings" />
-                  <Border Margin="0,10,0,0">
-                    <Border.Style>
-                      <Style TargetType="Border" BasedOn="{StaticResource EmptyStateStyle}">
-                        <Setter Property="Visibility" Value="Collapsed" />
-                        <Style.Triggers>
-                          <DataTrigger Binding="{Binding HasCoolingSensors}" Value="False">
-                            <Setter Property="Visibility" Value="Visible" />
-                          </DataTrigger>
-                        </Style.Triggers>
-                      </Style>
-                    </Border.Style>
-                    <StackPanel HorizontalAlignment="Center">
-                      <TextBlock Text="&#xE9CA;" FontFamily="{StaticResource IconFont}" FontSize="22" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" />
-                      <TextBlock Text="No fan or pump readings yet" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,0" />
-                      <TextBlock Text="Refresh after hardware discovery completes." Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
-                    </StackPanel>
-                  </Border>
-                </StackPanel>
-              </Border>
-              <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="330" Margin="0,12,0,0">
-                <Border Style="{StaticResource CardStyle}" Padding="18">
-                  <StackPanel>
-                    <TextBlock Text="Cooling status" Style="{StaticResource CardTitleStyle}" />
-                    <TextBlock Text="{Binding CalibrationAvailabilityLabel}" FontWeight="SemiBold" Margin="0,7,0,4">
-                      <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                          <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
-                          <Style.Triggers>
-                            <DataTrigger Binding="{Binding CalibrationAvailabilityTone}" Value="Safe">
-                              <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
-                            </DataTrigger>
-                          </Style.Triggers>
-                        </Style>
-                      </TextBlock.Style>
-                    </TextBlock>
-                    <TextBlock Text="{Binding CoolingCapabilities.Count, StringFormat={}{0} cooling controls detected}" Style="{StaticResource SubtleStyle}" />
-                    <TextBlock Text="Simple mode keeps fan commissioning, calibration, curves, imports, and controller evidence out of the way. Firmware/default control remains the safe fallback." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,10,0,0" />
-                  </StackPanel>
-                </Border>
-                <Border Style="{StaticResource CardStyle}" Padding="18">
-                  <StackPanel>
-                    <TextBlock Text="Always-on protection" Style="{StaticResource CardTitleStyle}" />
-                    <TextBlock Text="Three stale sensor polls request maximum cooling, firmware/default control, and a safety event. CPU fans and pumps cannot be stopped." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,7,0,0" />
-                  </StackPanel>
-                </Border>
-              </local:AdaptiveUniformGrid>
-             </StackPanel>
+            <!-- Advanced Lab divider: always visible, so users in Simple mode
+                 know the curve studio and calibration surface exist instead of
+                 the page silently ending here. -->
+            <Grid Margin="0,20,0,0">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+              <TextBlock Text="ADVANCED LAB" Style="{StaticResource EyebrowStyle}" VerticalAlignment="Center" />
+              <Border Grid.Column="1" Height="1" Background="{StaticResource BorderBrush}" Margin="10,1,0,0" VerticalAlignment="Center" />
             </Grid>
+            <TextBlock Text="The fan curve studio, calibration wizard, cooling capability evidence, and controller imports are hidden in Simple mode. Switch to Advanced Lab in the header — or use the button above — to show them." TextWrapping="Wrap" Margin="0,6,0,0">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock" BasedOn="{StaticResource SubtleStyle}">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsAdvancedLab}" Value="True">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
 
             <Grid x:Name="AdvancedCoolingWorkspace" Style="{StaticResource AdvancedOnlyPanelStyle}">
               <StackPanel>
@@ -1521,6 +1595,32 @@
               </Grid>
             </Border>
 
+            <!-- Conflict status surfaces once, at the top of the page, instead
+                 of per-card. Informational tone by design: a competing
+                 controller is a normal, recoverable situation, not a fault —
+                 amber stays reserved for states that carry real risk. -->
+            <Border Margin="0,12,0,0" Padding="{StaticResource BannerPadding}" CornerRadius="{StaticResource RadiusInset}"
+                    Background="{DynamicResource StateBlockedSoftBrush}" BorderBrush="{DynamicResource StateBlockedBrush}" BorderThickness="1"
+                    automation:AutomationProperties.LiveSetting="Polite">
+              <Border.Style>
+                <Style TargetType="Border">
+                  <Setter Property="Visibility" Value="Collapsed" />
+                  <Style.Triggers><DataTrigger Binding="{Binding HasRunningConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                </Style>
+              </Border.Style>
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock Text="&#xE72E;" FontFamily="{StaticResource IconFont}" Foreground="{DynamicResource StateBlockedBrush}" VerticalAlignment="Center" Margin="{StaticResource Space2}" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="{StaticResource Space2}">
+                  <TextBlock Text="Some GPU controls are locked while other controller apps run" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks only the overlapping controls rather than fight over them — close those apps to unlock GPU fan, power, and clock control and Auto OC." /></TextBlock>
+                </StackPanel>
+                <Button Grid.Column="2" Content="{Binding CloseConflictingAppsLabel}" Command="{Binding CloseConflictingAppsCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center" Margin="{StaticResource Space2}"
+                        ToolTip="Closes the detected controllers so RigPilot's gated controls unlock. Equivalent to closing them in Task Manager; relaunching hands control back."
+                        automation:AutomationProperties.Name="Close conflicting controller apps" automation:AutomationProperties.AutomationId="Performance.CloseConflictingApps" />
+              </Grid>
+            </Border>
+
             <Grid x:Name="SimplePerformanceStatus" Style="{StaticResource SimpleOnlyPanelStyle}">
              <StackPanel>
               <Border Style="{StaticResource CardStyle}" Padding="20" Margin="0,12,0,0">
@@ -1534,7 +1634,48 @@
                       <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
                     </Border>
                   </Grid>
-                  <ItemsControl ItemsSource="{Binding PerformanceSensors}" ItemTemplate="{StaticResource SensorRowTemplate}" automation:AutomationProperties.Name="Live utilisation, clock, and power readings" automation:AutomationProperties.AutomationId="Performance.LiveReadings" />
+                  <ItemsControl automation:AutomationProperties.Name="Live utilisation, clock, and power readings" automation:AutomationProperties.AutomationId="Performance.LiveReadings">
+                    <!-- Grouped by device so the hardware name appears once as a
+                         header instead of repeating on every row. -->
+                    <ItemsControl.Resources>
+                      <CollectionViewSource x:Key="GroupedPerformanceSensors" Source="{Binding PerformanceSensors}">
+                        <CollectionViewSource.GroupDescriptions>
+                          <PropertyGroupDescription PropertyName="Device" />
+                        </CollectionViewSource.GroupDescriptions>
+                      </CollectionViewSource>
+                      <DataTemplate x:Key="SensorRowNoDeviceTemplate">
+                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
+                          <Grid>
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="30" />
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Width="25" Height="25" CornerRadius="6" Background="{StaticResource SurfaceRaisedBrush}">
+                              <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="12" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="7,0,10,0" />
+                            <TextBlock Grid.Column="2" Text="{Binding DisplayValue}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.Resources>
+                    <ItemsControl.ItemsSource>
+                      <Binding Source="{StaticResource GroupedPerformanceSensors}" />
+                    </ItemsControl.ItemsSource>
+                    <ItemsControl.ItemTemplate>
+                      <StaticResource ResourceKey="SensorRowNoDeviceTemplate" />
+                    </ItemsControl.ItemTemplate>
+                    <ItemsControl.GroupStyle>
+                      <GroupStyle>
+                        <GroupStyle.HeaderTemplate>
+                          <DataTemplate>
+                            <TextBlock Text="{Binding Name}" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,4" />
+                          </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                      </GroupStyle>
+                    </ItemsControl.GroupStyle>
+                  </ItemsControl>
                   <Border Margin="0,10,0,0">
                     <Border.Style>
                       <Style TargetType="Border" BasedOn="{StaticResource EmptyStateStyle}">
@@ -1584,35 +1725,53 @@
              </StackPanel>
             </Grid>
 
-            <Border Style="{StaticResource CardStyle}" Margin="0,12,0,0">
-              <StackPanel>
+            <Border Style="{StaticResource CardStyle}" Margin="0,12,0,0" Padding="0">
+             <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+              <!-- Capability rail: the card's availability is scannable before
+                   reading — green when controls are live, blue-grey while a
+                   competing writer blocks them, neutral when control is off.
+                   Colour never carries this alone; the badge and banner name
+                   the state in words. -->
+              <Border Width="3" CornerRadius="11,0,0,11" VerticalAlignment="Stretch">
+                <Border.Style>
+                  <Style TargetType="Border">
+                    <Setter Property="Background" Value="{DynamicResource StateUnavailableBrush}" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource StateVerifiedBrush}" />
+                      </DataTrigger>
+                      <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Border.Style>
+              </Border>
+              <StackPanel Grid.Column="1" Margin="24">
                 <Grid>
                   <StackPanel>
                     <TextBlock Text="GPU controls" Style="{StaticResource CardTitleStyle}" />
                     <TextBlock Text="Live fan, power, and clock control. Every apply is transactional: bounds-clamped, read-back verified, rolled back on failure." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
                   </StackPanel>
-                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
-                    <TextBlock Text="{Binding HardwareControlBadge}" Style="{StaticResource BadgeTextStyle}" />
-                  </Border>
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                    <ContentControl Content="Blocked" Margin="0,0,8,0">
+                      <ContentControl.Style>
+                        <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
+                          <Setter Property="Visibility" Value="Collapsed" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                              <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </ContentControl.Style>
+                    </ContentControl>
+                    <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="{StaticResource RadiusBadge}" Padding="{StaticResource BadgePadding}">
+                      <TextBlock Text="{Binding HardwareControlBadge}" Style="{StaticResource BadgeTextStyle}" />
+                    </Border>
+                  </StackPanel>
                 </Grid>
-                <Border Margin="0,12,0,0" Padding="13,11" CornerRadius="10" Background="{StaticResource WarningSoftBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
-                  <Border.Style>
-                    <Style TargetType="Border">
-                      <Setter Property="Visibility" Value="Collapsed" />
-                      <Style.Triggers><DataTrigger Binding="{Binding HasRunningConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
-                    </Style>
-                  </Border.Style>
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
-                      <TextBlock Text="Another app is controlling the GPU" FontWeight="SemiBold" />
-                      <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks overlapping controls rather than fight them — close them to unlock GPU fan/power/clock control and Auto OC." /></TextBlock>
-                    </StackPanel>
-                    <Button Grid.Column="1" Content="{Binding CloseConflictingAppsLabel}" Command="{Binding CloseConflictingAppsCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center"
-                            ToolTip="Closes the detected controllers so RigPilot's gated controls unlock. Equivalent to closing them in Task Manager; relaunching hands control back."
-                            automation:AutomationProperties.Name="Close conflicting controller apps" automation:AutomationProperties.AutomationId="Performance.CloseConflictingApps" />
-                  </Grid>
-                </Border>
                 <ItemsControl ItemsSource="{Binding GpuControlSliders}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
@@ -1655,8 +1814,13 @@
                           ToolTip="The same refined climb, edge-find, and back-off search applied to the GDDR6X memory clock offset (100 MHz safety margin). Often the larger real-world gain on this card. Same aborts, rollback, and boot sentinel; no voltage."
                           automation:AutomationProperties.Name="Start GPU memory auto overclock screening"
                           automation:AutomationProperties.AutomationId="Performance.AutoOcMemory" />
+                  <Button Content="Full Auto OC" Command="{Binding StartFullAutoOcCommand}" Margin="0,0,8,8"
+                          ToolTip="Unattended complete pass: runs the core-clock auto-OC to completion, then the memory pass — each with the full safety envelope (83 °C ceiling, screening, rollback, boot sentinel). Memory is never tuned on top of a failed core run."
+                          automation:AutomationProperties.Name="Start full unattended auto overclock (core then memory)"
+                          automation:AutomationProperties.AutomationId="Performance.FullAutoOc" />
                   <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Margin="0,0,8,8" />
                 </WrapPanel>
+                <TextBlock Text="{Binding FullAutoOcStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" />
                 <TextBlock Text="AUTOMATIC GPU FAN CURVE" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,5" />
                 <TextBlock Text="Binds the armed GPU fan to GPU temperature through the service graph engine, with a 50% safety floor, full speed at the mode's critical temperature, and stale-sensor maximum cooling." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />
                 <WrapPanel>
@@ -1697,7 +1861,28 @@
                   </StackPanel>
                 </Border>
               </StackPanel>
+             </Grid>
             </Border>
+
+            <!-- Advanced Lab divider: always visible, so users in Simple mode
+                 know the tuning/qualification surface exists (progressive
+                 disclosure) instead of the page silently ending here. -->
+            <Grid Margin="0,20,0,0">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+              <TextBlock Text="ADVANCED LAB" Style="{StaticResource EyebrowStyle}" VerticalAlignment="Center" />
+              <Border Grid.Column="1" Height="1" Background="{StaticResource BorderBrush}" Margin="10,1,0,0" VerticalAlignment="Center" />
+            </Grid>
+            <TextBlock Text="Tuning targets, capability evidence, and qualification plans are hidden in Simple mode. Switch to Advanced Lab in the header to show them." TextWrapping="Wrap" Margin="0,6,0,0">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock" BasedOn="{StaticResource SubtleStyle}">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsAdvancedLab}" Value="True">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
 
             <Grid x:Name="AdvancedPerformanceWorkspace" Style="{StaticResource AdvancedOnlyPanelStyle}">
               <StackPanel>
@@ -1792,8 +1977,46 @@
         <!-- Lighting -->
         <ScrollViewer x:Name="LightingPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="0,0,10,18">
+            <!-- Lighting conflict surfaces once, at the top of the page, in the
+                 calm informational tone. The close button appears only when the
+                 running blockers are on the closable allowlist — lighting-only
+                 writers RigPilot will not terminate stay text-only. -->
+            <Border Margin="0,0,0,12" Padding="{StaticResource BannerPadding}" CornerRadius="{StaticResource RadiusInset}"
+                    Background="{DynamicResource StateBlockedSoftBrush}" BorderBrush="{DynamicResource StateBlockedBrush}" BorderThickness="1"
+                    automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.ConflictBanner">
+              <Border.Style>
+                <Style TargetType="Border">
+                  <Setter Property="Visibility" Value="Collapsed" />
+                  <Style.Triggers><DataTrigger Binding="{Binding HasLightingConflict}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                </Style>
+              </Border.Style>
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock Text="&#xE72E;" FontFamily="{StaticResource IconFont}" Foreground="{DynamicResource StateBlockedBrush}" VerticalAlignment="Center" Margin="{StaticResource Space2}" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="{StaticResource Space2}">
+                  <TextBlock Text="Some lighting routes are locked while other lighting apps run" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding LightingConflictReason}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                </StackPanel>
+                <Button Grid.Column="2" Content="{Binding CloseConflictingAppsLabel}" Command="{Binding CloseConflictingAppsCommand}" VerticalAlignment="Center" Margin="{StaticResource Space2}"
+                        ToolTip="Closes the detected controllers on the allowlist so RigPilot's gated controls unlock. Equivalent to closing them in Task Manager; relaunching hands control back."
+                        automation:AutomationProperties.Name="Close conflicting controller apps" automation:AutomationProperties.AutomationId="Lighting.CloseConflictingApps">
+                  <Button.Style>
+                    <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                          <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Button.Style>
+                </Button>
+              </Grid>
+            </Border>
             <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="380">
-              <Border Style="{StaticResource CardStyle}" Padding="22">
+              <!-- Hug content: this card is much shorter than its neighbour, so
+                   stretching it full-height reads as dead space. -->
+              <Border Style="{StaticResource CardStyle}" Padding="22" VerticalAlignment="Top">
                 <StackPanel>
                   <Grid>
                     <StackPanel Orientation="Horizontal">
@@ -1812,14 +2035,58 @@
                   <TextBlock Text="RigPilot connects only to 127.0.0.1:6742 after explicit opt-in. The service never opens this socket, and OpenRGB is never bundled." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,18,0,12" />
                   <CheckBox IsChecked="{Binding OpenRgbEnabled}" Content="Enable the local OpenRGB SDK bridge." />
                   <Separator />
-                  <TextBlock Text="{Binding OpenRgbStatus}" Foreground="{StaticResource SafeBrush}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <!-- Colour semantics: green only when the bridge is genuinely
+                       connected; a disabled/failed bridge reads as neutral text. -->
+                  <TextBlock Text="{Binding OpenRgbStatus}" FontWeight="SemiBold" TextWrapping="Wrap">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock" BasedOn="{StaticResource SubtleStyle}">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding OpenRgbConnected}" Value="True">
+                            <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
                   <TextBlock Text="{Binding LightingConflictReason}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,12" />
                   <Button Content="Test local SDK server" Command="{Binding ProbeOpenRgbCommand}" HorizontalAlignment="Left" ToolTipService.ShowOnDisabled="True" ToolTip="Enable the bridge and close competing lighting writers first." />
                 </StackPanel>
               </Border>
-              <Border Style="{StaticResource CardStyle}" Padding="22">
-                <StackPanel>
-                  <TextBlock Text="Static lighting" Style="{StaticResource CardTitleStyle}" />
+              <Border Style="{StaticResource CardStyle}" Padding="0">
+               <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <!-- Capability rail: amber because these native lighting writes
+                     are genuinely Experimental (most have no read-back — confirm
+                     visually); blue-grey while a competing lighting writer
+                     blocks the routes. The badge names the state in words. -->
+                <Border Width="3" CornerRadius="11,0,0,11" VerticalAlignment="Stretch">
+                  <Border.Style>
+                    <Style TargetType="Border">
+                      <Setter Property="Background" Value="{DynamicResource StateExperimentalBrush}" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasLightingConflict}" Value="True">
+                          <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="22">
+                  <Grid>
+                    <TextBlock Text="Static lighting" Style="{StaticResource CardTitleStyle}" />
+                    <ContentControl HorizontalAlignment="Right" VerticalAlignment="Top">
+                      <ContentControl.Style>
+                        <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
+                          <Setter Property="Content" Value="Experimental" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasLightingConflict}" Value="True">
+                              <Setter Property="Content" Value="Blocked" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </ContentControl.Style>
+                    </ContentControl>
+                  </Grid>
                   <TextBlock Text="The bridge negotiates protocol support, enumerates exact controllers, enters custom mode, then updates every reported LED." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,14" />
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -1870,7 +2137,16 @@
                             automation:AutomationProperties.Name="Stop ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StopAmbient" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="NATIVE KRAKEN LIGHTING (RIGPILOT ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="SYNC EVERYTHING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <WrapPanel>
+                    <Button Content="Sync colour to all devices" Command="{Binding SyncAllRgbCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                            ToolTip="One click: the chosen colour to the Kraken, both Aura headers (including the ELV8 GPU holder), the Trident Z RAM, and the Razer case — each through its own gated native path, with a combined result."
+                            automation:AutomationProperties.Name="Sync the chosen colour to every native RGB device" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgb" />
+                    <Button Content="All lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn every native RGB device off" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgbOff" />
+                  </WrapPanel>
+                  <Separator Margin="0,4" />
+                  <TextBlock Text="KRAKEN COOLER" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding KrakenLightingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingStatus" />
                   <WrapPanel>
                     <Button Content="Apply to Kraken" Command="{Binding ApplyKrakenLightingCommand}" Margin="0,0,8,8"
@@ -1880,7 +2156,7 @@
                             automation:AutomationProperties.Name="Turn Kraken lighting off via native adapter" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="NATIVE AURA LIGHTING (RIGPILOT ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="AURA HEADERS" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <WrapPanel>
                     <Button Content="Apply to Aura board" Command="{Binding ApplyAuraLightingCommand}" Margin="0,0,8,8"
                             ToolTip="Writes the static colour to both addressable AURA headers through RigPilot's own contained HID adapter (clean-room documented protocol). Lighting only; confirm visually."
@@ -1889,8 +2165,8 @@
                             automation:AutomationProperties.Name="Turn AURA lighting off via native adapter" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="GPU SAG BRACKET — COOLER MASTER ARGB (VIA AURA HEADER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
-                  <TextBlock Text="The bracket is a passive ARGB strip driven by the Aura header it's plugged into. Pick the header, then apply — the other header keeps its colour."
+                  <TextBlock Text="ELV8 GPU HOLDER" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="The ELV8's built-in ARGB strip is passive — it shows whatever the addressable header it's plugged into sends (plug it into a motherboard ARGB header, not the bundled button controller, for software control). Pick the header, then apply — the other header keeps its colour."
                              Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,6" />
                   <WrapPanel>
                     <ComboBox SelectedIndex="{Binding GpuBracketHeaderIndex}" Width="110" Margin="0,0,8,8" VerticalAlignment="Center"
@@ -1906,7 +2182,7 @@
                             automation:AutomationProperties.Name="Turn the GPU sag bracket header lighting off" automation:AutomationProperties.AutomationId="Lighting.GpuBracketOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="NATIVE RAM RGB — TRIDENT Z (RIGPILOT SMBUS ADAPTER)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="TRIDENT Z RAM" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <WrapPanel>
                     <Button Content="Apply to RAM" Command="{Binding ApplyDimmRgbCommand}" Margin="0,0,8,8"
                             ToolTip="Writes the static colour to the G.Skill Trident Z RGB sticks through RigPilot's own SMBus adapter (signed PawnIO transport, identity-verified ENE controller, first-light audited on this kit). All sticks change together; there is no read-back, so confirm visually."
@@ -1915,23 +2191,45 @@
                             automation:AutomationProperties.Name="Turn Trident Z RAM lighting off via native SMBus adapter" automation:AutomationProperties.AutomationId="Lighting.DimmRgbOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="NATIVE RAZER CHROMA (OFFICIAL SDK)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="RAZER CASE" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <WrapPanel>
+                    <Button Content="Apply to Razer case" Command="{Binding ApplyRazerUsbCommand}" Margin="0,0,8,8"
+                            ToolTip="Writes the static colour to the Lian Li O11 Dynamic Razer Edition through RigPilot's own USB adapter — no Razer Synapse needed. The firmware acknowledges the command, so this result is verified."
+                            automation:AutomationProperties.Name="Apply static colour to the Razer case via native adapter" automation:AutomationProperties.AutomationId="Lighting.ApplyRazerUsb" />
+                    <Button Content="Case lighting off" Command="{Binding ApplyRazerUsbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn the Razer case lighting off via native adapter" automation:AutomationProperties.AutomationId="Lighting.RazerUsbOff" />
+                  </WrapPanel>
+                  <Separator Margin="0,4" />
+                  <TextBlock Text="RAZER CHROMA (SYNAPSE)" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding RazerChromaStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" />
                   <Button Content="Apply to Razer Chroma" Command="{Binding ApplyRazerChromaCommand}" HorizontalAlignment="Left"
                           ToolTip="Applies the static colour to every Razer Chroma device — the Lian Li O11 Razer Edition, keyboard, mouse, headset — through Razer's official Chroma SDK. Requires Razer Synapse with Chroma Connect running."
                           automation:AutomationProperties.Name="Apply static colour to Razer Chroma devices" />
                 </StackPanel>
+               </Grid>
               </Border>
             </local:AdaptiveUniformGrid>
 
-            <Grid x:Name="SimpleLightingGuide" Style="{StaticResource SimpleOnlyPanelStyle}">
-              <Border Style="{StaticResource CardStyle}" Padding="18" Margin="0,12,0,0">
-                <StackPanel>
-                  <TextBlock Text="Daily lighting controls" Style="{StaticResource CardTitleStyle}" />
-                  <TextBlock Text="Simple mode keeps the local OpenRGB bridge and one static scene available. Device routes, LampArray layout editing, effect-host detail, and direct-controller qualification are in Advanced Lab." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                </StackPanel>
-              </Border>
+            <!-- Advanced Lab divider: always visible, so users in Simple mode
+                 know the routing/layout/effect surface exists instead of the
+                 page silently ending here. Replaces the old guide card — the
+                 caption carries the same information in the shared pattern. -->
+            <Grid Margin="0,20,0,0">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+              <TextBlock Text="ADVANCED LAB" Style="{StaticResource EyebrowStyle}" VerticalAlignment="Center" />
+              <Border Grid.Column="1" Height="1" Background="{StaticResource BorderBrush}" Margin="10,1,0,0" VerticalAlignment="Center" />
             </Grid>
+            <TextBlock x:Name="SimpleLightingGuide" Text="Device routes, LampArray layout editing, effect-host detail, and direct-controller qualification are hidden in Simple mode. Switch to Advanced Lab in the header to show them." TextWrapping="Wrap" Margin="0,6,0,0">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock" BasedOn="{StaticResource SubtleStyle}">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsAdvancedLab}" Value="True">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
 
             <Grid x:Name="AdvancedLightingWorkspace" Style="{StaticResource AdvancedOnlyPanelStyle}">
               <StackPanel>

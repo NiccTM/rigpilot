@@ -144,7 +144,8 @@ public enum IpcCommand
     SetAuraLighting,
     StopConflictingProcesses,
     GetStorageHealth,
-    SetDimmRgb
+    SetDimmRgb,
+    SetRazerRgb
 }
 
 public static class ProtocolConstants

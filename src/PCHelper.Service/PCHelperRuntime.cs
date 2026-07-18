@@ -389,6 +389,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.SetKrakenPumpDuty => await SetKrakenPumpDutyAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetAuraLighting => await SetAuraLightingAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetDimmRgb => await SetDimmRgbAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetRazerRgb => await SetRazerRgbAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StopConflictingProcesses => StopConflictingProcesses(request),
                 IpcCommand.ReadRyzenSmuFeasibility => await ReadRyzenSmuFeasibilityAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuFanControlArmed => await SetGpuFanControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
@@ -3405,6 +3406,27 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ContainedDimmRgb dimm = new(
             () => new AdapterHostControllerDiscoveryProcess("--set-smbus-rgb", argument));
         DimmRgbResultV1 result = await dimm.WriteAsync(cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private async Task<IpcResponse> SetRazerRgbAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        // RigPilot's in-house native Razer USB lighting write (no Synapse
+        // dependency). Experimental and double-confirmed; extended-matrix
+        // static effect only — no firmware/profile/EEPROM command class — runs
+        // in the crash-contained Adapter Host child, and the firmware's status
+        // reply is read back before WriteIssued may be reported.
+        RazerRgbRequestV1 payload = IpcJson.FromElement<RazerRgbRequestV1>(request.Payload)
+            ?? throw new InvalidDataException("SetRazerRgb requires a RazerRgbRequestV1 payload.");
+        if (payload.Validate() is string refusal)
+        {
+            return Failure(request, "RAZER_RGB_NOT_CONFIRMED", refusal);
+        }
+
+        string argument = payload.TurnOff ? "off" : payload.Colour.Trim().TrimStart('#');
+        ContainedRazerRgb razer = new(
+            () => new AdapterHostControllerDiscoveryProcess("--set-razer-usb-rgb", argument));
+        RazerRgbResultV1 result = await razer.WriteAsync(cancellationToken).ConfigureAwait(false);
         return Success(request, result);
     }
 

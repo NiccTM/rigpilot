@@ -255,6 +255,67 @@ public sealed partial class MainViewModel
         ShowNotice(result.Message, result.Outcome == KrakenLightingOutcome.WriteIssued ? "Success" : "Warning");
     }
 
+    // --- One-click sync: the chosen colour to every native device ------------
+
+    private AsyncCommand? _syncAllRgbCommand;
+
+    public ICommand SyncAllRgbCommand => _syncAllRgbCommand ??= new AsyncCommand(
+        parameter => SyncAllRgbAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    /// <summary>
+    /// Applies the chosen colour to every RigPilot-native device in one click —
+    /// Kraken ring/logo, both Aura headers (which carries the ELV8 GPU holder),
+    /// the Trident Z RAM over SMBus, and the Razer case — each through its own
+    /// gated, crash-contained write path, with one combined outcome notice.
+    /// </summary>
+    public async Task SyncAllRgbAsync(bool turnOff)
+    {
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+
+        List<string> outcomes = [];
+        async Task RunAsync(string name, IpcCommand command, object payload, Func<IpcResponse, bool> succeeded)
+        {
+            try
+            {
+                IpcResponse response = await _client.SendAsync(
+                    NamedPipeRequestClient.CreateRequest(command, payload), _lifetime.Token);
+                outcomes.Add(response.Success && succeeded(response) ? $"{name} ✓" : $"{name} ✗");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                outcomes.Add($"{name} ✗ ({exception.GetType().Name})");
+            }
+        }
+
+        static bool LightingOk(IpcResponse response) =>
+            IpcJson.FromElement<KrakenLightingResultV1>(response.Payload)?.Outcome == KrakenLightingOutcome.WriteIssued;
+
+        await RunAsync("Kraken", IpcCommand.SetKrakenLighting,
+            new KrakenLightingRequestV1(KrakenLightingRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, KrakenLightingRequestV1.ExactDeviceId),
+            LightingOk);
+        await RunAsync("Aura headers", IpcCommand.SetAuraLighting,
+            new AuraLightingRequestV1(AuraLightingRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, AuraLightingRequestV1.ExactDeviceId),
+            response => IpcJson.FromElement<AuraLightingResultV1>(response.Payload)?.Outcome == KrakenLightingOutcome.WriteIssued);
+        await RunAsync("RAM", IpcCommand.SetDimmRgb,
+            new DimmRgbRequestV1(DimmRgbRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, DimmRgbRequestV1.ExactDeviceId),
+            response => IpcJson.FromElement<DimmRgbResultV1>(response.Payload)?.WriteIssued == true);
+        await RunAsync("Razer case", IpcCommand.SetRazerRgb,
+            new RazerRgbRequestV1(RazerRgbRequestV1.CurrentSchemaVersion, OpenRgbColour, turnOff, true, RazerRgbRequestV1.ExactDeviceId),
+            response => IpcJson.FromElement<RazerRgbResultV1>(response.Payload)?.Outcome == KrakenLightingOutcome.WriteIssued);
+
+        bool allOk = outcomes.All(outcome => outcome.Contains('✓'));
+        ShowNotice(
+            (turnOff ? "Lighting off: " : "Colour synced: ") + string.Join(", ", outcomes)
+            + ". Lighting has no read-back on most devices — confirm visually.",
+            allOk ? "Success" : "Warning");
+    }
+
     // --- GPU sag bracket (passive ARGB on one addressable header) -------------
 
     private int _gpuBracketHeader = 1;
@@ -342,6 +403,39 @@ public sealed partial class MainViewModel
         DimmRgbResultV1 result = IpcJson.FromElement<DimmRgbResultV1>(response.Payload)
             ?? throw new InvalidDataException("The service returned an empty DIMM RGB result.");
         ShowNotice(result.Message, result.WriteIssued ? "Success" : "Warning");
+    }
+
+    // --- Native Razer USB lighting (RigPilot in-house, no Synapse) ------------
+
+    private AsyncCommand? _applyRazerUsbCommand;
+
+    public ICommand ApplyRazerUsbCommand => _applyRazerUsbCommand ??= new AsyncCommand(
+        parameter => ApplyRazerUsbAsync(string.Equals(parameter as string, "off", StringComparison.Ordinal)),
+        _ => IsServiceOnline && HardwareControlEnabled,
+        ReportError);
+
+    public async Task ApplyRazerUsbAsync(bool turnOff)
+    {
+        if (!HardwareControlEnabled)
+        {
+            ShowNotice("Turn on Hardware control in the header first.", "Warning");
+            return;
+        }
+
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(
+                IpcCommand.SetRazerRgb,
+                new RazerRgbRequestV1(
+                    RazerRgbRequestV1.CurrentSchemaVersion,
+                    OpenRgbColour,
+                    turnOff,
+                    ConfirmExperimental: true,
+                    RazerRgbRequestV1.ExactDeviceId)),
+            _lifetime.Token);
+        EnsureSuccess(response);
+        RazerRgbResultV1 result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload)
+            ?? throw new InvalidDataException("The service returned an empty Razer lighting result.");
+        ShowNotice(result.Message, result.Outcome == KrakenLightingOutcome.WriteIssued ? "Success" : "Warning");
     }
 
     // --- Native Razer Chroma lighting (official REST SDK) ---------------------
