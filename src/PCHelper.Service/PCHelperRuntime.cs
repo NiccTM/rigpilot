@@ -2591,6 +2591,34 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return Failure(request, "OPERATION_NOT_ELIGIBLE", eligibility.Reason);
         }
 
+        if (ValidateTuneWorkload(capability, payload) is (string code, string reason))
+        {
+            return Failure(request, code, reason);
+        }
+
+        TuneSensorBindingV2? binding = null;
+        WorkloadHostController? workloadController = null;
+        if (payload.WorkloadHost is WorkloadHostDescriptorV1 descriptor)
+        {
+            try
+            {
+                binding = GpuTuneSensorBindingResolver.Resolve(snapshot, capability.DeviceId);
+                workloadController = new WorkloadHostController(descriptor);
+                WorkloadHostStatusV1 ready = await workloadController.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+                if (!ready.Ready || ready.Running || ready.Mode != AutoOcWorkloadMode.Stopped)
+                {
+                    return Failure(
+                        request,
+                        "WORKLOAD_HOST_NOT_READY",
+                        ready.Error ?? "The workload host did not start in a clean stopped state.");
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return Failure(request, "WORKLOAD_HOST_NOT_READY", exception.Message);
+            }
+        }
+
         payload = payload with { CandidateScreeningTime = candidateTime };
         HardwareOperationStatus status = CreateOperationStatus(
             HardwareOperationKind.Tuning,
@@ -2604,7 +2632,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         try
         {
             await _store!.SaveOperationAsync(status, cancellationToken).ConfigureAwait(false);
-            Task task = RunTuneOperationAsync(status.Id, payload, capability, operationCancellation!);
+            Task task = RunTuneOperationAsync(
+                status.Id, payload, capability, binding, workloadController, operationCancellation!);
             RegisterOperationTask(status.Id, task);
             return Success(request, status);
         }
@@ -2613,6 +2642,34 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             ReleaseOperationReservation(status.Id);
             throw;
         }
+    }
+
+    /// <summary>
+    /// A CPU or GPU stability claim is only meaningful under load: the screening
+    /// monitor refuses to certify a candidate that never reached the required
+    /// measured device utilisation. Requiring the isolated workload host up front
+    /// turns a search that could only ever end in "no candidate passed screening"
+    /// into an explicit, actionable refusal. Cooling-domain calibration keeps the
+    /// unloaded search, which is correct for it.
+    /// </summary>
+    /// <returns>An error code and reason, or null when the request is acceptable.</returns>
+    internal static (string Code, string Reason)? ValidateTuneWorkload(
+        CapabilityDescriptor capability,
+        StartTuneRequest payload)
+    {
+        if (payload.WorkloadHost is not WorkloadHostDescriptorV1 descriptor)
+        {
+            return capability.Domain is ControlDomain.Cpu or ControlDomain.Gpu
+                ? ("TUNE_WORKLOAD_REQUIRED",
+                    "Tuning a CPU or GPU control requires the isolated exact-device workload host; an unloaded search cannot establish stability.")
+                : null;
+        }
+
+        return payload.WorkloadMode is not (AutoOcWorkloadMode.Core or AutoOcWorkloadMode.Memory or AutoOcWorkloadMode.Combined)
+            || !string.Equals(descriptor.TargetDeviceId, capability.DeviceId, StringComparison.Ordinal)
+            ? ("TUNE_WORKLOAD_TARGET_INVALID",
+                "The workload host must name a running mode and target the exact device that owns the tuned control.")
+            : null;
     }
 
     private async Task<IpcResponse> StartAutoOcAsync(IpcRequest request, CancellationToken cancellationToken)
@@ -3187,6 +3244,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         string operationId,
         StartTuneRequest request,
         CapabilityDescriptor capability,
+        TuneSensorBindingV2? binding,
+        WorkloadHostController? workload,
         CancellationTokenSource operationCancellation)
     {
         try
@@ -3194,9 +3253,24 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             await TransitionOperationAsync(
                 operationId,
                 HardwareOperationState.Running,
-                "Bounded candidate search started.").ConfigureAwait(false);
+                workload is null
+                    ? "Bounded candidate search started."
+                    : "Exact-device workload host authenticated; bounded candidate search started.").ConfigureAwait(false);
             IHardwareAdapter adapter = FindAdapter(capability.AdapterId);
-            RuntimeTuneScreeningMonitor monitor = new(GetSnapshot, capability);
+            RuntimeTuneScreeningMonitor monitor = workload is null
+                ? new RuntimeTuneScreeningMonitor(GetSnapshot, capability)
+                : new RuntimeTuneScreeningMonitor(
+                    GetSnapshot,
+                    capability,
+                    sensorBinding: binding,
+                    workload: workload,
+                    requiredWorkloadMode: request.WorkloadMode,
+                    requiredAverageLoadPercent: 70);
+            if (workload is not null)
+            {
+                await workload.SetModeAsync(request.WorkloadMode!.Value, operationCancellation.Token).ConfigureAwait(false);
+            }
+
             TuneResult result = await HardwareTuneEngine.RunAsync(
                 request,
                 capability,
@@ -3236,6 +3310,21 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
         finally
         {
+            if (workload is not null)
+            {
+                // The load must stop even when the search was cancelled or threw,
+                // so use None rather than the operation's token. A failure to stop
+                // is logged, never allowed to mask the outcome that brought us here.
+                try
+                {
+                    await workload.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    ServiceLog.CommandFailed(logger, IpcCommand.StartTune, exception);
+                }
+            }
+
             await FinishOperationTaskAsync(operationId, operationCancellation).ConfigureAwait(false);
         }
     }

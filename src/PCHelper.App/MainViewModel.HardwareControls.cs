@@ -934,7 +934,8 @@ public sealed partial class MainViewModel
     /// The Hardware-control switch supplies the acknowledgements.
     /// </summary>
     public async Task StartGpuAutoOcAsync() =>
-        _ = await StartGpuClockAutoOcAsync("gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz);
+        _ = await StartGpuClockAutoOcAsync(
+            "gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz, AutoOcWorkloadMode.Core);
 
     /// <summary>
     /// One-click GPU memory auto-OC: the same refined climb/edge-find/back-off
@@ -942,9 +943,80 @@ public sealed partial class MainViewModel
     /// often the larger real-world gain on this class of card. Same safety gates.
     /// </summary>
     public async Task StartGpuMemoryAutoOcAsync() =>
-        _ = await StartGpuClockAutoOcAsync("gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz);
+        _ = await StartGpuClockAutoOcAsync(
+            "gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz, AutoOcWorkloadMode.Memory);
 
-    private async Task<string?> StartGpuClockAutoOcAsync(string capabilityPrefix, string label, double safetyMarginMhz)
+    /// <summary>
+    /// The generic "Start tuning" button targets whatever control the operator
+    /// selected. A GPU clock control needs the same isolated workload the
+    /// one-click buttons supply, or the service refuses it; anything else
+    /// (cooling calibration) keeps the unloaded search that suits it.
+    /// </summary>
+    private async Task StartSelectedTuneAsync()
+    {
+        CapabilityDescriptor? descriptor = SelectedTuneTarget?.Descriptor;
+        AutoOcWorkloadMode? mode = descriptor?.Id switch
+        {
+            string id when id.StartsWith("gpuclock.core:", StringComparison.Ordinal) => AutoOcWorkloadMode.Core,
+            string id when id.StartsWith("gpuclock.memory:", StringComparison.Ordinal) => AutoOcWorkloadMode.Memory,
+            _ => null
+        };
+        if (descriptor is null || mode is null)
+        {
+            await StartTuneCoreAsync();
+            return;
+        }
+
+        await using WorkloadHostSession workload = await WorkloadHostSession.StartAsync(
+            descriptor.DeviceId, _lifetime.Token);
+        await StartTuneCoreAsync(
+            workloadHost: workload.Descriptor,
+            workloadMode: mode);
+        if (_operation?.Id is string operationId)
+        {
+            HardwareOperationState? outcome = await WaitForOperationAsync(operationId, descriptor.Name);
+            ShowTuneOutcomeNotice(outcome, descriptor.Name);
+        }
+    }
+
+    /// <summary>
+    /// Replaces the optimistic "Auto-tuning started…" notice with the run's
+    /// terminal outcome. Without this the banner kept claiming a tune was in
+    /// progress after the operation had already failed — on this rig within
+    /// seconds, from the LocalSystem driver refusal.
+    /// </summary>
+    private void ShowTuneOutcomeNotice(HardwareOperationState? outcome, string label)
+    {
+        HardwareOperationStatus? operation = _operation;
+        string detail = string.IsNullOrWhiteSpace(operation?.Error)
+            ? operation?.Message ?? "no final status was recorded"
+            : $"{operation?.Message} {operation?.Error}".Trim();
+        bool producedProfile = operation?.TuneResult?.GeneratedProfile is not null;
+        (string text, string tone) = outcome switch
+        {
+            HardwareOperationState.Completed when producedProfile =>
+                ($"{label} auto-tuning finished: {detail}", "Success"),
+            HardwareOperationState.Completed =>
+                ($"{label} auto-tuning completed without a shippable result: {detail}", "Warning"),
+            HardwareOperationState.Failed =>
+                ($"{label} auto-tuning failed: {detail}", "Warning"),
+            HardwareOperationState.Aborted =>
+                ($"{label} auto-tuning was aborted: {detail}", "Warning"),
+            HardwareOperationState.RecoveryRequired =>
+                ($"{label} auto-tuning requires hardware recovery: {detail}", "Error"),
+            null =>
+                ($"{label} auto-tuning was superseded by another operation before it finished.", "Warning"),
+            _ =>
+                ($"{label} auto-tuning ended {outcome}: {detail}", "Warning")
+        };
+        ShowNotice(text, tone);
+    }
+
+    private async Task<string?> StartGpuClockAutoOcAsync(
+        string capabilityPrefix,
+        string label,
+        double safetyMarginMhz,
+        AutoOcWorkloadMode workloadMode)
     {
         if (!HardwareControlEnabled)
         {
@@ -973,8 +1045,28 @@ public sealed partial class MainViewModel
         TuneTemperatureCeilingText = "83";
         AdvancedWritesAcknowledged = true;
         TuneDeviceAcknowledged = true;
-        await StartTuneCoreAsync(AutoOcRefinementCandidates, safetyMarginMhz, AutoOcThermalHeadroomCelsius);
-        return _operation?.Id;
+
+        // The search is only meaningful under load, and the host lives in this
+        // signed-in session — so it must outlive the request and be awaited to
+        // completion here. Disposing it early would pull the load out from under
+        // the service mid-screen and reject every remaining candidate.
+        ShowNotice($"Starting the isolated Direct3D workload host for {label} tuning…", "Warning");
+        await using WorkloadHostSession workload = await WorkloadHostSession.StartAsync(
+            target.Descriptor.DeviceId, _lifetime.Token);
+        await StartTuneCoreAsync(
+            AutoOcRefinementCandidates,
+            safetyMarginMhz,
+            AutoOcThermalHeadroomCelsius,
+            workload.Descriptor,
+            workloadMode);
+        string? operationId = _operation?.Id;
+        if (operationId is not null)
+        {
+            HardwareOperationState? outcome = await WaitForOperationAsync(operationId, label);
+            ShowTuneOutcomeNotice(outcome, label);
+        }
+
+        return operationId;
     }
 
     private async Task EnsureHardwareControlArmedAsync()

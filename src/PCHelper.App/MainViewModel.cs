@@ -436,7 +436,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                     : CalibrationEligibilityReason,
                 "Warning"));
         _startTuneCommand = new AsyncCommand(
-            _ => StartTuneCoreAsync(),
+            _ => StartSelectedTuneAsync(),
             _ => CanStartTune,
             ReportError,
             _ => ShowNotice(

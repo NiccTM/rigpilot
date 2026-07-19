@@ -357,7 +357,13 @@ public sealed record StartTuneRequest(
     // Stop climbing once a passing candidate's peak temperature reaches within
     // this many degrees of the ceiling, so the result keeps thermal headroom
     // instead of only stability headroom. 0 = climb purely to the stability edge.
-    double ThermalHeadroomCelsius = 0);
+    double ThermalHeadroomCelsius = 0,
+    // Isolated exact-device workload driven for the duration of the search. A
+    // CPU or GPU stability claim is only meaningful under load, so the single-
+    // domain tuning path supplies the same host the composite Auto OC uses.
+    // Null keeps the unloaded search used by cooling-domain calibration.
+    WorkloadHostDescriptorV1? WorkloadHost = null,
+    AutoOcWorkloadMode? WorkloadMode = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter<AutoOcWorkloadMode>))]
 public enum AutoOcWorkloadMode

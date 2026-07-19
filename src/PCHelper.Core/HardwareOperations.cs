@@ -781,28 +781,36 @@ public sealed class FanCalibrationEngine(
         IHardwareAdapter adapter,
         bool operationSucceeded)
     {
+        Exception rollbackError;
         try
         {
-            await adapter.RollbackAsync(original, CancellationToken.None).ConfigureAwait(false);
+            // Restore with read-back proof: a refused restore write with the
+            // control read back at its captured prior value is proven restored,
+            // not unknown — the same rule the Auto OC engines follow. Only a
+            // state that cannot be proven escalates to reset/recovery below.
+            await HardwareRestoreVerification.RestoreAndVerifyAsync(capability, original, adapter).ConfigureAwait(false);
+            return;
         }
-        catch (Exception rollbackError)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            try
-            {
-                await adapter.ResetToDefaultAsync(capability.Id, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception resetError)
-            {
-                throw new HardwareOperationRecoveryException(
-                    $"Rollback and firmware/default reset both failed: {rollbackError.Message}; {resetError.Message}",
-                    new AggregateException(rollbackError, resetError));
-            }
-
-            string prefix = operationSucceeded ? "Calibration measurements completed, but" : "Calibration failed and";
-            throw new HardwareOperationRecoveryException(
-                $"{prefix} the previous control policy could not be restored. Firmware/default control was restored instead.",
-                rollbackError);
+            rollbackError = exception;
         }
+
+        try
+        {
+            await adapter.ResetToDefaultAsync(capability.Id, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception resetError)
+        {
+            throw new HardwareOperationRecoveryException(
+                $"Rollback and firmware/default reset both failed: {rollbackError.Message}; {resetError.Message}",
+                new AggregateException(rollbackError, resetError));
+        }
+
+        string prefix = operationSucceeded ? "Calibration measurements completed, but" : "Calibration failed and";
+        throw new HardwareOperationRecoveryException(
+            $"{prefix} the previous control policy could not be restored. Firmware/default control was restored instead.",
+            rollbackError);
     }
 
     private static async Task RestoreFirmwareControlAsync(
@@ -1281,27 +1289,36 @@ public static class HardwareTuneEngine
         IHardwareAdapter adapter,
         bool operationSucceeded)
     {
+        Exception rollbackError;
         try
         {
-            await adapter.RollbackAsync(original, CancellationToken.None).ConfigureAwait(false);
+            // Restore with read-back proof: a refused restore write with the
+            // control read back at its captured prior value is proven restored,
+            // not unknown — the same rule the Auto OC engines follow. This is
+            // what turned every refused-write tune into RecoveryRequired and a
+            // write lock even though the hardware never moved.
+            await HardwareRestoreVerification.RestoreAndVerifyAsync(capability, original, adapter).ConfigureAwait(false);
+            return;
         }
-        catch (Exception rollbackError)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            try
-            {
-                await adapter.ResetToDefaultAsync(capability.Id, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception resetError)
-            {
-                throw new HardwareOperationRecoveryException(
-                    $"Rollback and firmware/default reset both failed: {rollbackError.Message}; {resetError.Message}",
-                    new AggregateException(rollbackError, resetError));
-            }
-
-            string prefix = operationSucceeded ? "Tuning completed, but" : "Tuning failed and";
-            throw new HardwareOperationRecoveryException(
-                $"{prefix} the previous control state could not be restored. Firmware/default control was restored instead.",
-                rollbackError);
+            rollbackError = exception;
         }
+
+        try
+        {
+            await adapter.ResetToDefaultAsync(capability.Id, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception resetError)
+        {
+            throw new HardwareOperationRecoveryException(
+                $"Rollback and firmware/default reset both failed: {rollbackError.Message}; {resetError.Message}",
+                new AggregateException(rollbackError, resetError));
+        }
+
+        string prefix = operationSucceeded ? "Tuning completed, but" : "Tuning failed and";
+        throw new HardwareOperationRecoveryException(
+            $"{prefix} the previous control state could not be restored. Firmware/default control was restored instead.",
+            rollbackError);
     }
 }

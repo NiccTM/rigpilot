@@ -242,19 +242,9 @@ public static class FullAutoOcEngine
     {
         try
         {
-            await adapter.RollbackAsync(original, CancellationToken.None).ConfigureAwait(false);
-            if (adapter is not IHardwareStateVerifier verifier)
-            {
-                throw new InvalidOperationException("The adapter does not support rollback read-back verification.");
-            }
-
-            HardwareStateVerification verification = await verifier
-                .VerifyRollbackStateAsync(original, CancellationToken.None)
+            await HardwareRestoreVerification
+                .RestoreAndVerifyAsync(capability, original, adapter)
                 .ConfigureAwait(false);
-            if (!verification.Success)
-            {
-                throw new InvalidOperationException(verification.Message);
-            }
         }
         catch (Exception exception)
         {

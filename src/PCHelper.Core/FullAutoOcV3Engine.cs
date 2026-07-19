@@ -396,24 +396,10 @@ public static class FullAutoOcV3Engine
         }
     }
 
-    private static async Task<HardwareStateVerification> RestoreAndVerifyAsync(
+    private static Task<HardwareStateVerification> RestoreAndVerifyAsync(
         AutoOcTuneStage stage,
-        PreparedAction original)
-    {
-        await stage.Adapter.RollbackAsync(original, CancellationToken.None).ConfigureAwait(false);
-        if (stage.Adapter is not IHardwareStateVerifier verifier)
-        {
-            throw new InvalidOperationException($"{stage.Capability.Name} has no rollback read-back verifier.");
-        }
-        HardwareStateVerification verification = await verifier
-            .VerifyRollbackStateAsync(original, CancellationToken.None)
-            .ConfigureAwait(false);
-        if (!verification.Success)
-        {
-            throw new InvalidOperationException(verification.Message);
-        }
-        return verification;
-    }
+        PreparedAction original) => HardwareRestoreVerification.RestoreAndVerifyAsync(
+            stage.Capability, original, stage.Adapter);
 
     private static async Task RequireModeAsync(
         IAutoOcWorkloadController workload,
