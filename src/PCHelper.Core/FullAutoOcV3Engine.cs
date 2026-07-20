@@ -91,19 +91,41 @@ public static class FullAutoOcV3Engine
             await RequireModeAsync(workload, AutoOcWorkloadMode.Combined, cancellationToken).ConfigureAwait(false);
             TunePlan baselinePlan = WithConstraints(core.Request.Plan, constraints, baselineDuration);
 
-            // Warm the card before measuring anything. A GPU boosts highest when
-            // cold and settles as it heats, so a baseline taken immediately is
-            // measuring the transient, not the steady state the tuning is
-            // supposed to be judged against. On the reference rig this alone
-            // failed the run: sample 1 scored 302 at 76 °C and 278 W while
-            // samples 2 and 3 scored 290 at 80-83 °C and 332 W — the two warm
-            // samples agreed to 0.13%, but including the cold one produced 4.03%
-            // variation against a 3% limit. The discarded window costs seconds
-            // against a screening run measured in tens of minutes.
-            reportProgress?.Invoke(0, "Warming the GPU to a steady state before measuring.");
-            await monitorFactory(AutoOcWorkloadMode.Combined)
-                .ScreenAsync(core.Capability, baselinePlan, AutoOcV3Policy.BaselineWarmupDuration, cancellationToken)
-                .ConfigureAwait(false);
+            // Warm the card to a measured plateau before sampling anything. A GPU
+            // boosts highest when cold and settles as it heats, so a baseline
+            // taken during the transient is noise: a cold first sample produced
+            // 4.03% variation against a 3% limit while the two warm samples
+            // agreed to 0.13%. A fixed warmup duration is not enough — how long
+            // the transient lasts depends on the fan curve and the ambient, and
+            // a 45-second warmup measured on one thermal configuration still
+            // left baselines climbing (86.4 → 88.0 °C, 4.89%) on another. So warm
+            // in short windows and stop when consecutive windows agree in peak
+            // temperature; the cap bounds the cost when equilibrium is far away,
+            // and hitting it is reported so a rejected run says why.
+            double? previousPeakCelsius = null;
+            bool plateauReached = false;
+            for (int window = 1; window <= AutoOcV3Policy.MaximumWarmupWindows; window++)
+            {
+                reportProgress?.Invoke(0, $"Warming the GPU to a thermal plateau (window {window} of at most {AutoOcV3Policy.MaximumWarmupWindows}).");
+                TuneScreeningResult warm = await monitorFactory(AutoOcWorkloadMode.Combined)
+                    .ScreenAsync(core.Capability, baselinePlan, AutoOcV3Policy.WarmupWindowDuration, cancellationToken)
+                    .ConfigureAwait(false);
+                if (AutoOcV3Policy.HasReachedThermalPlateau(previousPeakCelsius, warm.MaximumTemperatureCelsius))
+                {
+                    plateauReached = true;
+                    break;
+                }
+
+                previousPeakCelsius = warm.MaximumTemperatureCelsius;
+            }
+
+            if (!plateauReached)
+            {
+                reportProgress?.Invoke(
+                    0,
+                    "The GPU was still heating when the warmup budget ran out; baselines may vary more than the limit allows.");
+            }
+
             for (int index = 0; index < AutoOcV3Policy.RequiredBaselineSamples; index++)
             {
                 reportProgress?.Invoke(index * 5, $"Baseline sample {index + 1} of {AutoOcV3Policy.RequiredBaselineSamples}.");

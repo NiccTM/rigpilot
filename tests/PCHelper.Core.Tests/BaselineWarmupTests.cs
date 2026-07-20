@@ -3,56 +3,64 @@ using PCHelper.Core;
 namespace PCHelper.Core.Tests;
 
 /// <summary>
-/// Auto OC completed on the reference rig but shipped nothing, rejected for
-/// baseline throughput variation of 4.03% against a 3% limit. The measurements
-/// showed the cause was not instability but a cold card:
-///
-///   Baseline 1   throughput 302   76.0 °C   278 W
-///   Baseline 2   throughput 290   80.3 °C   332 W
-///   Baseline 3   throughput 290   83.2 °C   333 W
-///
-/// A GPU boosts highest when cold and settles as it heats, so sample 1 measured
-/// the transient. Samples 2 and 3 — both taken warm — agree to 0.13%. The gate
-/// was right; the measurement was taken too early.
+/// Auto OC baselines are only comparable once the card has stopped heating. A
+/// cold first sample produced 4.03% variation against a 3% limit while the two
+/// warm samples agreed to 0.13% — and a fixed 45-second warmup sized on one
+/// thermal configuration still left baselines climbing (86.4 → 88.0 °C, 4.89%)
+/// on another. The warmup therefore repeats short load windows until two
+/// consecutive ones agree in peak temperature, rather than trusting a duration.
 /// </summary>
 public sealed class BaselineWarmupTests
 {
     [Fact]
-    public void AWarmupWindowIsAppliedBeforeBaselineSampling()
+    public void ConsecutiveWindowsAgreeingInTemperatureCountAsAPlateau()
     {
-        Assert.True(AutoOcV3Policy.BaselineWarmupDuration > TimeSpan.Zero);
+        Assert.True(AutoOcV3Policy.HasReachedThermalPlateau(87.5, 88.0));
+        Assert.True(AutoOcV3Policy.HasReachedThermalPlateau(88.0, 88.0));
     }
 
     [Fact]
-    public void TheWarmupOutlastsTheTransientItExistsToDiscard()
+    public void ACardStillHeatingIsNotAtAPlateau()
     {
-        // The card settled within roughly one 10 s sample window on the reference
-        // rig. A warmup shorter than that would leave the cold-boost transient in
-        // the first measured sample, which is the whole defect.
-        Assert.True(AutoOcV3Policy.BaselineWarmupDuration >= TimeSpan.FromSeconds(30));
+        // The live failure: peak temperature climbing 86.4 → 88.0 across samples.
+        Assert.False(AutoOcV3Policy.HasReachedThermalPlateau(86.4, 88.0));
     }
 
     [Fact]
-    public void TheWarmupStaysNegligibleAgainstAScreeningRun()
+    public void TheFirstWindowNeverCountsAsAPlateau()
     {
-        // It is paid once per run against candidate screening and a 20-minute
-        // final screen. If it ever grew to minutes it would be worth revisiting.
-        Assert.True(AutoOcV3Policy.BaselineWarmupDuration <= TimeSpan.FromMinutes(2));
+        // One reading has nothing to agree with — a single warm-looking window
+        // must not skip the warmup entirely.
+        Assert.False(AutoOcV3Policy.HasReachedThermalPlateau(null, 88.0));
     }
 
     [Fact]
-    public void TheObservedWarmSamplesWouldNowPassTheVariationGate()
+    public void MissingTemperaturesNeverCountAsAPlateau()
     {
-        // Replays the live numbers: discarding the cold sample leaves the two warm
-        // ones, which are well inside the 3% limit that rejected the run.
-        double[] warm = [290.1085228527147, 290.49416281139287];
-        double spread = (warm.Max() - warm.Min()) / warm.Average() * 100;
+        // Absence of evidence is not stability — the recurring bug class this
+        // codebase keeps refusing to reintroduce.
+        Assert.False(AutoOcV3Policy.HasReachedThermalPlateau(88.0, null));
+        Assert.False(AutoOcV3Policy.HasReachedThermalPlateau(null, null));
+        Assert.False(AutoOcV3Policy.HasReachedThermalPlateau(double.NaN, 88.0));
+    }
 
-        Assert.True(spread < 3, $"warm-sample spread was {spread:0.###}%");
+    [Fact]
+    public void TheWarmupBudgetIsBoundedAndMeaningful()
+    {
+        // At least two windows are structurally required for any plateau, and the
+        // cap must keep total warmup within minutes of a screening run measured
+        // in tens of minutes.
+        Assert.True(AutoOcV3Policy.MaximumWarmupWindows >= 2);
+        TimeSpan worstCase = AutoOcV3Policy.WarmupWindowDuration * AutoOcV3Policy.MaximumWarmupWindows;
+        Assert.InRange(worstCase, TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(5));
+    }
 
-        // And the cold sample is what pushed it over.
-        double[] all = [301.97410730500235, .. warm];
-        double allSpread = (all.Max() - all.Min()) / all.Average() * 100;
-        Assert.True(allSpread > 3, $"cold-included spread was {allSpread:0.###}%");
+    [Fact]
+    public void TheObservedTransientWouldHaveBeenWaitedOut()
+    {
+        // Replay of the live climb: consecutive windows roughly 1.5 °C apart do
+        // not plateau, and the settling that followed (0.4 °C apart) does.
+        Assert.False(AutoOcV3Policy.HasReachedThermalPlateau(86.4, 87.9));
+        Assert.True(AutoOcV3Policy.HasReachedThermalPlateau(87.9, 88.3));
     }
 }

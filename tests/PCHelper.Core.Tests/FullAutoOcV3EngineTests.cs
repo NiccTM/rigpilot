@@ -70,13 +70,18 @@ public sealed class FullAutoOcV3EngineTests
             new AutoOcTuneStage(Request(core, TuneDirection.Maximize), core, coreAdapter),
             new AutoOcTuneStage(Request(memory, TuneDirection.Maximize), memory, memoryAdapter),
             null,
-            mode => new DelegateMonitor((_, _, _, _) => Task.FromResult(new TuneScreeningResult(
+            mode => new DelegateMonitor((_, _, duration, _) => Task.FromResult(new TuneScreeningResult(
                 true,
                 "pass",
                 60,
                 200,
                 1900,
-                ThroughputScore: ++baseline == 2 ? 110 : 100,
+                // Warmup windows are identified by their duration and excluded:
+                // the noise must land in a measured baseline, not in a discarded
+                // warmup window, or this test would quietly stop testing the gate.
+                ThroughputScore: duration == AutoOcV3Policy.WarmupWindowDuration
+                    ? 100
+                    : ++baseline == 2 ? 110 : 100,
                 AverageFanRpm: 1000))),
             new FakeWorkload(),
             null,

@@ -10,13 +10,35 @@ public static class AutoOcV3Policy
     public const int RequiredBaselineSamples = 3;
 
     /// <summary>
-    /// Load applied before the first baseline sample, and discarded. A cold GPU
-    /// boosts higher than a warm one, so measuring immediately captures the
-    /// settling curve rather than the steady state. Sized from the reference rig,
-    /// where the card moved from 76 °C / 278 W to a stable 80-83 °C / 332 W within
-    /// roughly the first sample window; this leaves margin beyond that.
+    /// One discarded warmup load window. Windows repeat until two consecutive
+    /// ones agree in peak temperature (<see cref="HasReachedThermalPlateau"/>),
+    /// so the warmup tracks the card's actual settling time instead of assuming
+    /// one. A fixed 45-second warmup sized on one thermal configuration still
+    /// left baselines climbing (86.4 → 88.0 °C, 4.89% variation) on another.
     /// </summary>
-    public static readonly TimeSpan BaselineWarmupDuration = TimeSpan.FromSeconds(45);
+    public static readonly TimeSpan WarmupWindowDuration = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Upper bound on warmup windows (3 minutes of load at 15 s each) so a card
+    /// that cannot reach equilibrium — dying fan, blocked intake — cannot stall
+    /// the run indefinitely. Hitting the cap is reported, not silently accepted.
+    /// </summary>
+    public const int MaximumWarmupWindows = 12;
+
+    /// <summary>Peak-temperature agreement between consecutive windows that counts as settled.</summary>
+    public const double WarmupPlateauCelsius = 1.0;
+
+    /// <summary>
+    /// True when two consecutive warmup windows agree in peak temperature to
+    /// within <see cref="WarmupPlateauCelsius"/>. Null readings never count as a
+    /// plateau — absence of a temperature is not evidence of stability.
+    /// </summary>
+    public static bool HasReachedThermalPlateau(double? previousPeakCelsius, double? currentPeakCelsius) =>
+        previousPeakCelsius is double previous
+        && currentPeakCelsius is double current
+        && double.IsFinite(previous)
+        && double.IsFinite(current)
+        && Math.Abs(current - previous) <= WarmupPlateauCelsius;
 
     public static string? Validate(AutoOcObjectiveConstraintsV3 constraints)
     {
