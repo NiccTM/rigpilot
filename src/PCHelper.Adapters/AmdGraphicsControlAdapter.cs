@@ -24,7 +24,7 @@ public sealed class AmdGraphicsControlAdapter : IHardwareAdapter, IAdapterTopolo
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
         "AMD ADLX feasibility",
-        "0.5.5-alpha",
+        "0.6.0-beta.1",
         "AMD Radeon driver (amdadlx64.dll)",
         "AMD Radeon graphics driver",
         AdapterExecutionContext.SystemService,

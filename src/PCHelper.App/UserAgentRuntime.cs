@@ -96,7 +96,7 @@ public sealed class UserAgentRuntime : IAsyncDisposable
                 IpcCommand.Handshake => Success(request, new HandshakeResponseV2(
                     ProtocolConstants.Version,
                     ProtocolConstants.LegacyReadOnlyVersion,
-                    typeof(UserAgentRuntime).Assembly.GetName().Version?.ToString() ?? "0.5.5-alpha",
+                    typeof(UserAgentRuntime).Assembly.GetName().Version?.ToString() ?? "0.6.0-beta.1",
                     _revision,
                     ["workflows", "effects", "effect-host", "games", "macros", "macro-recording", "scripts", "osd", "osd-presentation", "monitoring-preferences", "monitoring-comparison", "overlay-status", "capture", "desktop-snapshot", "monitor-brightness", "wgc-recording-preflight", "interactive-fan-preflight", "rtss-osd", "frametime-benchmark", "presentmon-benchmark"])),
                 IpcCommand.GetWorkflows => await GetAsync<AutomationWorkflowV1>(request, SuiteEntityKind.AutomationWorkflow, cancellationToken).ConfigureAwait(false),
@@ -172,7 +172,7 @@ public sealed class UserAgentRuntime : IAsyncDisposable
         IpcCommand.Handshake => Success(request, new HandshakeResponseV2(
             ProtocolConstants.Version,
             ProtocolConstants.LegacyReadOnlyVersion,
-            typeof(UserAgentRuntime).Assembly.GetName().Version?.ToString() ?? "0.5.5-alpha",
+            typeof(UserAgentRuntime).Assembly.GetName().Version?.ToString() ?? "0.6.0-beta.1",
             Interlocked.Read(ref _revision),
             ["gamebar-widget", "overlay-status"])),
         IpcCommand.GetOverlayStatus => Success(request, OverlayBridgeProbe.Probe()),

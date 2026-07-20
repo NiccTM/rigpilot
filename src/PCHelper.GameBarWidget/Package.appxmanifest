@@ -5,7 +5,7 @@
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
   IgnorableNamespaces="uap uap3 mp">
-  <Identity Name="RigPilot.GameBarWidget" Publisher="CN=RigPilot Developers" Version="0.5.5.0" />
+  <Identity Name="RigPilot.GameBarWidget" Publisher="CN=RigPilot Developers" Version="0.6.0.0" />
   <mp:PhoneIdentity PhoneProductId="D927B825-16F0-4DCF-80EE-2F4C12D82D57" PhonePublisherId="00000000-0000-0000-0000-000000000000" />
   <Properties>
     <DisplayName>RigPilot Game Bar</DisplayName>

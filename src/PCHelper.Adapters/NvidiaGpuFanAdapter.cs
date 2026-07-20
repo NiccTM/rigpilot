@@ -92,7 +92,7 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
         "NVIDIA GPU fan control (Experimental)",
-        "0.5.5-alpha",
+        "0.6.0-beta.1",
         "NVIDIA display driver",
         "NVIDIA display driver with a usable manual-fan transport",
         AdapterExecutionContext.SystemService,

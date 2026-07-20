@@ -10,7 +10,7 @@ RigPilot is a GPL-3.0 Windows desktop control suite inspired by G-Helper's low-f
 
 RigPilot is the public display brand as of 13 July 2026. `PCHelper` remains the deliberate internal identity for namespaces, service name, named-pipe names, CLI executable, local operator group, and `%ProgramData%\PCHelper` state. Do not rename those identifiers without a separately tested data and service migration.
 
-Current workspace target: `0.5.5-alpha`, a protocol-v2 desktop-suite development line with transactional GPU control, continuous cooling, exact-route RGB, commissioning, gaming workflow, recovery, and contained adapter hosts. It is not a qualified release and it does not claim certified CPU, GPU, motherboard-fan, pump, AIO, firmware, or RGB families. Controlled reference-system passes remain Experimental and do not satisfy the certification gate. The unsigned `0.5.5-preview.1` release shape is compiled read-only: every service mutation returns `PUBLIC_PREVIEW_READ_ONLY` while monitoring remains available.
+Current workspace target: `0.6.0-beta.1`, a protocol-v2 desktop-suite development line with transactional GPU control, continuous cooling, exact-route RGB, commissioning, gaming workflow, recovery, and contained adapter hosts. It is not a qualified release and it does not claim certified CPU, GPU, motherboard-fan, pump, AIO, firmware, or RGB families. Controlled reference-system passes remain Experimental and do not satisfy the certification gate. The unsigned `0.6.0-preview.1` release shape is compiled read-only: every service mutation returns `PUBLIC_PREVIEW_READ_ONLY` while monitoring remains available.
 
 Supported operating-system target:
 
