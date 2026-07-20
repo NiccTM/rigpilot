@@ -74,20 +74,13 @@ public static class KrakenX3LightingWriter
     /// </summary>
     public static KrakenLightingResultV1 Write(string colourHex, bool turnOff)
     {
-        byte red = 0, green = 0, blue = 0;
-        if (!turnOff)
+        RgbColour parsed = RgbColour.Off;
+        if (!turnOff && !RgbColour.TryParse(colourHex, out parsed))
         {
-            string value = colourHex.Trim().TrimStart('#');
-            if (value.Length != 6
-                || !uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint rgb))
-            {
-                return KrakenLightingResultV1.Unavailable(
-                    KrakenLightingOutcome.Failed, "Colour must use #RRGGBB format.");
-            }
-            red = (byte)(rgb >> 16);
-            green = (byte)(rgb >> 8);
-            blue = (byte)rgb;
+            return KrakenLightingResultV1.Unavailable(
+                KrakenLightingOutcome.Failed, "Colour must use #RRGGBB format.");
         }
+        byte red = parsed.Red, green = parsed.Green, blue = parsed.Blue;
 
         HidDevice? device;
         try
