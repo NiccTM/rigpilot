@@ -103,7 +103,7 @@ public sealed class NvapiGpuClockOffsetTransport : IGpuClockOffsetTransport, IDi
     public Task SetOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken)
     {
         EnsureWriteArmed();
-        return WriteOffsetAsync(domain, offsetKiloHertz, cancellationToken);
+        return WriteOffsetAsync(domain, offsetKiloHertz, "apply", cancellationToken);
     }
 
     /// <summary>
@@ -120,10 +120,14 @@ public sealed class NvapiGpuClockOffsetTransport : IGpuClockOffsetTransport, IDi
             throw new GpuClockSafetyException("The GPU clock-offset transport is not write-enabled.");
         }
 
-        return WriteOffsetAsync(domain, offsetKiloHertz, cancellationToken);
+        return WriteOffsetAsync(domain, offsetKiloHertz, "restore", cancellationToken);
     }
 
-    private Task WriteOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken)
+    private Task WriteOffsetAsync(
+        GpuClockOffsetDomain domain,
+        int offsetKiloHertz,
+        string origin,
+        CancellationToken cancellationToken)
     {
         IPerformanceStates20ClockEntry entry = FindP0Entry(domain)
             ?? throw new GpuClockSafetyException($"The NVIDIA driver exposes no editable P0 {domain} clock entry.");
@@ -183,10 +187,21 @@ public sealed class NvapiGpuClockOffsetTransport : IGpuClockOffsetTransport, IDi
             // is a bounded buffer that per-second sensor polling flushes within
             // seconds. Carry the whole request in the message that reaches the
             // durable operation record.
+            // Which entry point issued the write, and the arm state it ran under.
+            // Manual writes of +15, +30 and +100 MHz succeed while a +91 MHz
+            // candidate inside an Auto OC run is refused, so the discriminator
+            // between those two situations is the thing still unaccounted for.
+            bool armed;
+            lock (_gate)
+            {
+                armed = _armed;
+            }
+
             throw new GpuClockWriteException(
-                $"NVAPI refused a {domain} clock write of {offsetKiloHertz} kHz "
-                + $"({ToMegaHertzText(offsetKiloHertz)}), driver delta range "
-                + $"[{current.DeltaRange.Minimum}, {current.DeltaRange.Maximum}] kHz: {exception.Message}",
+                $"NVAPI refused a {domain} clock {origin} of {offsetKiloHertz} kHz "
+                + $"({ToMegaHertzText(offsetKiloHertz)}) from {current.DeltaValue} kHz, armed={armed}, "
+                + $"driver delta range [{current.DeltaRange.Minimum}, {current.DeltaRange.Maximum}] kHz: "
+                + $"{exception.Message}",
                 exception);
         }
 

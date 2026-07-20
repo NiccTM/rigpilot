@@ -9,6 +9,15 @@ public static class AutoOcV3Policy
 {
     public const int RequiredBaselineSamples = 3;
 
+    /// <summary>
+    /// Load applied before the first baseline sample, and discarded. A cold GPU
+    /// boosts higher than a warm one, so measuring immediately captures the
+    /// settling curve rather than the steady state. Sized from the reference rig,
+    /// where the card moved from 76 °C / 278 W to a stable 80-83 °C / 332 W within
+    /// roughly the first sample window; this leaves margin beyond that.
+    /// </summary>
+    public static readonly TimeSpan BaselineWarmupDuration = TimeSpan.FromSeconds(45);
+
     public static string? Validate(AutoOcObjectiveConstraintsV3 constraints)
     {
         ArgumentNullException.ThrowIfNull(constraints);
