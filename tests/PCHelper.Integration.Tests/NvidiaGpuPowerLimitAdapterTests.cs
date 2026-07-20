@@ -211,6 +211,12 @@ public sealed class NvidiaGpuPowerLimitAdapterTests
 
         public List<uint> LimitCommands { get; } = [];
 
+        public bool CanWrite => true;
+
+        public void SetArmed(bool armed) { }
+
+        public void Dispose() { }
+
         public void OverrideCurrent(uint milliwatts) => _currentOverride = milliwatts;
 
         public Task<GpuPowerLimitBounds?> ReadBoundsAsync(string channelId, CancellationToken cancellationToken) =>

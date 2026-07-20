@@ -32,7 +32,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private IHardwareAdapter? _gpuFanAdapter;
     private volatile bool _gpuFanArmed;
     private string _gpuFanDeviceId = "nvidia:gpu-0";
-    private NvmlGpuPowerLimitTransport? _gpuPowerTransport;
+    private IGpuPowerLimitTransport? _gpuPowerTransport;
     private IHardwareAdapter? _gpuPowerAdapter;
     private volatile bool _gpuPowerArmed;
     private NvapiGpuClockOffsetTransport? _gpuClockTransport;
@@ -138,25 +138,23 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         // Experimental GPU power-limit control: identical disarmed-by-default pattern.
         // The capability registers ReadOnly and no write can occur until an operator
         // explicitly arms it with an Experimental acknowledgement for the exact device
-        // (SetGpuPowerLimitArmed). Registered only when NVML reports valid constraints.
+        // (SetGpuPowerLimitArmed). NVAPI is preferred over NVML: NVML's power setter
+        // returns NVML_ERROR_NO_PERMISSION on this class of GeForce card (the same
+        // restriction as its fan setters), so the NVML transport reported valid
+        // constraints yet every write was refused. NVAPI expresses the limit as a
+        // percentage of the default TDP, so the default TDP in milliwatts — read
+        // reliably from NVML, whose reads work even though its writes do not — is
+        // passed as the conversion anchor. NVML remains the fallback if NVAPI is
+        // unavailable.
         _gpuPowerArmed = false;
-        if (NvmlGpuPowerLimitTransport.TryCreate(enableWrites: true, out NvmlGpuPowerLimitTransport powerTransport, out _))
+        IGpuPowerLimitTransport? powerTransport = await SelectUsablePowerTransportAsync(cancellationToken).ConfigureAwait(false);
+        if (powerTransport is not null)
         {
-            GpuPowerLimitBounds? powerBounds = powerTransport.CanWrite
-                ? await powerTransport.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false)
-                : null;
-            if (powerBounds is { IsValid: true })
-            {
-                _gpuPowerTransport = powerTransport;
-                TraceableHardwareAdapter gpuPowerAdapter = new(
-                    new NvidiaGpuPowerLimitAdapter(powerTransport, _gpuFanDeviceId, "0", () => _gpuPowerArmed));
-                _gpuPowerAdapter = gpuPowerAdapter;
-                adapters.Add(gpuPowerAdapter);
-            }
-            else
-            {
-                powerTransport.Dispose();
-            }
+            _gpuPowerTransport = powerTransport;
+            TraceableHardwareAdapter gpuPowerAdapter = new(
+                new NvidiaGpuPowerLimitAdapter(powerTransport, _gpuFanDeviceId, "0", () => _gpuPowerArmed));
+            _gpuPowerAdapter = gpuPowerAdapter;
+            adapters.Add(gpuPowerAdapter);
         }
 
         // Experimental GPU clock offsets (core + memory): identical disarmed-by-default
@@ -4328,6 +4326,54 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             }
 
             candidate.Dispose();
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Selects the GPU power-limit transport, preferring NVAPI over NVML. NVAPI
+    /// expresses the limit as a percentage of the default TDP, so the default TDP in
+    /// milliwatts is first read via NVML — whose reads work even though its power
+    /// setter is refused on GeForce — and passed to NVAPI as the milliwatt anchor.
+    /// If NVML cannot supply that anchor, or NVAPI exposes no P0 power policy, NVML
+    /// is used as the (write-refused) fallback so the capability still registers and
+    /// reads.
+    /// </summary>
+    private static async Task<IGpuPowerLimitTransport?> SelectUsablePowerTransportAsync(CancellationToken cancellationToken)
+    {
+        uint? defaultTdpMilliwatts = null;
+        if (NvmlGpuPowerLimitTransport.TryCreate(enableWrites: false, out NvmlGpuPowerLimitTransport nvmlReader, out _))
+        {
+            if (await nvmlReader.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true } anchorBounds)
+            {
+                defaultTdpMilliwatts = anchorBounds.DefaultMilliwatts;
+            }
+
+            nvmlReader.Dispose();
+        }
+
+        if (defaultTdpMilliwatts is uint anchor
+            && NvApiGpuPowerLimitTransport.TryCreate(0, anchor, enableWrites: true, out NvApiGpuPowerLimitTransport nvapi, out string _))
+        {
+            if (nvapi.CanWrite
+                && await nvapi.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true })
+            {
+                return nvapi;
+            }
+
+            nvapi.Dispose();
+        }
+
+        if (NvmlGpuPowerLimitTransport.TryCreate(enableWrites: true, out NvmlGpuPowerLimitTransport nvml, out string _))
+        {
+            if (nvml.CanWrite
+                && await nvml.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true })
+            {
+                return nvml;
+            }
+
+            nvml.Dispose();
         }
 
         return null;
