@@ -463,7 +463,12 @@ public sealed record TuneScreeningResult(
     double? AveragePowerWatts,
     double? AverageClockMegahertz,
     double? ThroughputScore = null,
-    double? AverageFanRpm = null);
+    double? AverageFanRpm = null,
+    // Smallest observed margin between any bound temperature sensor and that
+    // sensor's OWN ceiling. The peak temperature alone cannot answer "how close
+    // to a limit are we", because hot spot and memory junction run far hotter
+    // than the core and are governed by different limits.
+    double? SmallestThermalMarginCelsius = null);
 
 public sealed record TuneCandidateResult(
     double Value,

@@ -1008,6 +1008,28 @@ public static class GpuAutoOcSearch
             && double.IsFinite(peak)
             && peak >= ceilingCelsius - headroomCelsius;
     }
+
+    /// <summary>
+    /// Whether a passing candidate is close enough to a thermal limit to stop
+    /// climbing.
+    /// </summary>
+    /// <remarks>
+    /// Prefers the per-sensor margin when the monitor supplied one. Judging the
+    /// PEAK of every bound sensor against the core ceiling stops the search on
+    /// the hottest sensor rather than the closest-to-its-own-limit one: on the
+    /// reference 3090 the GDDR6X memory junction sits near the 83 °C core ceiling
+    /// under load, so the climb halted after the very first candidate and Auto OC
+    /// reported a 0 MHz "result". This is the same max-of-all-sensors-versus-one-
+    /// ceiling error that <see cref="GpuThermalCeilings"/> fixes for the ceiling
+    /// itself. The peak form is retained for callers with no per-sensor data.
+    /// </remarks>
+    public static bool ReachedThermalMargin(
+        TuneScreeningResult screening,
+        double ceilingCelsius,
+        double headroomCelsius) =>
+        screening.SmallestThermalMarginCelsius is double margin
+            ? headroomCelsius > 0 && double.IsFinite(margin) && margin <= headroomCelsius
+            : ReachedThermalHeadroom(screening.MaximumTemperatureCelsius, ceilingCelsius, headroomCelsius);
 }
 
 public static class HardwareTuneEngine
@@ -1093,8 +1115,8 @@ public static class HardwareTuneEngine
                 // Thermal-headroom stop: this candidate is stable but already
                 // near the temperature ceiling, so keep it and stop climbing —
                 // going higher would trade away cooling headroom, not add it.
-                if (GpuAutoOcSearch.ReachedThermalHeadroom(
-                    outcome.Result.Screening.MaximumTemperatureCelsius,
+                if (GpuAutoOcSearch.ReachedThermalMargin(
+                    outcome.Result.Screening,
                     request.Plan.TemperatureCeilingCelsius,
                     request.ThermalHeadroomCelsius))
                 {
@@ -1144,8 +1166,8 @@ public static class HardwareTuneEngine
                     }
 
                     selected = candidate;
-                    if (GpuAutoOcSearch.ReachedThermalHeadroom(
-                        outcome.Result.Screening.MaximumTemperatureCelsius,
+                    if (GpuAutoOcSearch.ReachedThermalMargin(
+                        outcome.Result.Screening,
                         request.Plan.TemperatureCeilingCelsius,
                         request.ThermalHeadroomCelsius))
                     {
