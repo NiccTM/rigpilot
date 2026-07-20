@@ -22,11 +22,21 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
 
     private const int VerifyTolerancePercent = 5;
 
+    // A commanded GPU fan does not reach its setpoint instantly — it ramps over a
+    // second or two, and the NVAPI cooler read-back reports the live level, not the
+    // setpoint. Verifying immediately caught the fan mid-ramp (41% while climbing to
+    // a commanded 50%, on the reference rig) and rejected a write that had in fact
+    // taken. The manual policy flips at once, so the level is polled toward the
+    // target across a bounded settle window before the verdict.
+    private static readonly TimeSpan FanSettleInterval = TimeSpan.FromMilliseconds(250);
+    private const int FanSettleAttempts = 8;
+
     private readonly IGpuFanCoolerTransport _transport;
     private readonly string _deviceId;
     private readonly string _channelId;
     private readonly Func<bool> _isArmed;
     private readonly Func<CancellationToken, Task<bool>> _isConflicted;
+    private readonly Func<TimeSpan, CancellationToken, Task> _settleDelay;
 
     public NvidiaGpuFanAdapter(
         IGpuFanCoolerTransport transport,
@@ -43,7 +53,8 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
         string deviceId,
         string channelId,
         Func<bool> isArmed,
-        Func<CancellationToken, Task<bool>>? isConflicted = null)
+        Func<CancellationToken, Task<bool>>? isConflicted = null,
+        Func<TimeSpan, CancellationToken, Task>? settleDelay = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
@@ -52,6 +63,7 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
         _channelId = channelId;
         _isArmed = isArmed ?? throw new ArgumentNullException(nameof(isArmed));
         _isConflicted = isConflicted ?? (_ => Task.FromResult(false));
+        _settleDelay = settleDelay ?? (static (delay, token) => Task.Delay(delay, token));
     }
 
     public string CapabilityId => $"{CapabilityPrefix}{_channelId}";
@@ -159,7 +171,7 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
     {
         EnsureOwnedCapability(action.Action.CapabilityId);
         int requested = RequireDuty(action.Action.Value);
-        GpuFanChannelState state = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        GpuFanChannelState state = await ReadSettledStateAsync(requested, cancellationToken).ConfigureAwait(false);
         int? achieved = state.MeasuredDutyPercent ?? state.CommandedDutyPercent;
         bool success = state.Policy == GpuFanControlPolicy.Manual
             && achieved is int value
@@ -172,6 +184,35 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
                 ? $"GPU fan duty verified within {VerifyTolerancePercent}% of {requested}%."
                 : $"GPU fan duty read-back {achieved?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable"}% did not match requested {requested}%.");
     }
+
+    /// <summary>
+    /// Reads the channel state, giving a ramping fan up to the settle window to
+    /// converge on <paramref name="targetDutyPercent"/>. Polling stops as soon as
+    /// the level is within tolerance, so a fan that is already there (or a fake in
+    /// a test) returns immediately with no delay. Polling also stops the instant the
+    /// manual policy is absent — if the write did not take there is nothing to wait
+    /// for, and the caller's own policy check will fail it.
+    /// </summary>
+    private async Task<GpuFanChannelState> ReadSettledStateAsync(int targetDutyPercent, CancellationToken cancellationToken)
+    {
+        GpuFanChannelState state = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        for (int attempt = 0; attempt < FanSettleAttempts; attempt++)
+        {
+            if (state.Policy != GpuFanControlPolicy.Manual || IsWithinTolerance(state, targetDutyPercent))
+            {
+                break;
+            }
+
+            await _settleDelay(FanSettleInterval, cancellationToken).ConfigureAwait(false);
+            state = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        }
+
+        return state;
+    }
+
+    private static bool IsWithinTolerance(GpuFanChannelState state, int targetDutyPercent) =>
+        (state.MeasuredDutyPercent ?? state.CommandedDutyPercent) is int level
+        && Math.Abs(level - targetDutyPercent) <= VerifyTolerancePercent;
 
     public async Task RollbackAsync(PreparedAction action, CancellationToken cancellationToken)
     {
@@ -224,7 +265,12 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
     {
         EnsureOwnedCapability(action.Action.CapabilityId);
         GpuFanChannelState? expected = DeserializeRollback(action.AdapterToken);
-        GpuFanChannelState actual = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        // Restoring a prior MANUAL duty ramps just like an apply, so let the level
+        // settle toward it; restoring the automatic curve is a policy flip with no
+        // ramp, so a single read is enough.
+        GpuFanChannelState actual = expected is { Policy: GpuFanControlPolicy.Manual, CommandedDutyPercent: int target }
+            ? await ReadSettledStateAsync(target, cancellationToken).ConfigureAwait(false)
+            : await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
         bool success = expected is null || expected.Policy == GpuFanControlPolicy.Automatic
             ? actual.Policy == GpuFanControlPolicy.Automatic
             : actual.Policy == GpuFanControlPolicy.Manual
