@@ -149,9 +149,30 @@ public sealed class NvapiGpuClockOffsetTransport : IGpuClockOffsetTransport, IDi
             [clock],
             []);
         PerformanceStates20InfoV1 payload = new([state], 1, 0);
-        GPUApi.SetPerformanceStates20(_gpu.Handle, payload);
+        try
+        {
+            GPUApi.SetPerformanceStates20(_gpu.Handle, payload);
+        }
+        catch (Exception exception)
+        {
+            // A bare driver status ("NVAPI_INVALID_USER_PRIVILEGE") names neither
+            // the domain nor the value, so an Auto OC failure cannot be told apart
+            // from a manual one, and the adapter trace that would carry the detail
+            // is a bounded buffer that per-second sensor polling flushes within
+            // seconds. Carry the whole request in the message that reaches the
+            // durable operation record.
+            throw new GpuClockWriteException(
+                $"NVAPI refused a {domain} clock write of {offsetKiloHertz} kHz "
+                + $"({ToMegaHertzText(offsetKiloHertz)}), driver delta range "
+                + $"[{current.DeltaRange.Minimum}, {current.DeltaRange.Maximum}] kHz: {exception.Message}",
+                exception);
+        }
+
         return Task.CompletedTask;
     }
+
+    private static string ToMegaHertzText(int offsetKiloHertz) =>
+        $"{offsetKiloHertz / 1000d:0.###} MHz";
 
     private IPerformanceStates20ClockEntry? FindP0Entry(GpuClockOffsetDomain domain)
     {

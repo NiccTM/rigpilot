@@ -57,3 +57,12 @@ public interface IGpuClockOffsetTransport
 
 /// <summary>Raised when a GPU clock-offset operation would violate a safety bound.</summary>
 public sealed class GpuClockSafetyException(string message) : InvalidOperationException(message);
+
+/// <summary>
+/// A clock write the driver rejected, carrying the domain, requested value, and
+/// the driver's own delta range. The vendor status alone ("NVAPI_INVALID_USER_
+/// PRIVILEGE") says nothing about what was attempted, which made an Auto OC
+/// failure indistinguishable from a manual one on the reference rig.
+/// </summary>
+public sealed class GpuClockWriteException(string message, Exception innerException)
+    : InvalidOperationException(message, innerException);

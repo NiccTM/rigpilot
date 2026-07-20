@@ -88,25 +88,33 @@ internal sealed class RuntimeTuneScreeningMonitor(
                     && double.IsFinite(value)
                     && now - sample.Timestamp <= TimeSpan.FromSeconds(3))
                 .ToArray();
-            double[] currentTemperatures = good
+            SensorSample[] currentTemperatureSamples = good
                 .Where(sample => IsTemperature(sample.Unit)
                     && (sensorBinding is null || sensorBinding.TemperatureSensorIds.Contains(sample.SensorId, StringComparer.Ordinal)))
-                .Select(sample => sample.Value!.Value)
-                .Where(value => value is > -20 and < 150)
+                .Where(sample => sample.Value!.Value is > -20 and < 150)
                 .ToArray();
-            if (currentTemperatures.Length == 0)
+            if (currentTemperatureSamples.Length == 0)
             {
                 return Reject("No fresh temperature source was available during screening.", temperatures, powers, clocks);
             }
 
-            temperatures.AddRange(currentTemperatures);
-            if (currentTemperatures.Max() >= plan.TemperatureCeilingCelsius)
+            temperatures.AddRange(currentTemperatureSamples.Select(sample => sample.Value!.Value));
+
+            // Each sensor is judged against the ceiling for its own class. The bound
+            // set includes hot spot and memory junction, which run hotter than the
+            // core by design — comparing their readings to a core ceiling rejects
+            // every sample the moment the workload actually loads the card.
+            foreach (SensorSample sample in currentTemperatureSamples)
             {
-                return Reject(
-                    $"Temperature ceiling exceeded: {currentTemperatures.Max():0.0} °C observed, {plan.TemperatureCeilingCelsius:0.0} °C allowed.",
-                    temperatures,
-                    powers,
-                    clocks);
+                double ceiling = GpuThermalCeilings.CeilingForSensor(sample.Name, plan.TemperatureCeilingCelsius);
+                if (sample.Value!.Value >= ceiling)
+                {
+                    return Reject(
+                        $"Temperature ceiling exceeded on {sample.Name}: {sample.Value!.Value:0.0} °C observed, {ceiling:0.0} °C allowed.",
+                        temperatures,
+                        powers,
+                        clocks);
+                }
             }
 
             SensorSample[] related = RelatedSensors(snapshot, capability, good, sensorBinding);
