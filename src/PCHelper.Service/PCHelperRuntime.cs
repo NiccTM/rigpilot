@@ -28,7 +28,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private AdapterCoordinator? _coordinator;
     private ProfileTransactionEngine? _engine;
     private AdapterPackManager? _adapterPackManager;
-    private NvmlGpuFanCoolerTransport? _gpuFanTransport;
+    private IGpuFanCoolerTransport? _gpuFanTransport;
     private IHardwareAdapter? _gpuFanAdapter;
     private volatile bool _gpuFanArmed;
     private string _gpuFanDeviceId = "nvidia:gpu-0";
@@ -109,27 +109,30 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         // and no write can occur until an operator explicitly arms it with an Experimental
         // acknowledgement for the exact device (SetGpuFanControlArmed). Deploying this code
         // therefore never arms a live fan write even though the service runs elevated. The
-        // adapter is registered only when NVML reports a usable fan transport with valid
-        // bounds. An environment opt-in remains as a developer override inside the transport.
+        // adapter is registered only when a usable fan transport with valid bounds is
+        // found. NVAPI is preferred over NVML: NVAPI's cooler API is the standard NVIDIA
+        // fan-write path and the surface the clock-offset control already uses on this
+        // GPU, whereas NVML's fan setters return NVML_ERROR_NO_PERMISSION on this class
+        // of GeForce card — so the NVML transport reported valid bounds yet every write
+        // was refused. NVML remains the fallback when NVAPI exposes no controllable
+        // cooler. An environment opt-in remains as a developer override inside the transport.
         _gpuFanArmed = false;
-        if (NvmlGpuFanCoolerTransport.TryCreate(enableWrites: true, out NvmlGpuFanCoolerTransport fanTransport, out _))
+        IGpuFanCoolerTransport? fanTransport = await SelectUsableFanTransportAsync(
+            [
+                _ => Task.FromResult<IGpuFanCoolerTransport?>(
+                    NvApiGpuFanCoolerTransport.TryCreate(0, out NvApiGpuFanCoolerTransport nvapiFan, out string _) ? nvapiFan : null),
+                _ => Task.FromResult<IGpuFanCoolerTransport?>(
+                    NvmlGpuFanCoolerTransport.TryCreate(enableWrites: true, out NvmlGpuFanCoolerTransport nvmlFan, out string _) ? nvmlFan : null),
+            ],
+            cancellationToken).ConfigureAwait(false);
+        if (fanTransport is not null)
         {
-            GpuFanBounds? bounds = fanTransport.CanWrite
-                ? await fanTransport.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false)
-                : null;
-            if (bounds is { IsValid: true })
-            {
-                _gpuFanTransport = fanTransport;
-                _gpuFanDeviceId = "nvidia:gpu-0";
-                TraceableHardwareAdapter gpuFanAdapter = new(
-                    new NvidiaGpuFanAdapter(fanTransport, _gpuFanDeviceId, "0", () => _gpuFanArmed));
-                _gpuFanAdapter = gpuFanAdapter;
-                adapters.Add(gpuFanAdapter);
-            }
-            else
-            {
-                fanTransport.Dispose();
-            }
+            _gpuFanTransport = fanTransport;
+            _gpuFanDeviceId = "nvidia:gpu-0";
+            TraceableHardwareAdapter gpuFanAdapter = new(
+                new NvidiaGpuFanAdapter(fanTransport, _gpuFanDeviceId, "0", () => _gpuFanArmed));
+            _gpuFanAdapter = gpuFanAdapter;
+            adapters.Add(gpuFanAdapter);
         }
 
         // Experimental GPU power-limit control: identical disarmed-by-default pattern.
@@ -4297,6 +4300,37 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         public const string GpuFan = "GPU fan";
         public const string GpuPower = "GPU power limit";
         public const string GpuClock = "GPU clock offset";
+    }
+
+    /// <summary>
+    /// Returns the first candidate that both reports it can write and exposes valid
+    /// bounds, disposing every candidate it does not select (including ones tried
+    /// after an earlier unusable one). The candidate order encodes the preference —
+    /// NVAPI before the NVML fallback — and a usable earlier candidate short-circuits
+    /// the rest so the fallback's native runtime is never even loaded.
+    /// </summary>
+    internal static async Task<IGpuFanCoolerTransport?> SelectUsableFanTransportAsync(
+        IReadOnlyList<Func<CancellationToken, Task<IGpuFanCoolerTransport?>>> orderedCandidates,
+        CancellationToken cancellationToken)
+    {
+        foreach (Func<CancellationToken, Task<IGpuFanCoolerTransport?>> create in orderedCandidates)
+        {
+            IGpuFanCoolerTransport? candidate = await create(cancellationToken).ConfigureAwait(false);
+            if (candidate is null)
+            {
+                continue;
+            }
+
+            if (candidate.CanWrite
+                && await candidate.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true })
+            {
+                return candidate;
+            }
+
+            candidate.Dispose();
+        }
+
+        return null;
     }
 
     private async Task<IpcResponse> SetGpuFanControlArmedAsync(IpcRequest request, CancellationToken cancellationToken)

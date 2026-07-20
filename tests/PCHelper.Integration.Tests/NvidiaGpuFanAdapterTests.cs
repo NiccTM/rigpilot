@@ -239,6 +239,12 @@ public sealed class NvidiaGpuFanAdapterTests
 
         public bool RestoredAutomatic { get; private set; }
 
+        public bool CanWrite => true;
+
+        public void SetArmed(bool armed) { }
+
+        public void Dispose() { }
+
         public void OverrideMeasuredDuty(int measured) => _measuredOverride = measured;
 
         public void OverrideReportedPolicy(GpuFanControlPolicy policy) => _policyOverride = policy;

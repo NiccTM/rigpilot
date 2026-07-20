@@ -167,6 +167,12 @@ public sealed class GpuFanCoolingGraphBindingTests
 
         public bool RestoredAutomatic { get; private set; }
 
+        public bool CanWrite => true;
+
+        public void SetArmed(bool armed) { }
+
+        public void Dispose() { }
+
         public Task<GpuFanBounds?> ReadBoundsAsync(string channelId, CancellationToken cancellationToken) =>
             Task.FromResult(bounds);
 
