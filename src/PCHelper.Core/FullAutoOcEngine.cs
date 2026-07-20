@@ -13,10 +13,23 @@ public interface IAutoOcWorkloadController
 }
 
 /// <summary>
-/// Runs core and memory searches as one operation. The core result remains
-/// applied only long enough to tune memory and run the combined screen; both
-/// controls are then rolled back and read back before a result is returned.
+/// DEPRECATED — the pre-V3 Auto OC engine, superseded by
+/// <see cref="FullAutoOcV3Engine"/>. Runs core and memory searches as one
+/// operation. The core result remains applied only long enough to tune memory
+/// and run the combined screen; both controls are then rolled back and read back
+/// before a result is returned.
 /// </summary>
+/// <remarks>
+/// Not the shipping path: the service advertises the <c>auto-oc-v3</c> feature
+/// and the app always selects <see cref="FullAutoOcV3Engine"/>. This engine lacks
+/// the V3 baseline-plateau warmup, three-sample variation gate, and validation
+/// lifecycle. It is retained only as the fallback for the legacy
+/// <see cref="PCHelper.Contracts.IpcCommand.StartAutoOc"/> path used by older
+/// clients. <see cref="Obsolete"/> makes any NEW call site fail the build; the
+/// one retained fallback and its tests suppress the warning deliberately. Prefer
+/// V3 for anything new.
+/// </remarks>
+[Obsolete("Legacy pre-V3 Auto OC engine; use FullAutoOcV3Engine. Retained only for the StartAutoOc fallback.")]
 public static class FullAutoOcEngine
 {
     public static async Task<AutoOcResultV2> RunAsync(

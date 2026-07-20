@@ -3349,6 +3349,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 "Exact-GPU workload host authenticated; capturing the prior core and memory state.").ConfigureAwait(false);
             IHardwareAdapter coreAdapter = FindAdapter(coreCapability.AdapterId);
             IHardwareAdapter memoryAdapter = FindAdapter(memoryCapability.AdapterId);
+            // Legacy StartAutoOc fallback path; the app selects V3. See FullAutoOcEngine.
+#pragma warning disable CS0618 // Type or member is obsolete
             AutoOcResultV2 result = await FullAutoOcEngine.RunAsync(
                 deviceId,
                 coreRequest,
@@ -3374,6 +3376,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                     progress,
                     message),
                 operationCancellation.Token).ConfigureAwait(false);
+#pragma warning restore CS0618
             if (result.GeneratedProfile is ProfileV2 generated
                 && result.AllRequestedFamiliesVerified
                 && result.PriorStateRestored
@@ -3425,23 +3428,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         WorkloadHostController workload,
         CancellationTokenSource operationCancellation)
     {
-        // Hold the GPU fan high for the whole operation. Screening runs the card
-        // at sustained full load, and every thermal limit that trips ends the run:
-        // more airflow buys headroom for the search and steadier measurements,
-        // because a fan ramping on its own curve is itself a source of run-to-run
-        // variation. Raising a fan only ever increases cooling, and the prior duty
-        // is captured now and restored in the finally below whatever happens.
-        (IHardwareAdapter Adapter, PreparedAction Prepared)? fanAssist = EnableAutoOcFanAssist
-            ? await TryHoldGpuFanHighAsync(deviceId, operationCancellation.Token).ConfigureAwait(false)
-            : null;
         try
         {
             await TransitionOperationAsync(
                 operationId,
                 HardwareOperationState.Running,
-                fanAssist is null
-                    ? "Exact-GPU workload host authenticated; capturing three stock-state baseline measurements."
-                    : $"Exact-GPU workload host authenticated; GPU fan held at {AutoOcFanAssistPercent:0}% for the run. Capturing three stock-state baseline measurements.").ConfigureAwait(false);
+                "Exact-GPU workload host authenticated; capturing three stock-state baseline measurements.").ConfigureAwait(false);
             AutoOcResultV3 result = await FullAutoOcV3Engine.RunAsync(
                 deviceId,
                 constraints,
@@ -3507,94 +3499,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
         finally
         {
-            if (fanAssist is (IHardwareAdapter fanAdapter, PreparedAction fanPrepared))
-            {
-                // CancellationToken.None: an aborted run must still put the fan
-                // back. Restoring toward the prior duty only ever reduces the
-                // amount of cooling we imposed, so a failure here is logged and
-                // never allowed to mask the operation's own outcome.
-                try
-                {
-                    await HardwareRestoreVerification
-                        .RestoreAndVerifyAsync(
-                            GetSnapshot().Capabilities.First(capability =>
-                                string.Equals(capability.Id, fanPrepared.Action.CapabilityId, StringComparison.Ordinal)),
-                            fanPrepared,
-                            fanAdapter,
-                            CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception exception)
-                {
-                    ServiceLog.CommandFailed(logger, IpcCommand.StartAutoOcV3, exception);
-                }
-            }
-
             await FinishOperationTaskAsync(operationId, operationCancellation).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>Percentage the GPU fan is pinned to for the duration of an Auto OC run.</summary>
-    private const double AutoOcFanAssistPercent = 90;
-
-    /// <summary>
-    /// Whether Auto OC raises the GPU fan for the run.
-    /// </summary>
-    /// <remarks>
-    /// Off, for two reasons. It cannot work on the reference rig at all:
-    /// nvmlDeviceSetFanControlPolicy returns NVML_ERROR_NO_PERMISSION, the same
-    /// refusal NVML gives for the power limit, while NVAPI clock writes from the
-    /// same service succeed. And it is the prime suspect for a regression — the
-    /// NVAPI refusal of a real +91 MHz candidate has only ever been observed in
-    /// builds carrying this assist, and a privileged NVML call failing immediately
-    /// before the tuning writes is a plausible way to leave the driver session
-    /// refusing pstate deltas. Manual +45 and +90 MHz writes succeed through the
-    /// same armed apply path under 100 s of sustained full load, so load, heat,
-    /// arm state, and the entry point are all ruled out.
-    /// </remarks>
-    private const bool EnableAutoOcFanAssist = false;
-
-    /// <summary>
-    /// Captures the GPU fan's current duty and raises it for the run. Returns null
-    /// when no armed, bounded GPU fan control exists on the tuned device, which is
-    /// not an error — Auto OC simply runs on the card's own curve, as it did before.
-    /// </summary>
-    private async Task<(IHardwareAdapter Adapter, PreparedAction Prepared)?> TryHoldGpuFanHighAsync(
-        string deviceId,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            CapabilityDescriptor? fan = GetSnapshot().Capabilities.FirstOrDefault(capability =>
-                capability.Id.StartsWith(NvidiaGpuFanAdapter.CapabilityPrefix, StringComparison.Ordinal)
-                && string.Equals(capability.DeviceId, deviceId, StringComparison.Ordinal)
-                && capability.Range is not null
-                && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified);
-            if (fan?.Range is not NumericRange range)
-            {
-                return null;
-            }
-
-            IHardwareAdapter adapter = FindAdapter(fan.AdapterId);
-            double duty = Math.Clamp(AutoOcFanAssistPercent, range.Minimum, range.Maximum);
-            PreparedAction prepared = await adapter.PrepareAsync(
-                new ProfileAction(
-                    $"auto-oc:fan-assist:{fan.Id}",
-                    fan.AdapterId,
-                    fan.Id,
-                    ControlValue.FromNumeric(duty),
-                    Required: true,
-                    Order: 0),
-                cancellationToken).ConfigureAwait(false);
-            await adapter.ApplyAsync(prepared, cancellationToken).ConfigureAwait(false);
-            return (adapter, prepared);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            // Extra cooling is an optimisation, never a precondition. If it cannot
-            // be applied the run proceeds on the card's own fan curve.
-            ServiceLog.CommandFailed(logger, IpcCommand.StartAutoOcV3, exception);
-            return null;
         }
     }
 
