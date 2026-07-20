@@ -360,6 +360,9 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                     await _store!.GetSuiteEntitiesAsync<AutoOcProfileValidationV1>(SuiteEntityKind.AutoOcProfileValidation, cancellationToken).ConfigureAwait(false)),
                 IpcCommand.PreviewProfileV2 => await PreviewProfileV2Async(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SaveProfileV2 => await SaveProfileV2Async(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.GetGpuFanState => Success(
+                    request,
+                    await ReadGpuFanStateAsync(cancellationToken).ConfigureAwait(false)),
                 IpcCommand.GetCoolingGraphs => Success(
                     request,
                     await _store!.GetSuiteEntitiesAsync<CoolingGraphV1>(SuiteEntityKind.CoolingGraph, cancellationToken).ConfigureAwait(false)),
@@ -1467,7 +1470,18 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             coolingControls).ConfigureAwait(false);
         if (transaction.State == ProfileTransactionState.RecoveryRequired)
         {
-            _rollbackBlocked = true;
+            // A profile with no direct hardware actions that only activates a cooling
+            // graph can only have reached RecoveryRequired through the cooling-graph
+            // replace above (nothing else ran) — the graph's own outputs are always
+            // duty-percent-bounded fan/pump controls, never clock, power, or voltage.
+            // ReplaceActiveCoolingGraphTransactionAsync already published the cooling
+            // subsystem's own RecoveryRequired state, so scope the failure there
+            // instead of locking every unrelated hardware capability service-wide.
+            bool isCoolingGraphOnlyProfile = hardwareProfile.Actions.Count == 0 && requestedCoolingGraph is not null;
+            if (!isCoolingGraphOnlyProfile)
+            {
+                _rollbackBlocked = true;
+            }
             return FailureWithPayload(
                 request,
                 "RECOVERY_REQUIRED",
@@ -3920,6 +3934,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         await _hardwareMutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Stop any curve that drives the GPU fan before resetting it. This transaction
+            // resets each family to its default and verifies the read-back, and an active
+            // cooling graph re-commands its outputs every tick — so it overwrites the reset
+            // inside the verification window and the family fails even though the reset
+            // itself succeeded. That is what left the fan stranded under manual control on
+            // disarm. Arming resets too, so the same race applies there whenever a curve is
+            // already running, and both paths are covered here.
+            if (available.Any(family =>
+                string.Equals(family.Name, HardwareControlFamilyNames.GpuFan, StringComparison.Ordinal)))
+            {
+                await DeactivateGpuFanCoolingGraphAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             foreach (HardwareControlFamilyDefinition family in available)
             {
                 family.SetTransportGate(true);
@@ -3939,7 +3966,24 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
             if (!allVerified)
             {
-                _rollbackBlocked = true;
+                // Scoped the same way as the cooling-graph recovery paths: the GPU
+                // fan family's duty is always clamped to a safe bound before any
+                // write reaches hardware, unlike power limit or clock offset, so an
+                // unverified fan reset alone does not need to lock every other
+                // requested family too.
+                // Record why each family failed. The per-family detail is otherwise returned
+                // only in the IPC payload, so a failure that the caller renders as its
+                // generic summary leaves no trace of the actual cause anywhere on disk.
+                foreach (HardwareControlFamilyResult failed in results.Where(result => !result.ReadBackVerified))
+                {
+                    ServiceLog.HardwareControlFamilyResetFailed(logger, failed.Family, failed.Message);
+                }
+
+                if (!OnlyGpuFanFamilyFailed(results))
+                {
+                    _rollbackBlocked = true;
+                }
+
                 await SaveHardwareRecoveryRequiredLeaseAsync(available, results, CancellationToken.None).ConfigureAwait(false);
             }
 
@@ -3997,7 +4041,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 || _rollbackBlocked;
             if (recoveryRequired)
             {
-                _rollbackBlocked = true;
+                // As above, an unverified GPU-fan-only failure marks recovery for the
+                // fan family (via the lease below) but does not hard-lock every
+                // capability service-wide, provided nothing else is implicated and no
+                // prior lock is already in force.
+                bool fanOnly = !_rollbackBlocked
+                    && operationException is not HardwareStateUnknownException
+                    && recoveryResults.Count == available.Length
+                    && OnlyGpuFanFamilyFailed(recoveryResults);
+                if (!fanOnly)
+                {
+                    _rollbackBlocked = true;
+                }
+
                 await SaveHardwareRecoveryRequiredLeaseAsync(
                     available,
                     recoveryResults,
@@ -4212,6 +4268,64 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     /// NVAPI before the NVML fallback — and a usable earlier candidate short-circuits
     /// the rest so the fallback's native runtime is never even loaded.
     /// </summary>
+    /// <summary>
+    /// Stops the active cooling graph when — and only when — it drives the GPU fan, so that
+    /// disarming can hand the fan back to the driver without the curve immediately taking it
+    /// again. Only one graph is active at a time and it may be driving case fans instead, so
+    /// this checks the graph's outputs first: deactivating unconditionally would silently
+    /// drop case-fan control as a side effect of a GPU-only operation.
+    /// </summary>
+    private async Task DeactivateGpuFanCoolingGraphAsync(CancellationToken cancellationToken)
+    {
+        await _coolingGraphGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
+            string fanCapabilityId = $"{NvidiaGpuFanAdapter.CapabilityPrefix}0";
+            bool drivesGpuFan = active is not null
+                && active.Graph.Outputs.Any(output =>
+                    string.Equals(output.CapabilityId, fanCapabilityId, StringComparison.Ordinal));
+            if (!drivesGpuFan)
+            {
+                return;
+            }
+
+            _activeCoolingGraph = null;
+            _adaptiveCooling = null;
+            PublishInactiveCoolingStatus(
+                "GPU fan control was disarmed; the fan curve stopped and the driver curve was restored.");
+        }
+        finally
+        {
+            _coolingGraphGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Reads live GPU fan state for diagnostics. Read-only: it never arms, writes, or
+    /// resets, so it is safe to call while the fan is locked out or mid-fault — which is
+    /// exactly when the answer is wanted.
+    /// </summary>
+    private async Task<GpuFanStateV1> ReadGpuFanStateAsync(CancellationToken cancellationToken)
+    {
+        IGpuFanCoolerTransport? transport = _gpuFanTransport;
+        if (transport is null)
+        {
+            return new GpuFanStateV1(false, false, "Unavailable", null, null, "unavailable");
+        }
+
+        GpuFanChannelState state = await transport.ReadStateAsync("0", cancellationToken).ConfigureAwait(false);
+        return new GpuFanStateV1(
+            true,
+            _gpuFanArmed,
+            state.Policy.ToString(),
+            state.CommandedDutyPercent,
+            state.MeasuredDutyPercent,
+            transport is NvApiGpuFanCoolerTransport nvapi
+                ? nvapi.DescribeClientFanCoolerControl()
+                : "not an NVAPI transport");
+    }
+
     internal static async Task<IGpuFanCoolerTransport?> SelectUsableFanTransportAsync(
         IReadOnlyList<Func<CancellationToken, Task<IGpuFanCoolerTransport?>>> orderedCandidates,
         CancellationToken cancellationToken)
@@ -4318,6 +4432,13 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
         if (!payload.Armed)
         {
+            // Stop the curve before restoring. An active cooling graph re-commands the fan
+            // every tick, so a restore issued underneath it is overwritten within the settle
+            // window: the fan reads Manual again and the family fails its default-state
+            // verification even though the restore itself succeeded. The curve has to stop
+            // owning the fan before handing it back to the driver means anything.
+            await DeactivateGpuFanCoolingGraphAsync(cancellationToken).ConfigureAwait(false);
+
             // Return the fan to the driver automatic curve while still armed, then disarm,
             // so disarming never strands the fan in a manual state.
             foreach (string fanChannel in (string[])["0", "1"])
@@ -4328,7 +4449,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 }
                 catch (Exception restoreException) when (restoreException is GpuFanSafetyException or InvalidOperationException)
                 {
-                    // Nothing to restore (never written) or a transient driver error.
+                    // Nothing to restore (never written) or a transient driver error. Disarm
+                    // still proceeds, but the reason is recorded: swallowing it silently hides
+                    // the case where the fan is genuinely stranded under manual control, which
+                    // is indistinguishable from the benign case at the call site.
+                    ServiceLog.GpuFanDisarmRestoreFailed(logger, fanChannel, restoreException);
                 }
             }
         }
@@ -5084,6 +5209,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         await _coolingGraphGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         ActiveCoolingGraphRuntime? previous = _activeCoolingGraph;
         HardwareSnapshot snapshot = GetSnapshot();
+        SeedRetainedOutputRateLimits(previous, requested);
         try
         {
             CoolingGraphRuntimeTick firstTick = requested.Runtime.Evaluate(
@@ -5167,6 +5293,17 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
             if (recoveryErrors.Count > 0)
             {
+                Volatile.Write(ref _coolingRuntimeStatus, new CoolingRuntimeStatusV1(
+                    CoolingRuntimeStatusV1.CurrentSchemaVersion,
+                    requested.ProfileId,
+                    requested.Graph.Id,
+                    CoolingRuntimeState.RecoveryRequired,
+                    DateTimeOffset.UtcNow,
+                    EmergencySince: null,
+                    new Dictionary<string, double>(),
+                    [],
+                    new Dictionary<string, int>(),
+                    $"RecoveryRequired: {exception.Message} Recovery errors: {string.Join("; ", recoveryErrors)}"));
                 throw new HardwareStateUnknownException(
                     "cooling-policy",
                     "ReplaceActiveCoolingGraph",
@@ -5179,6 +5316,47 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         finally
         {
             _coolingGraphGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// A freshly constructed <see cref="ActiveCoolingGraphRuntime"/> has an empty
+    /// <c>LastApplied</c>, so its first tick skips the per-output slew limit
+    /// entirely and commands the raw curve value in one write — e.g. switching a
+    /// GPU-fan auto-mode from Cooling (53%) to Silent (30% at the same
+    /// temperature) demanded an instant 23-point drop. That outran the fan's
+    /// physical settle window on the reference rig, failed verification, and the
+    /// resulting recovery attempt could itself fail and lock all hardware writes.
+    /// For any output the new graph retains from the previous one, carry over the
+    /// previous graph's last commanded duty and timestamp so the replacement's
+    /// first tick is rate-limited exactly like any other tick, instead of getting
+    /// an unbounded first jump.
+    /// </summary>
+    internal static void SeedRetainedOutputRateLimits(
+        ActiveCoolingGraphRuntime? previous,
+        ActiveCoolingGraphRuntime requested)
+    {
+        if (previous is null)
+        {
+            return;
+        }
+
+        HashSet<string> requestedOutputs = requested.Graph.Outputs
+            .Select(output => output.CapabilityId)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (CoolingGraphOutputV1 output in previous.Graph.Outputs)
+        {
+            if (!requestedOutputs.Contains(output.CapabilityId))
+            {
+                continue;
+            }
+
+            if (previous.LastApplied.TryGetValue(output.CapabilityId, out double duty)
+                && previous.LastAppliedAt.TryGetValue(output.CapabilityId, out DateTimeOffset at))
+            {
+                requested.LastApplied[output.CapabilityId] = duty;
+                requested.LastAppliedAt[output.CapabilityId] = at;
+            }
         }
     }
 
@@ -5365,12 +5543,47 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         PreparedAction prepared = await adapter.PrepareAsync(action, cancellationToken).ConfigureAwait(false);
         await adapter.ApplyAsync(prepared, cancellationToken).ConfigureAwait(false);
         ActionVerification verification = await adapter.VerifyAsync(prepared, cancellationToken).ConfigureAwait(false);
-        if (!verification.Success)
+        if (!verification.Success
+            && !await IsAcceptableZeroRpmIdleAsync(capability, dutyPercent, verification, cancellationToken).ConfigureAwait(false))
         {
             throw new InvalidOperationException($"Cooling output '{capability.Name}' did not read back after a graph update: {verification.Message}");
         }
 
         active.LastApplied[capability.Id] = dutyPercent;
+    }
+
+    private const double ZeroRpmIdleObservedCeilingPercent = 2.0;
+
+    /// <summary>
+    /// A case fan that the motherboard/BIOS keeps stopped at low temperature — or
+    /// that simply will not spin at a low commanded duty — reads back ~0%, the same
+    /// zero-RPM idle the GPU fan exhibits. For a NON-safety-critical output that is an
+    /// acceptable realisation of a below-maximum duty, not a control failure, so the
+    /// running cooling loop tolerates it instead of failing closed and locking cooling.
+    /// A pump or CPU fan (safety-critical) is NEVER excused — it must physically reach
+    /// its commanded duty, so a stopped pump/CPU fan still fails closed — and a
+    /// maximum/emergency command must physically move any fan. This tolerance lives only
+    /// in the running cooling loop; the commissioning/calibration paths keep their strict
+    /// stop-and-restart verification, so enabling a true zero-RPM curve point is unchanged.
+    /// The GPU fan reaches its own zero-RPM acceptance inside its adapter, so it never
+    /// gets here; this covers the motherboard case-fan outputs.
+    /// </summary>
+    private async Task<bool> IsAcceptableZeroRpmIdleAsync(
+        CapabilityDescriptor capability,
+        double commandedDutyPercent,
+        ActionVerification verification,
+        CancellationToken cancellationToken)
+    {
+        if (capability.Range is not NumericRange range
+            || commandedDutyPercent >= range.Maximum - 1e-6
+            || verification.ObservedValue?.Numeric is not double observed
+            || observed > ZeroRpmIdleObservedCeilingPercent)
+        {
+            return false;
+        }
+
+        CoolingOutputAssignmentV1? assignment = await GetCoolingOutputAssignmentAsync(capability, cancellationToken).ConfigureAwait(false);
+        return assignment is not { IsSafetyCritical: true };
     }
 
     private async Task RecoverCoolingGraphFailureAsync(
@@ -5391,7 +5604,14 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _activeCoolingGraph = null;
         if (errors.Count > 0)
         {
-            _rollbackBlocked = true;
+            // This is deliberately narrower than the general rollback-blocked lock:
+            // a cooling graph's outputs are structurally guaranteed to be duty-percent
+            // fan/pump controls (Cooling/CoolingSafety domain, always clamped to a safe
+            // bound by the adapter, the graph engine, and this runtime's own step
+            // limiter before any write reaches hardware) — never clock, power, or
+            // voltage. An unresolved fan-reset is a bookkeeping gap, not a physical
+            // danger, so it blocks further cooling automation (below) without locking
+            // every unrelated GPU/case-fan capability service-wide.
             Volatile.Write(ref _coolingRuntimeStatus, new CoolingRuntimeStatusV1(
                 CoolingRuntimeStatusV1.CurrentSchemaVersion,
                 active.ProfileId,
@@ -6100,7 +6320,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 _gpuClockArmed = false;
             }
 
-            _rollbackBlocked = !recovery.AllDefaultsVerified;
+            _rollbackBlocked = !recovery.AllDefaultsVerified && !OnlyGpuFanRecoveryFailed(recovery);
             if (pending is not null)
             {
                 ProfileTransaction recovered = pending with
@@ -6141,6 +6361,33 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _gpuClockTransport?.SetArmed(armed);
     }
 
+    /// <summary>
+    /// True when every failed default-state verification belongs to the GPU fan
+    /// adapter specifically. Fan duty is always clamped to a safe bound before any
+    /// write reaches hardware (the adapter, the graph engine, and the runtime's own
+    /// step limiter all enforce it) — never clock, power, or voltage — so an
+    /// unresolved fan recovery does not carry the same risk as leaving those other
+    /// domains unproven. Used to scope the global write lock away from a
+    /// startup/shutdown recovery that only ever touched the fan.
+    /// </summary>
+    internal static bool OnlyGpuFanRecoveryFailed(HardwareRecoveryResult recovery) =>
+        !recovery.AllDefaultsVerified
+        && recovery.Verifications
+            .Where(verification => !verification.Success)
+            .All(verification => verification.AdapterId == NvidiaGpuFanAdapter.AdapterId);
+
+    /// <summary>
+    /// Family-result counterpart to <see cref="OnlyGpuFanRecoveryFailed"/> for the
+    /// arm/disarm transaction path: true when at least one family failed read-back
+    /// and every one that did is the GPU fan family. Same rationale — fan duty is
+    /// structurally safety-bounded, clock/power are not.
+    /// </summary>
+    internal static bool OnlyGpuFanFamilyFailed(IReadOnlyList<HardwareControlFamilyResult> results) =>
+        results.Any(result => !result.ReadBackVerified)
+        && results
+            .Where(result => !result.ReadBackVerified)
+            .All(result => result.Family == HardwareControlFamilyNames.GpuFan);
+
     private async Task CompleteCleanShutdownAsync()
     {
         if (_store is null || _engine is null)
@@ -6178,7 +6425,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             marker.Id,
             marker,
             CancellationToken.None).ConfigureAwait(false);
-        _rollbackBlocked = !recovery.AllDefaultsVerified;
+        _rollbackBlocked = !recovery.AllDefaultsVerified && !OnlyGpuFanRecoveryFailed(recovery);
         if (recovery.AllDefaultsVerified)
         {
             await CompleteAutoOcActiveSessionAsync(
@@ -6309,7 +6556,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
-    private sealed class ActiveCoolingGraphRuntime(
+    internal sealed class ActiveCoolingGraphRuntime(
         string profileId,
         CoolingGraphV1 graph,
         IReadOnlyDictionary<string, FanCalibrationV2> calibrations,

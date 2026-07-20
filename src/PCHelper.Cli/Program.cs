@@ -31,12 +31,14 @@ internal static class Cli
                 "calibrate-case-fan" => await CalibrateCaseFanAsync(args, json),
                 "operation" => await OperationAsync(args, json),
                 "cooling-reports" => await ServiceCommandAsync<IReadOnlyList<CoolingQualificationReportV1>>(IpcCommand.GetCoolingQualificationReports, json),
+                "cooling-graphs" => await ServiceCommandAsync<IReadOnlyList<CoolingGraphV1>>(IpcCommand.GetCoolingGraphs, json),
                 "discover-controllers" => await ServiceCommandAsync<ControllerDiscoveryResultV1>(IpcCommand.DiscoverControllers, json),
                 "discover-hid" => await DiscoverHidAsync(json),
                 "ryzen-smu-feasibility" => await ReadRyzenSmuFeasibilityAsync(json),
                 "close-blockers" => await StopConflictingProcessesAsync(args, json),
                 "kraken-rgb" => await SetKrakenLightingAsync(args, json),
                 "kraken-pump" => await SetKrakenPumpAsync(args, json),
+                "gpu-fan-state" => await ServiceCommandAsync<GpuFanStateV1>(IpcCommand.GetGpuFanState, json),
                 "gpu-fan-arm" => await SetGpuFanArmedAsync(args, json, arm: true),
                 "gpu-fan-disarm" => await SetGpuFanArmedAsync(args, json, arm: false),
                 "gpu-power-arm" => await SetGpuPowerArmedAsync(args, json, arm: true),
@@ -1388,6 +1390,7 @@ internal static class Cli
                                                  Set a fixed Kraken X3 pump duty (hard floor 60%, never stopped) with firmware status read-back.
             pchelper-cli gpu-fan-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU fan control after exact-device acknowledgement.
+            pchelper-cli gpu-fan-state [--json] Read live GPU fan policy and duty through the service. Read-only.
             pchelper-cli gpu-fan-disarm [--json] Disarm GPU fan control and restore the automatic curve.
             pchelper-cli gpu-power-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU power-limit control after exact-device acknowledgement.

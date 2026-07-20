@@ -95,6 +95,7 @@ public enum IpcCommand
     GetMacroRecordingStatus,
     BeginMacroRecording,
     StopMacroRecording,
+    GetGpuFanState,
     CancelMacroRecording,
     RecoverMacroRecording,
     GetScripts,
@@ -188,6 +189,7 @@ public static class IpcCommandPolicy
         IpcCommand.GetProfilesV2 or
         IpcCommand.GetAutoOcProfileValidations or
         IpcCommand.GetCoolingGraphs or
+        IpcCommand.GetGpuFanState or
         IpcCommand.GetCoolingOutputAssignments or
         IpcCommand.GetFanCommissioningSessions or
         IpcCommand.GetFanCalibrations or
@@ -509,3 +511,26 @@ public sealed record CompatibilityReportV1(
     IReadOnlyDictionary<string, string> Runtime,
     IReadOnlyList<string> SanitisedLogLines,
     bool UserApproved);
+
+/// <summary>
+/// A read-only view of what the GPU fan is actually doing right now, read through the
+/// service's own privileged NVAPI session. Diagnosing fan faults previously meant loading
+/// NvAPIWrapper by reflection from an outside process, which answers from an unprivileged
+/// session and so reports privilege-gated calls as refused whether or not the service can
+/// make them — a misleading answer for the one question worth asking. This reports what
+/// the service sees. <paramref name="Policy"/> is "Manual" while RigPilot is driving the
+/// fan and "Automatic" once the driver owns it again.
+/// </summary>
+/// <param name="ClientFanCoolerControl">
+/// What the client fan-cooler interface reports, or the NVAPI status that refused it.
+/// Ampere and later cards implement this generation of the cooler API while still exposing
+/// the legacy one, and the two disagree about what is permitted — so whether this reads or
+/// refuses is the fact that decides how a card can be handed back to its driver.
+/// </param>
+public sealed record GpuFanStateV1(
+    bool Available,
+    bool Armed,
+    string Policy,
+    int? CommandedDutyPercent,
+    int? MeasuredDutyPercent,
+    string ClientFanCoolerControl);

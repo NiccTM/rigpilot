@@ -79,6 +79,39 @@ public sealed class GpuFanReadBackSettlingTests
         Assert.Equal(0, delays);
     }
 
+    [Fact]
+    public async Task VerifyAcceptsAStoppedFanAsZeroRpmIdleForALowDutyCommand()
+    {
+        // The exact reference-rig behaviour: manual 30% at idle temp keeps the RTX
+        // 3090 in its firmware zero-RPM idle, reading back 0% for the whole settle
+        // window. That is the card's designed passive cooling, not a control failure,
+        // so a below-maximum duty must verify even though the fan stays stopped.
+        RampingFanTransport transport = new(rampLevels: [0]);
+        NvidiaGpuFanAdapter adapter = new(transport, "nvidia:gpu-0", "0", () => true, settleDelay: NoDelay);
+        PreparedAction prepared = await PrepareAndApply(adapter, transport, 30);
+
+        ActionVerification result = await adapter.VerifyAsync(prepared, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("zero-RPM idle", result.Message);
+    }
+
+    [Fact]
+    public async Task VerifyStillRequiresAMaximumCommandToPhysicallySpinTheFan()
+    {
+        // A maximum/emergency command is the one duty that exists purely for thermal
+        // safety — at emergency temperatures zero-RPM never engages, so a fan stuck
+        // at 0% under a full-speed command is a genuine fault and must NOT be excused
+        // as zero-RPM idle. Bounds ceiling is 100, so 100 is the maximum.
+        RampingFanTransport transport = new(rampLevels: [0]);
+        NvidiaGpuFanAdapter adapter = new(transport, "nvidia:gpu-0", "0", () => true, settleDelay: NoDelay);
+        PreparedAction prepared = await PrepareAndApply(adapter, transport, 100);
+
+        ActionVerification result = await adapter.VerifyAsync(prepared, CancellationToken.None);
+
+        Assert.False(result.Success);
+    }
+
     private static async Task<PreparedAction> PrepareAndApply(
         NvidiaGpuFanAdapter adapter, RampingFanTransport transport, int duty)
     {

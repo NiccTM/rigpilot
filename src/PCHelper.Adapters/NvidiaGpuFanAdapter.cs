@@ -27,9 +27,30 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
     // setpoint. Verifying immediately caught the fan mid-ramp (41% while climbing to
     // a commanded 50%, on the reference rig) and rejected a write that had in fact
     // taken. The manual policy flips at once, so the level is polled toward the
-    // target across a bounded settle window before the verdict.
-    private static readonly TimeSpan FanSettleInterval = TimeSpan.FromMilliseconds(250);
-    private const int FanSettleAttempts = 8;
+    // target across a bounded settle window before the verdict. A cold start — the
+    // fan physically stopped (idled at native automatic 0%) rather than already
+    // spinning — needs longer still: a live GPU-fan mode switch commanded 30% from a
+    // dead stop and read back 0% after an earlier, denser 2-second budget.
+    //
+    // A denser poll does not just wait longer, it also asks the driver more often:
+    // widening the window by shortening the interval (more reads in the same span)
+    // made the *next* call — the safety-critical restore-to-default below — more
+    // likely to hit NVAPI_INVALID_USER_PRIVILEGE, reproduced live even with a
+    // widened window and a retry. The settle poll and the driver-session recovery
+    // are the same resource: every read here is one more NVAPI call in the same
+    // burst the reset has to survive. The window is sized for the cold-start case
+    // by covering more wall-clock time with a longer interval, not more calls.
+    private static readonly TimeSpan FanSettleInterval = TimeSpan.FromMilliseconds(500);
+    private const int FanSettleAttempts = 12;
+
+    // Restoring firmware default is the one call that must not fail permanently —
+    // every caller (rollback, explicit reset, cooling-graph recovery) escalates an
+    // unrecovered failure straight to a full hardware write lock. A short pause
+    // before the first attempt lets the driver session settle after the preceding
+    // settle-poll burst, rather than immediately adding another call on top of it.
+    private static readonly TimeSpan ResetCooldownInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan ResetRetryInterval = TimeSpan.FromMilliseconds(750);
+    private const int ResetRetryAttempts = 6;
 
     private readonly IGpuFanCoolerTransport _transport;
     private readonly string _deviceId;
@@ -171,19 +192,44 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
     {
         EnsureOwnedCapability(action.Action.CapabilityId);
         int requested = RequireDuty(action.Action.Value);
+        GpuFanBounds? bounds = await _transport.ReadBoundsAsync(_channelId, cancellationToken).ConfigureAwait(false);
         GpuFanChannelState state = await ReadSettledStateAsync(requested, cancellationToken).ConfigureAwait(false);
         int? achieved = state.MeasuredDutyPercent ?? state.CommandedDutyPercent;
-        bool success = state.Policy == GpuFanControlPolicy.Manual
-            && achieved is int value
-            && Math.Abs(value - requested) <= VerifyTolerancePercent;
+        bool manual = state.Policy == GpuFanControlPolicy.Manual;
+        bool atTarget = achieved is int value && Math.Abs(value - requested) <= VerifyTolerancePercent;
+        bool zeroRpmIdle = manual && IsAcceptableZeroRpmIdle(achieved, requested, bounds);
+        bool success = manual && (atTarget || zeroRpmIdle);
+        string message = !success
+            ? $"GPU fan duty read-back {achieved?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable"}% did not match requested {requested}%."
+            : zeroRpmIdle
+                ? $"GPU fan is in the card's zero-RPM idle (stopped); the manual {requested}% target applies once the card needs airflow."
+                : $"GPU fan duty verified within {VerifyTolerancePercent}% of {requested}%.";
         return new ActionVerification(
             action.Action.Id,
             success,
             achieved is int observed ? ControlValue.FromNumeric(observed) : null,
-            success
-                ? $"GPU fan duty verified within {VerifyTolerancePercent}% of {requested}%."
-                : $"GPU fan duty read-back {achieved?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable"}% did not match requested {requested}%.");
+            message);
     }
+
+    /// <summary>
+    /// A GPU with zero-RPM idle keeps its fan physically stopped (0%) at low
+    /// temperatures even under manual control: the commanded duty is the target the
+    /// firmware honours once the card needs airflow, not an unconditional spin
+    /// command. On the reference RTX 3090 a manual 30% at ~35 °C reads back 0% and
+    /// the fan simply stays off — the card's designed passive-cooling behaviour, not
+    /// a control failure, and forcing it to spin a cool card would be worse for
+    /// noise and wear. A stopped fan is therefore an acceptable realisation of any
+    /// duty <em>below</em> the controller maximum. A maximum/emergency command (the
+    /// only duty that exists purely for thermal safety) must still physically spin
+    /// the fan, so a genuine "will not reach full speed" fault is still caught — and
+    /// at emergency temperatures the card is far too hot for zero-RPM to engage, so
+    /// this never suppresses real cooling. The card's own hardware thermal
+    /// throttle/shutdown remains the actual safeguard; this control is supplementary.
+    /// </summary>
+    private static bool IsAcceptableZeroRpmIdle(int? achieved, int requestedDutyPercent, GpuFanBounds? bounds) =>
+        achieved is 0
+        && bounds is { IsValid: true } valid
+        && requestedDutyPercent < valid.CeilingPercent;
 
     /// <summary>
     /// Reads the channel state, giving a ramping fan up to the settle window to
@@ -222,7 +268,7 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
         {
             // No captured manual state, or it was automatic before: return to the safe
             // automatic curve rather than leaving an unknown manual duty in place.
-            await _transport.RestoreAutomaticAsync(_channelId, cancellationToken).ConfigureAwait(false);
+            await RestoreAutomaticWithRetryAsync(cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -232,14 +278,42 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
         }
         else
         {
-            await _transport.RestoreAutomaticAsync(_channelId, cancellationToken).ConfigureAwait(false);
+            await RestoreAutomaticWithRetryAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
     public async Task ResetToDefaultAsync(string capabilityId, CancellationToken cancellationToken)
     {
         EnsureOwnedCapability(capabilityId);
-        await _transport.RestoreAutomaticAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        await RestoreAutomaticWithRetryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A live GPU-fan auto-mode switch reproduced the driver refusing the restore-to-
+    /// default call itself (NVAPI_INVALID_USER_PRIVILEGE) moments after the preceding
+    /// apply's settle-poll made a burst of rapid NVAPI reads and a write — the same
+    /// rapid-call driver-session fragility this session already found for clock-offset
+    /// writes, this time on the fan's own safety restore. Every caller of this restore
+    /// (rollback, explicit reset, and the cooling-graph recovery path) escalates an
+    /// unrecovered failure straight to a full hardware write lock, so the one operation
+    /// that must not fail on a transient refusal is retried a few times with a short
+    /// gap first.
+    /// </summary>
+    private async Task RestoreAutomaticWithRetryAsync(CancellationToken cancellationToken)
+    {
+        await _settleDelay(ResetCooldownInterval, cancellationToken).ConfigureAwait(false);
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await _transport.RestoreAutomaticAsync(_channelId, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException && attempt < ResetRetryAttempts)
+            {
+                await _settleDelay(ResetRetryInterval, cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     public async Task<HardwareStateVerification> VerifyDefaultStateAsync(
@@ -265,6 +339,7 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
     {
         EnsureOwnedCapability(action.Action.CapabilityId);
         GpuFanChannelState? expected = DeserializeRollback(action.AdapterToken);
+        GpuFanBounds? bounds = await _transport.ReadBoundsAsync(_channelId, cancellationToken).ConfigureAwait(false);
         // Restoring a prior MANUAL duty ramps just like an apply, so let the level
         // settle toward it; restoring the automatic curve is a policy flip with no
         // ramp, so a single read is enough.
@@ -276,7 +351,10 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
             : actual.Policy == GpuFanControlPolicy.Manual
                 && expected.CommandedDutyPercent is int requested
                 && (actual.MeasuredDutyPercent ?? actual.CommandedDutyPercent) is int observed
-                && Math.Abs(observed - requested) <= VerifyTolerancePercent;
+                && (Math.Abs(observed - requested) <= VerifyTolerancePercent
+                    // The prior manual duty may itself have been a zero-RPM-idle state:
+                    // restoring it can validly read back a stopped fan. Same rule as VerifyAsync.
+                    || IsAcceptableZeroRpmIdle(observed, requested, bounds));
         return new HardwareStateVerification(
             Manifest.Id,
             action.Action.CapabilityId,

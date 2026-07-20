@@ -193,6 +193,21 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter, IHardwareStat
     {
         EnsureOwnedCapability(capabilityId);
         GpuPowerLimitBounds bounds = await RequireBoundsAsync(cancellationToken).ConfigureAwait(false);
+
+        // Skip the write when the limit already reads as the vendor default. Arming
+        // resets every family from a cold start, so this normally fires against a card
+        // that has never been moved off its default — and the driver refuses the write
+        // outright (NVIDIAApiException) often enough that issuing it purely to reach the
+        // state we are already in is what fails the arm and hard-locks every family.
+        // The comparison is the same predicate VerifyDefaultStateAsync uses, so a skip
+        // can never disagree with the verification that immediately follows it.
+        GpuPowerLimitState current = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        if (current.CurrentMilliwatts is uint observed
+            && Math.Abs((long)observed - bounds.DefaultMilliwatts) <= VerifyToleranceMilliwatts)
+        {
+            return;
+        }
+
         await _transport.SetPowerLimitAsync(_channelId, bounds.DefaultMilliwatts, cancellationToken).ConfigureAwait(false);
     }
 
