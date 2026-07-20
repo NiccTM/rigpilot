@@ -703,8 +703,8 @@ public sealed partial class MainViewModel
             new KrakenLightingRequestV1(KrakenLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, KrakenLightingRequestV1.ExactDeviceId),
             response =>
             {
-                KrakenLightingResultV1? result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload);
-                return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+                RgbWriteResult? result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload)?.ToRgbWriteResult();
+                return (result?.WriteIssued == true, result?.Message);
             },
             outcomes,
             reservedFamilies);
@@ -716,8 +716,8 @@ public sealed partial class MainViewModel
             new AuraLightingRequestV1(AuraLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, AuraLightingRequestV1.ExactDeviceId),
             response =>
             {
-                AuraLightingResultV1? result = IpcJson.FromElement<AuraLightingResultV1>(response.Payload);
-                return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+                RgbWriteResult? result = IpcJson.FromElement<AuraLightingResultV1>(response.Payload)?.ToRgbWriteResult();
+                return (result?.WriteIssued == true, result?.Message);
             },
             outcomes,
             reservedFamilies);
@@ -729,7 +729,7 @@ public sealed partial class MainViewModel
             new DimmRgbRequestV1(DimmRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, DimmRgbRequestV1.ExactDeviceId),
             response =>
             {
-                DimmRgbResultV1? result = IpcJson.FromElement<DimmRgbResultV1>(response.Payload);
+                RgbWriteResult? result = IpcJson.FromElement<DimmRgbResultV1>(response.Payload)?.ToRgbWriteResult();
                 return (result?.WriteIssued == true, result?.Message);
             },
             outcomes,
@@ -742,8 +742,8 @@ public sealed partial class MainViewModel
             new RazerRgbRequestV1(RazerRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, RazerRgbRequestV1.ExactDeviceId),
             response =>
             {
-                RazerRgbResultV1? result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload);
-                return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
+                RgbWriteResult? result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload)?.ToRgbWriteResult();
+                return (result?.WriteIssued == true, result?.Message);
             },
             outcomes,
             reservedFamilies);
