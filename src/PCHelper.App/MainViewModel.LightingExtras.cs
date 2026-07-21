@@ -392,6 +392,21 @@ public sealed partial class MainViewModel
 
             List<RgbApplyOutcome> outcomes = [];
             HashSet<string> reservedFamilies = new(StringComparer.OrdinalIgnoreCase);
+
+            // Only the OpenRGB bridge renders per-LED gradients. Dynamic Lighting and the
+            // native writers are flat-colour, so a gradient colourway would otherwise reach
+            // them as the stale manual colour (Sunset -> blue). Lower the colourway to its
+            // representative colour for those tiers so Sunset reaches them as its amber. The
+            // bridge still receives the manual colour and renders the full gradient itself.
+            string flatColour = colour;
+            if (useColourway
+                && SelectedColourway is { Id: var colourwayId }
+                && !string.Equals(colourwayId, "static", StringComparison.Ordinal)
+                && RgbColour.TryParse(colour, out RgbColour manualColour))
+            {
+                flatColour = LightingColourways.RepresentativeColour(colourwayId, manualColour).ToString();
+            }
+
             bool openRgbActive = await ApplyReadyOpenRgbRoutesAsync(
                 colour,
                 brightness,
@@ -402,7 +417,7 @@ public sealed partial class MainViewModel
             if (!openRgbActive)
             {
                 await ApplyReadyDynamicLightingRoutesAsync(
-                    colour,
+                    flatColour,
                     brightness,
                     scene,
                     outcomes,
@@ -410,7 +425,7 @@ public sealed partial class MainViewModel
             }
 
             await ApplyUncoveredNativeRgbRoutesAsync(
-                colour,
+                flatColour,
                 brightness,
                 turnOff,
                 outcomes,

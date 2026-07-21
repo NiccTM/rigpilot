@@ -2164,8 +2164,11 @@
                     <StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="BRIGHTNESS (%)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" /><TextBox Text="{Binding OpenRgbBrightnessText, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="OpenRGB brightness percentage" automation:AutomationProperties.AutomationId="Lighting.OpenRgbBrightness" /></StackPanel>
                   </Grid>
                   <WrapPanel Margin="0,14,0,0">
-                    <Button Content="Apply colourway" Command="{Binding ApplyOpenRgbCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" />
-                    <Button Content="Turn lighting off" Command="{Binding TurnOffOpenRgbCommand}" Margin="0,0,8,8" />
+                    <Button Content="Apply to all lighting" Command="{Binding SyncAllRgbCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                            ToolTip="Applies the colour or colourway to every ready endpoint: full gradient on the OpenRGB bridge, and the colourway's representative colour on Dynamic Lighting and native devices. Per-endpoint results appear below."
+                            automation:AutomationProperties.Name="Apply the colour or colourway to every ready RGB route" automation:AutomationProperties.AutomationId="Lighting.ApplyAllRgb" />
+                    <Button Content="Turn all lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn every ready RGB route off" automation:AutomationProperties.AutomationId="Lighting.ApplyAllRgbOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
                   <TextBlock Text="AMBIENT &amp; MUSIC LIGHTING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
@@ -2181,16 +2184,9 @@
                             automation:AutomationProperties.Name="Stop ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StopAmbient" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="SYNC EVERYTHING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="PER-DEVICE RESULTS" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding RgbSyncStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8"
                              automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.SyncStatus" />
-                  <WrapPanel>
-                    <Button Content="Sync colour to all devices" Command="{Binding SyncAllRgbCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
-                            ToolTip="Uses each ready route once: selective local OpenRGB first, Windows Dynamic Lighting next, then contained exact-device native fallbacks for uncovered families."
-                            automation:AutomationProperties.Name="Sync the chosen colour to every ready RGB route" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgb" />
-                    <Button Content="All lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
-                            automation:AutomationProperties.Name="Turn every ready RGB route off" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgbOff" />
-                  </WrapPanel>
                   <ItemsControl ItemsSource="{Binding LastRgbApplyOutcomes}" Margin="0,2,0,2">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate>

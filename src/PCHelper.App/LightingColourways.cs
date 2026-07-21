@@ -1,3 +1,5 @@
+using PCHelper.Contracts;
+
 namespace PCHelper.App;
 
 /// <summary>
@@ -50,6 +52,21 @@ public static class LightingColourways
         }
 
         return frame;
+    }
+
+    /// <summary>
+    /// A single colour that stands in for a whole colourway on a flat-colour device
+    /// (native writers, Windows Dynamic Lighting) that cannot render the gradient.
+    /// Derived from <see cref="Generate"/> itself — the middle LED of a three-LED
+    /// reference strip is the gradient's midpoint (position 0.5) — so the stand-in
+    /// always tracks the same gradient the OpenRGB bridge renders. "static" returns
+    /// the supplied colour unchanged; brightness is left at full so callers can scale
+    /// afterwards exactly as they do for the manual colour.
+    /// </summary>
+    public static RgbColour RepresentativeColour(string colourwayId, RgbColour staticColour)
+    {
+        uint packed = Generate(colourwayId, 3, (staticColour.Red, staticColour.Green, staticColour.Blue), 100)[1];
+        return new RgbColour((byte)(packed & 0xFF), (byte)((packed >> 8) & 0xFF), (byte)((packed >> 16) & 0xFF));
     }
 
     /// <summary>Deterministic pools of colour, roughly six LEDs per puddle.</summary>
