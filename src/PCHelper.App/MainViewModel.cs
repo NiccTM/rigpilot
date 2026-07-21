@@ -4096,6 +4096,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 || userInitiated
                 || !IsServiceOnline
                 || _status is null
+                // A flagged recovery is often a transient escalation the service clears on
+                // its own retry (e.g. the GPU-fan NVAPI restore settling). Re-read status on
+                // every 1s tick while it is set so the banner reflects the live state within a
+                // second, instead of lingering up to a full control-plane interval after the
+                // service has already recovered.
+                || _status.RecoveryRequired
                 || refreshTime - _lastServiceControlPlaneRefresh >= ServiceControlPlaneRefreshInterval;
             if (refreshControlPlane)
             {
