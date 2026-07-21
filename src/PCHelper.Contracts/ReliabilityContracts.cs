@@ -279,6 +279,25 @@ public sealed record SafetyRecoveryStateV1(
     public const string DefaultId = "recovery.default";
 }
 
+/// <summary>
+/// The GPU power limit the operator last committed through RigPilot (in milliwatts), so
+/// hardware recovery can treat that value — not only the vendor default — as a legitimate
+/// resting state. Persisted because the driver keeps a set limit across a service restart,
+/// and the NVAPI restore write that would otherwise return it to default is refused for the
+/// long-lived service process. A null target means "no operator commitment; vendor default
+/// only", which is the state after an explicit reset. Survives interleaved non-power profiles
+/// because only a profile that actually sets the limit updates it.
+/// </summary>
+public sealed record GpuPowerCommitmentV1(
+    int SchemaVersion,
+    string Id,
+    uint? TargetMilliwatts,
+    DateTimeOffset UpdatedAt)
+{
+    public const int CurrentSchemaVersion = 1;
+    public const string DefaultId = "gpupower.commitment.default";
+}
+
 public sealed record SafetyRecoveryStatusV1(
     int SchemaVersion,
     SafetyRecoveryStateV1 State,

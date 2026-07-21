@@ -64,6 +64,13 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         "Safe mode has not been configured.");
     private DateTimeOffset _lastHealthSignalScan = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(5);
 
+    // The GPU power limit the operator last committed through RigPilot, in milliwatts, or null
+    // for "vendor default only". Hardware recovery treats this as an accepted resting state so a
+    // deliberately-raised power ceiling does not demand the NVAPI restore write the long-lived
+    // service is refused. Loaded on init before the power adapter is built and before recovery
+    // runs; kept current on every power apply and cleared on an explicit reset.
+    private uint? _committedGpuPowerLimitMilliwatts;
+
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         _store = await CreateStoreAsync(cancellationToken).ConfigureAwait(false);
@@ -79,6 +86,27 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             SafetyRecoveryStateV1.DefaultId,
             cancellationToken).ConfigureAwait(false)
             ?? _safetyRecoveryState with { UpdatedAt = DateTimeOffset.UtcNow };
+        GpuPowerCommitmentV1? gpuPowerCommitment = await _store.GetSuiteEntityAsync<GpuPowerCommitmentV1>(
+            SuiteEntityKind.GpuPowerCommitment,
+            GpuPowerCommitmentV1.DefaultId,
+            cancellationToken).ConfigureAwait(false);
+        if (gpuPowerCommitment is not null)
+        {
+            // A recorded commitment (including an explicit null after a reset) is authoritative.
+            _committedGpuPowerLimitMilliwatts = gpuPowerCommitment.TargetMilliwatts;
+        }
+        else
+        {
+            // Bootstrap for a runtime upgraded from a build that never recorded a commitment:
+            // adopt the limit the last committed profile set, so a power limit already applied
+            // before this build is treated as the operator's desired resting state and does not
+            // lock recovery. Persisted so this one-time derivation is not repeated.
+            uint? derived = await DeriveCommittedGpuPowerFromLatestProfileAsync(cancellationToken).ConfigureAwait(false);
+            if (derived is not null)
+            {
+                await UpdateGpuPowerCommitmentAsync(derived, cancellationToken).ConfigureAwait(false);
+            }
+        }
         foreach (OwnershipLeaseV1 lease in await _store.GetSuiteEntitiesAsync<OwnershipLeaseV1>(SuiteEntityKind.OwnershipLease, cancellationToken).ConfigureAwait(false))
         {
             _ownershipLeases.Restore(lease, DateTimeOffset.UtcNow);
@@ -152,7 +180,13 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         {
             _gpuPowerTransport = powerTransport;
             TraceableHardwareAdapter gpuPowerAdapter = new(
-                new NvidiaGpuPowerLimitAdapter(powerTransport, _gpuFanDeviceId, "0", () => _gpuPowerArmed));
+                new NvidiaGpuPowerLimitAdapter(
+                    powerTransport,
+                    _gpuFanDeviceId,
+                    "0",
+                    () => _gpuPowerArmed,
+                    isConflicted: null,
+                    committedTargetMilliwatts: () => _committedGpuPowerLimitMilliwatts));
             _gpuPowerAdapter = gpuPowerAdapter;
             adapters.Add(gpuPowerAdapter);
         }
@@ -1355,6 +1389,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
 
         await _store!.SaveProfileAsync(payload.Profile, cancellationToken).ConfigureAwait(false);
+        await CaptureGpuPowerCommitmentAsync(transaction, cancellationToken).ConfigureAwait(false);
         await CompleteAutoOcActiveSessionAsync(previousProfileId, countSuccessfulColdBoot: false, cancellationToken).ConfigureAwait(false);
         return Success(request, new ApplyProfileResult(transaction, _engine.ActiveProfileId));
     }
@@ -1497,6 +1532,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             payload.Profile.Id,
             payload.Profile,
             cancellationToken).ConfigureAwait(false);
+        await CaptureGpuPowerCommitmentAsync(transaction, cancellationToken).ConfigureAwait(false);
         try
         {
             if (!string.Equals(previousProfileId, payload.Profile.Id, StringComparison.Ordinal))
@@ -1748,6 +1784,14 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
 
         string? activeProfileId = _engine!.ActiveProfileId;
+        if (capability.Id.StartsWith(NvidiaGpuPowerLimitAdapter.CapabilityPrefix, StringComparison.Ordinal))
+        {
+            // An explicit operator reset must reach the vendor default, so drop any committed
+            // limit first — otherwise the adapter would treat the current committed value as an
+            // accepted resting state and skip the restore write.
+            await UpdateGpuPowerCommitmentAsync(null, cancellationToken).ConfigureAwait(false);
+        }
+
         HardwareRecoveryResult recovery = await _engine.RestoreDefaultsAsync(
             [new HardwareControlLeaseItemV1(capability.AdapterId, capability.Id)],
             cancellationToken).ConfigureAwait(false);
@@ -4211,6 +4255,83 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 armed => _gpuClockArmed = armed));
         }
         return families.ToArray();
+    }
+
+    /// <summary>
+    /// Records the GPU power limit an applied transaction committed (if any) as the operator's
+    /// desired resting state, so hardware recovery will accept it instead of demanding the
+    /// vendor default. A transaction with no GPU power action leaves the prior commitment
+    /// untouched, so applying an unrelated profile (e.g. lighting) never wipes it.
+    /// </summary>
+    private async Task CaptureGpuPowerCommitmentAsync(ProfileTransaction transaction, CancellationToken cancellationToken)
+    {
+        foreach (PreparedAction prepared in transaction.PreparedActions)
+        {
+            if (!prepared.Action.CapabilityId.StartsWith(NvidiaGpuPowerLimitAdapter.CapabilityPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (prepared.Action.Value.Kind == ControlValueKind.Numeric
+                && prepared.Action.Value.Numeric is double watts
+                && double.IsFinite(watts) && watts > 0)
+            {
+                await UpdateGpuPowerCommitmentAsync((uint)Math.Round(watts * 1000d), cancellationToken).ConfigureAwait(false);
+            }
+
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Reads the GPU power limit (in milliwatts) set by the most recent committed profile that
+    /// carried a power-limit action, or null if none did. Used once to bootstrap the commitment
+    /// on a runtime upgraded from a build that did not record it.
+    /// </summary>
+    private async Task<uint?> DeriveCommittedGpuPowerFromLatestProfileAsync(CancellationToken cancellationToken)
+    {
+        ProfileTransaction? committed = await _store!.GetLatestCommittedAsync(cancellationToken).ConfigureAwait(false);
+        if (committed is null)
+        {
+            return null;
+        }
+
+        foreach (PreparedAction prepared in committed.PreparedActions)
+        {
+            if (prepared.Action.CapabilityId.StartsWith(NvidiaGpuPowerLimitAdapter.CapabilityPrefix, StringComparison.Ordinal)
+                && prepared.Action.Value.Kind == ControlValueKind.Numeric
+                && prepared.Action.Value.Numeric is double watts
+                && double.IsFinite(watts) && watts > 0)
+            {
+                return (uint)Math.Round(watts * 1000d);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Sets and persists the committed GPU power limit (null clears it). Persisted so it
+    /// survives a service restart, which is exactly when recovery needs it to avoid the
+    /// refused NVAPI restore write.
+    /// </summary>
+    private async Task UpdateGpuPowerCommitmentAsync(uint? targetMilliwatts, CancellationToken cancellationToken)
+    {
+        _committedGpuPowerLimitMilliwatts = targetMilliwatts;
+        if (_store is null)
+        {
+            return;
+        }
+
+        await _store.SaveSuiteEntityAsync(
+            SuiteEntityKind.GpuPowerCommitment,
+            GpuPowerCommitmentV1.DefaultId,
+            new GpuPowerCommitmentV1(
+                GpuPowerCommitmentV1.CurrentSchemaVersion,
+                GpuPowerCommitmentV1.DefaultId,
+                targetMilliwatts,
+                DateTimeOffset.UtcNow),
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SaveHardwareRecoveryRequiredLeaseAsync(

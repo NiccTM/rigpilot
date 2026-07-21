@@ -633,7 +633,21 @@ public sealed class SqliteStateStore :
 
     private static void EnsureSuiteEntityType<T>(SuiteEntityKind kind)
     {
-        Type expected = kind switch
+        Type expected = MapSuiteEntityType(kind);
+        if (typeof(T) != expected)
+        {
+            throw new ArgumentException($"Suite entity kind {kind} requires {expected.Name}, not {typeof(T).Name}.", nameof(kind));
+        }
+    }
+
+    /// <summary>
+    /// The persisted CLR type for each suite entity kind. Every <see cref="SuiteEntityKind"/>
+    /// value must map here — a missing entry throws at runtime the first time the service loads
+    /// or saves it, which crashes startup. Public so a test can assert completeness.
+    /// </summary>
+    public static Type MapSuiteEntityType(SuiteEntityKind kind)
+    {
+        return kind switch
         {
             SuiteEntityKind.ProfileV2 => typeof(ProfileV2),
             SuiteEntityKind.CoolingGraph => typeof(CoolingGraphV1),
@@ -667,12 +681,9 @@ public sealed class SqliteStateStore :
             SuiteEntityKind.TakeoverTransaction => typeof(TakeoverTransactionV1),
             SuiteEntityKind.HardwareControlLease => typeof(HardwareControlLeaseV1),
             SuiteEntityKind.AutoOcProfileValidation => typeof(AutoOcProfileValidationV1),
+            SuiteEntityKind.GpuPowerCommitment => typeof(GpuPowerCommitmentV1),
             _ => throw new ArgumentOutOfRangeException(nameof(kind))
         };
-        if (typeof(T) != expected)
-        {
-            throw new ArgumentException($"Suite entity kind {kind} requires {expected.Name}, not {typeof(T).Name}.", nameof(kind));
-        }
     }
 
     private async Task EnforceSizeCapAsync(SqliteConnection connection, CancellationToken cancellationToken)

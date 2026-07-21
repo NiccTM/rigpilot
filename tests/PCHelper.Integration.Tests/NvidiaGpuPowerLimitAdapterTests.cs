@@ -193,6 +193,55 @@ public sealed class NvidiaGpuPowerLimitAdapterTests
         Assert.Empty((await adapter.ProbeAsync(default)).Capabilities);
     }
 
+    [Fact]
+    public async Task RecoveryAcceptsAnOperatorCommittedLimitWithoutIssuingTheRestoreWrite()
+    {
+        // The card sits at a deliberately-raised 385 W ceiling the operator committed. Recovery
+        // must treat that as a resting state: verification succeeds and no restore write is
+        // issued (the very write the long-lived service's NVAPI session is refused).
+        FakeGpuPowerLimitTransport transport = new(ReferenceBounds, initialMilliwatts: 385_000);
+        await using NvidiaGpuPowerLimitAdapter adapter = new(
+            transport, DeviceId, ChannelId, () => true, isConflicted: null,
+            committedTargetMilliwatts: () => 385_000u);
+
+        await adapter.ResetToDefaultAsync(CapabilityId, default);
+        HardwareStateVerification verification = await adapter.VerifyDefaultStateAsync(CapabilityId, default);
+
+        Assert.Empty(transport.LimitCommands);
+        Assert.Equal(385_000u, transport.CurrentMilliwatts);
+        Assert.True(verification.Success);
+    }
+
+    [Fact]
+    public async Task RecoveryStillRestoresTheVendorDefaultWhenThereIsNoCommitment()
+    {
+        // Without a committed target (e.g. after an explicit reset cleared it), a raised limit
+        // is not a resting state: it fails verification and is written back to the default.
+        FakeGpuPowerLimitTransport transport = new(ReferenceBounds, initialMilliwatts: 385_000);
+        await using NvidiaGpuPowerLimitAdapter adapter = new(transport, DeviceId, ChannelId, () => true);
+
+        HardwareStateVerification before = await adapter.VerifyDefaultStateAsync(CapabilityId, default);
+        await adapter.ResetToDefaultAsync(CapabilityId, default);
+
+        Assert.False(before.Success);
+        Assert.Equal([350_000u], transport.LimitCommands);
+        Assert.Equal(350_000u, transport.CurrentMilliwatts);
+    }
+
+    [Fact]
+    public async Task ACommittedLimitOutsideTheDriverRangeIsNeverTrusted()
+    {
+        // A committed value the driver would reject must not be accepted as a resting state;
+        // recovery falls back to demanding the vendor default.
+        FakeGpuPowerLimitTransport transport = new(ReferenceBounds, initialMilliwatts: 385_000);
+        await using NvidiaGpuPowerLimitAdapter adapter = new(
+            transport, DeviceId, ChannelId, () => true, isConflicted: null,
+            committedTargetMilliwatts: () => 500_000u);
+
+        HardwareStateVerification verification = await adapter.VerifyDefaultStateAsync(CapabilityId, default);
+        Assert.False(verification.Success);
+    }
+
     private static ProfileAction Action(int watts) => new(
         "action-1",
         NvidiaGpuPowerLimitAdapter.AdapterId,
