@@ -169,7 +169,7 @@ public sealed partial class MainViewModel
             PersistHardwareControlPreference(enable);
             _hardwareControlArmedThisConnection = enable;
             ShowNotice(enable
-                ? $"Hardware control enabled after {result.Families.Count} GPU family/families passed read-back."
+                ? $"Hardware control enabled after {result.Families.Count} GPU {(result.Families.Count == 1 ? "family" : "families")} passed read-back."
                 : "Hardware control disabled after vendor/default state was restored and read back.",
                 "Success");
             if (_refreshing)

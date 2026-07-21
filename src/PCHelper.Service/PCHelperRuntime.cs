@@ -4048,8 +4048,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 results,
                 allVerified
                     ? request.Armed
-                        ? $"Hardware control armed only after default-state read-back verified {available.Length} requested family/families."
-                        : $"Hardware control disarmed after vendor/default state was restored and read back for {available.Length} requested family/families."
+                        ? $"Hardware control armed only after default-state read-back verified {available.Length} requested {(available.Length == 1 ? "family" : "families")}."
+                        : $"Hardware control disarmed after vendor/default state was restored and read back for {available.Length} requested {(available.Length == 1 ? "family" : "families")}."
                     : "RecoveryRequired: at least one requested hardware family could not be restored and read back at its default state.");
         }
         catch (Exception operationException)
