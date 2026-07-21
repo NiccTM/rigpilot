@@ -2154,11 +2154,27 @@
                           <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox Text="{Binding OpenRgbColour, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="OpenRGB colour hexadecimal value" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColour" />
-                        <Border Grid.Column="1" Width="28" Height="28" Margin="8,0,0,0" CornerRadius="6" VerticalAlignment="Center"
-                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                Background="{Binding OpenRgbColour, Converter={StaticResource HexColourToBrush}}"
-                                ToolTip="Preview of the colour used by the Static colourway"
-                                automation:AutomationProperties.Name="Colour preview swatch" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColourPreview" />
+                        <Button Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center" Cursor="Hand" Click="PickOpenRgbColour_Click"
+                                ToolTip="Click to pick the colour used by the Static colourway"
+                                automation:AutomationProperties.Name="Pick the Static colourway colour" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColourPreview">
+                          <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                              <Border Width="28" Height="28" CornerRadius="6"
+                                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                      Background="{Binding OpenRgbColour, Converter={StaticResource HexColourToBrush}}">
+                                <Border.Style>
+                                  <Style TargetType="Border">
+                                    <Style.Triggers>
+                                      <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                      </Trigger>
+                                    </Style.Triggers>
+                                  </Style>
+                                </Border.Style>
+                              </Border>
+                            </ControlTemplate>
+                          </Button.Template>
+                        </Button>
                       </Grid>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="BRIGHTNESS (%)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" /><TextBox Text="{Binding OpenRgbBrightnessText, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="OpenRGB brightness percentage" automation:AutomationProperties.AutomationId="Lighting.OpenRgbBrightness" /></StackPanel>

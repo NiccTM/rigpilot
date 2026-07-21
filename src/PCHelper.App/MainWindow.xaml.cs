@@ -371,6 +371,57 @@ public partial class MainWindow : Window
         }
     }
 
+    private void PickOpenRgbColour_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        // Native colour mixer, opened with the custom-colour panel already expanded so
+        // the user can dial in any RGB value, seeded with the current #RRGGBB.
+        using System.Windows.Forms.ColorDialog dialog = new()
+        {
+            FullOpen = true,
+            AnyColor = true,
+        };
+        if (TryParseHexColour(viewModel.OpenRgbColour, out byte red, out byte green, out byte blue))
+        {
+            dialog.Color = System.Drawing.Color.FromArgb(red, green, blue);
+        }
+
+        System.Windows.Forms.IWin32Window owner = new Win32WindowHandle(new WindowInteropHelper(this).Handle);
+        if (dialog.ShowDialog(owner) == System.Windows.Forms.DialogResult.OK)
+        {
+            System.Drawing.Color chosen = dialog.Color;
+            viewModel.OpenRgbColour = $"#{chosen.R:X2}{chosen.G:X2}{chosen.B:X2}";
+        }
+    }
+
+    private static bool TryParseHexColour(string? value, out byte red, out byte green, out byte blue)
+    {
+        red = green = blue = 0;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> hex = value.Trim().TrimStart('#');
+        const System.Globalization.NumberStyles Hex = System.Globalization.NumberStyles.HexNumber;
+        System.Globalization.CultureInfo invariant = System.Globalization.CultureInfo.InvariantCulture;
+        return hex.Length == 6
+            && byte.TryParse(hex[..2], Hex, invariant, out red)
+            && byte.TryParse(hex[2..4], Hex, invariant, out green)
+            && byte.TryParse(hex[4..6], Hex, invariant, out blue);
+    }
+
+    /// <summary>Minimal <see cref="System.Windows.Forms.IWin32Window"/> wrapper so a WinForms
+    /// dialog can be parented to this WPF window's HWND.</summary>
+    private sealed class Win32WindowHandle(IntPtr handle) : System.Windows.Forms.IWin32Window
+    {
+        public IntPtr Handle { get; } = handle;
+    }
+
     private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if ((Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
