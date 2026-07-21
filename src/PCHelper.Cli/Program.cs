@@ -37,6 +37,7 @@ internal static class Cli
                 "ryzen-smu-feasibility" => await ReadRyzenSmuFeasibilityAsync(json),
                 "close-blockers" => await StopConflictingProcessesAsync(args, json),
                 "kraken-rgb" => await SetKrakenLightingAsync(args, json),
+                "razer-rgb" => await SetRazerLightingAsync(args, json),
                 "kraken-pump" => await SetKrakenPumpAsync(args, json),
                 "gpu-fan-state" => await ServiceCommandAsync<GpuFanStateV1>(IpcCommand.GetGpuFanState, json),
                 "gpu-fan-arm" => await SetGpuFanArmedAsync(args, json, arm: true),
@@ -591,6 +592,27 @@ internal static class Cli
         KrakenLightingResultV1 result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload)
             ?? throw new InvalidDataException("Service returned an empty payload.");
         Write(result, json, value => Console.WriteLine($"Kraken lighting: {value.Outcome}. {value.Message}"));
+        return result.Outcome == KrakenLightingOutcome.WriteIssued ? 0 : 3;
+    }
+
+    private static async Task<int> SetRazerLightingAsync(string[] args, bool json)
+    {
+        // Drives the same service IPC path the App's "Apply to all lighting" uses for the
+        // Razer O11 (IpcCommand.SetRazerRgb -> SetRazerRgbAsync -> contained --set-razer-custom),
+        // so the full round-trip can be exercised from the command line.
+        bool off = HasFlag(args, "--off");
+        string colour = Option(args, "--colour") ?? string.Empty;
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetRazerRgb,
+            new RazerRgbRequestV1(
+                RazerRgbRequestV1.CurrentSchemaVersion,
+                colour,
+                off,
+                HasFlag(args, "--confirm-experimental"),
+                Option(args, "--confirm-device")));
+        RazerRgbResultV1 result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(result, json, value => Console.WriteLine($"Razer lighting: {value.Outcome}. {value.Message}"));
         return result.Outcome == KrakenLightingOutcome.WriteIssued ? 0 : 3;
     }
 
@@ -1386,6 +1408,8 @@ internal static class Cli
                                                  Terminate the running processes of detected conflicting controllers (Afterburner, CAM, Fan Control, Armoury Crate, ...) so they release device ownership. Curated allowlist only; takes over no hardware.
             pchelper-cli kraken-rgb (--colour RRGGBB | --off) --confirm-experimental --confirm-device nzxt:kraken-x3 [--json]
                                                  Write a fixed colour (or off) to the Kraken X3 ring+logo via RigPilot's native adapter. Lighting only; no read-back, confirm visually.
+            pchelper-cli razer-rgb (--colour RRGGBB | --off) --confirm-experimental --confirm-device razer:lianli-o11-dynamic [--json]
+                                                 Write a fixed colour (or off) to the Lian Li O11 Dynamic Razer Edition case via RigPilot's native extended-matrix custom-frame path. Lighting only; confirm visually.
             pchelper-cli kraken-pump --duty 60..100 --confirm-experimental --confirm-device nzxt:kraken-x3 [--json]
                                                  Set a fixed Kraken X3 pump duty (hard floor 60%, never stopped) with firmware status read-back.
             pchelper-cli gpu-fan-arm --confirm-experimental --confirm-device DEVICE_ID [--json]

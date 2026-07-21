@@ -4872,9 +4872,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     {
         // RigPilot's in-house native Razer USB lighting write (no Synapse
         // dependency). Experimental and double-confirmed; extended-matrix
-        // static effect only — no firmware/profile/EEPROM command class — runs
+        // custom-frame path — no firmware/profile/EEPROM command class — runs
         // in the crash-contained Adapter Host child, and the firmware's status
-        // reply is read back before WriteIssued may be reported.
+        // reply is read back before WriteIssued may be reported. The O11 Dynamic
+        // is a plain EXTENDED matrix that acknowledges but never renders the
+        // single static effect; it lights only from a per-row custom frame with
+        // the matrix brightness raised, which --set-razer-custom issues (4x16).
         RazerRgbRequestV1 payload = IpcJson.FromElement<RazerRgbRequestV1>(request.Payload)
             ?? throw new InvalidDataException("SetRazerRgb requires a RazerRgbRequestV1 payload.");
         if (payload.Validate() is string refusal)
@@ -4884,7 +4887,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
         string argument = payload.TurnOff ? "off" : payload.Colour.Trim().TrimStart('#');
         ContainedRazerRgb razer = new(
-            () => new AdapterHostControllerDiscoveryProcess("--set-razer-usb-rgb", argument));
+            () => new AdapterHostControllerDiscoveryProcess("--set-razer-custom", argument));
         RazerRgbResultV1 result = await razer.WriteAsync(cancellationToken).ConfigureAwait(false);
         return Success(request, result);
     }

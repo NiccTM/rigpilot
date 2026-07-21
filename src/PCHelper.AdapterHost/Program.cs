@@ -144,6 +144,41 @@ if (args.Contains("--set-razer-custom", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--set-razer-argb", StringComparer.OrdinalIgnoreCase))
+{
+    // EXTENDED_ARGB Razer lighting child: the O11 Dynamic detects as RAZER_MATRIX_TYPE_EXTENDED_ARGB
+    // in OpenRGB, which honours the dedicated 321-byte razer_argb_report (report id 0x04/0x84) —
+    // NOT the extended-matrix custom-frame command (--set-razer-custom), which it acknowledges but
+    // never renders. This path raises the ARGB-channel brightnesses then writes one ARGB frame per
+    // row. Args: <RRGGBB|off> [rows] [cols], defaulting to the O11's 4x16 matrix.
+    int argbIndex = Array.FindIndex(args, argument => string.Equals(argument, "--set-razer-argb", StringComparison.OrdinalIgnoreCase));
+    string argbValue = argbIndex >= 0 && argbIndex + 1 < args.Length ? args[argbIndex + 1] : string.Empty;
+    int argbRows = argbIndex >= 0 && argbIndex + 2 < args.Length && int.TryParse(args[argbIndex + 2], out int parsedArgbRows) ? parsedArgbRows : 4;
+    int argbCols = argbIndex >= 0 && argbIndex + 3 < args.Length && int.TryParse(args[argbIndex + 3], out int parsedArgbCols) ? parsedArgbCols : 16;
+    bool argbOff = string.Equals(argbValue, "off", StringComparison.OrdinalIgnoreCase);
+    RazerRgbResultV1 argb = RazerUsbRgbWriter.WriteArgb(argbOff ? string.Empty : argbValue, argbOff, argbRows, argbCols);
+    Console.WriteLine(JsonSerializer.Serialize(argb, JsonDefaults.Options));
+    return;
+}
+
+if (args.Contains("--set-razer-hold", StringComparer.OrdinalIgnoreCase))
+{
+    // Lead-(b) persistent-session diagnostic: sends the faithful EXTENDED sequence (brightness
+    // across candidate LED ids, per-row custom frame, mode-custom) then HOLDS the HID handle
+    // open for N seconds, refreshing the frame. If the O11 is acknowledged-but-dark only because
+    // the controller reverts when the last handle closes, the case lights ONLY during the hold.
+    // Run as SYSTEM watching the case. Args: <RRGGBB|off> [seconds] [rows] [cols].
+    int holdIndex = Array.FindIndex(args, argument => string.Equals(argument, "--set-razer-hold", StringComparison.OrdinalIgnoreCase));
+    string holdValue = holdIndex >= 0 && holdIndex + 1 < args.Length ? args[holdIndex + 1] : string.Empty;
+    int holdSeconds = holdIndex >= 0 && holdIndex + 2 < args.Length && int.TryParse(args[holdIndex + 2], out int parsedHoldSeconds) ? parsedHoldSeconds : 15;
+    int holdRows = holdIndex >= 0 && holdIndex + 3 < args.Length && int.TryParse(args[holdIndex + 3], out int parsedHoldRows) ? parsedHoldRows : 4;
+    int holdCols = holdIndex >= 0 && holdIndex + 4 < args.Length && int.TryParse(args[holdIndex + 4], out int parsedHoldCols) ? parsedHoldCols : 16;
+    bool holdOff = string.Equals(holdValue, "off", StringComparison.OrdinalIgnoreCase);
+    RazerRgbResultV1 hold = RazerUsbRgbWriter.WriteHold(holdOff ? string.Empty : holdValue, holdOff, holdSeconds, holdRows, holdCols);
+    Console.WriteLine(JsonSerializer.Serialize(hold, JsonDefaults.Options));
+    return;
+}
+
 if (args.Contains("--set-smbus-rgb", StringComparer.OrdinalIgnoreCase))
 {
     // Disposable DIMM RGB child: the production audited path. Detection +
