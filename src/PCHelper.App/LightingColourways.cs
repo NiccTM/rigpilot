@@ -8,8 +8,11 @@ namespace PCHelper.App;
 /// a given length; the whole frame is computed client-side and written once as
 /// a static custom-mode update — no animation loop, no injection, and the same
 /// input always produces the same frame. The preset family follows the common
-/// community effect vocabulary (rainbow spread, linear gradients, multi-colour
-/// puddles/sparkle patches).
+/// community effect vocabulary: whole-strip gradients (rainbow, sunset, ocean,
+/// lava, aurora, neon, gold, ice, forest), stepped rainbow bands, and spatial
+/// patterns (puddles, stripes, alert, sparkle, comet). Colour-field-driven
+/// presets ("static", "sparkle", "comet") read the manual colour; the rest are
+/// self-contained palettes.
 /// </summary>
 public static class LightingColourways
 {
@@ -19,16 +22,27 @@ public static class LightingColourways
     [
         new("static", "Static colour", "One colour everywhere (uses the colour field)."),
         new("rainbow", "Rainbow", "Full hue sweep spread across each device's LEDs."),
-        new("puddles", "Puddles", "Colour patches — pools of violet, cyan, and magenta."),
+        new("spectrum", "Spectrum bands", "Rainbow rendered as stepped blocks of colour."),
         new("sunset", "Sunset", "Warm gradient from amber through magenta."),
         new("ocean", "Ocean", "Cool gradient from deep blue to aqua."),
         new("lava", "Lava", "Deep red to bright amber gradient."),
+        new("aurora", "Aurora", "Green through teal into violet, like polar light."),
+        new("neon", "Neon", "Electric magenta to cyan gradient."),
+        new("gold", "Gold", "Rich amber to pale gold gradient."),
+        new("ice", "Ice", "Frosty white through blue."),
+        new("forest", "Forest", "Deep green to fresh lime gradient."),
+        new("puddles", "Puddles", "Colour patches — pools of violet, cyan, and magenta."),
+        new("stripes", "Stripes", "Alternating cyan and magenta blocks."),
+        new("alert", "Alert", "Alternating red and blue blocks."),
+        new("sparkle", "Sparkle", "Bright dots of the colour field on a dim base."),
+        new("comet", "Comet", "Repeating bright head fading to a tail (uses the colour field)."),
     ];
 
     /// <summary>
     /// Computes the packed per-LED colours (0x00BBGGRR, the OpenRGB wire order)
     /// for one device. <paramref name="staticRgb"/> is used only by the
-    /// "static" preset; brightness scales every channel linearly.
+    /// colour-field-driven presets ("static", "sparkle", "comet"); brightness
+    /// scales every channel linearly.
     /// </summary>
     public static uint[] Generate(string colourwayId, int ledCount, (byte R, byte G, byte B) staticRgb, int brightnessPercent)
     {
@@ -41,11 +55,21 @@ public static class LightingColourways
             double position = ledCount <= 1 ? 0 : (double)index / (ledCount - 1);
             (byte r, byte g, byte b) = colourwayId switch
             {
-                "rainbow" => HsvToRgb(position * 300, 1, 1), // 0°–300° keeps the sweep from wrapping back to red
+                "rainbow" => HsvToRgb(position * 300, 1, 1),          // 0°–300° keeps the sweep from wrapping back to red
+                "spectrum" => HsvToRgb((double)((index / 3) % 6) / 6 * 300, 1, 1), // stepped rainbow, ~3 LEDs per band
                 "puddles" => Puddle(index),
                 "sunset" => Lerp((255, 140, 0), (200, 30, 140), position),
                 "ocean" => Lerp((0, 40, 160), (0, 210, 200), position),
                 "lava" => Lerp((120, 0, 0), (255, 170, 20), position),
+                "aurora" => Gradient(position, (0, 180, 90), (0, 200, 200), (150, 40, 210)),
+                "neon" => Lerp((230, 20, 200), (0, 220, 220), position),
+                "gold" => Lerp((180, 90, 0), (255, 215, 120), position),
+                "ice" => Gradient(position, (200, 240, 255), (60, 160, 240), (0, 60, 200)),
+                "forest" => Gradient(position, (0, 70, 20), (40, 160, 40), (150, 220, 60)),
+                "stripes" => ((index / 4) % 2) == 0 ? ((byte)0, (byte)200, (byte)220) : ((byte)230, (byte)40, (byte)160),
+                "alert" => ((index / 5) % 2) == 0 ? ((byte)255, (byte)0, (byte)0) : ((byte)0, (byte)40, (byte)255),
+                "sparkle" => (index % 4) == 1 ? staticRgb : Scale(staticRgb, 0.06), // bright dot every 4th LED, dim base
+                "comet" => Scale(staticRgb, 1 - ((double)(index % 8) / 7)),         // bright head fading over an 8-LED tail
                 _ => staticRgb,
             };
             frame[index] = Pack(r, g, b, brightnessPercent);
@@ -86,6 +110,29 @@ public static class LightingColourways
         (byte)Math.Round(from.R + ((to.R - from.R) * position)),
         (byte)Math.Round(from.G + ((to.G - from.G) * position)),
         (byte)Math.Round(from.B + ((to.B - from.B) * position)));
+
+    /// <summary>Piecewise-linear interpolation across an ordered list of colour stops.</summary>
+    private static (byte, byte, byte) Gradient(double position, params (int R, int G, int B)[] stops)
+    {
+        if (stops.Length == 1)
+        {
+            return ((byte)stops[0].R, (byte)stops[0].G, (byte)stops[0].B);
+        }
+
+        double scaled = Math.Clamp(position, 0, 1) * (stops.Length - 1);
+        int lower = Math.Min((int)Math.Floor(scaled), stops.Length - 2);
+        return Lerp(stops[lower], stops[lower + 1], scaled - lower);
+    }
+
+    /// <summary>Scales every channel by a 0..1 factor (used by the colour-field-driven patterns).</summary>
+    private static (byte, byte, byte) Scale((byte R, byte G, byte B) colour, double factor)
+    {
+        factor = Math.Clamp(factor, 0, 1);
+        return (
+            (byte)Math.Round(colour.R * factor),
+            (byte)Math.Round(colour.G * factor),
+            (byte)Math.Round(colour.B * factor));
+    }
 
     private static (byte, byte, byte) HsvToRgb(double hueDegrees, double saturation, double value)
     {
