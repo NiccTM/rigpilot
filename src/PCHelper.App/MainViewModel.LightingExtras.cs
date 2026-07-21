@@ -695,58 +695,40 @@ public sealed partial class MainViewModel
         HashSet<string> reservedFamilies)
     {
         string nativeColour = ScaleRgbHex(colour, brightness);
-        await ApplyNativeRgbRouteAsync(
-            "native:kraken",
-            "NZXT Kraken",
-            "nzxt-kraken",
-            IpcCommand.SetKrakenLighting,
-            new KrakenLightingRequestV1(KrakenLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, KrakenLightingRequestV1.ExactDeviceId),
+
+        // Every native RGB family is reached identically: build its exact-device request,
+        // send its command, normalise the reply through ToRgbWriteResult, read WriteIssued.
+        // Only the request type, command, and labels differ, so the routes are a table
+        // rather than four copy-paste blocks. Order is preserved from the original
+        // sequence (Kraken, Aura, DIMM, Razer) and each is awaited in turn.
+        static Func<IpcResponse, (bool, string?)> Inspect<T>(Func<T, RgbWriteResult> map)
+            where T : class =>
             response =>
             {
-                RgbWriteResult? result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload)?.ToRgbWriteResult();
+                RgbWriteResult? result = IpcJson.FromElement<T>(response.Payload) is { } wire ? map(wire) : null;
                 return (result?.WriteIssued == true, result?.Message);
-            },
-            outcomes,
-            reservedFamilies);
-        await ApplyNativeRgbRouteAsync(
-            "native:aura",
-            "ASUS Aura headers",
-            "asus-aura",
-            IpcCommand.SetAuraLighting,
-            new AuraLightingRequestV1(AuraLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, AuraLightingRequestV1.ExactDeviceId),
-            response =>
-            {
-                RgbWriteResult? result = IpcJson.FromElement<AuraLightingResultV1>(response.Payload)?.ToRgbWriteResult();
-                return (result?.WriteIssued == true, result?.Message);
-            },
-            outcomes,
-            reservedFamilies);
-        await ApplyNativeRgbRouteAsync(
-            "native:dimm",
-            "G.Skill Trident Z RAM",
-            "dimm-rgb",
-            IpcCommand.SetDimmRgb,
-            new DimmRgbRequestV1(DimmRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, DimmRgbRequestV1.ExactDeviceId),
-            response =>
-            {
-                RgbWriteResult? result = IpcJson.FromElement<DimmRgbResultV1>(response.Payload)?.ToRgbWriteResult();
-                return (result?.WriteIssued == true, result?.Message);
-            },
-            outcomes,
-            reservedFamilies);
-        await ApplyNativeRgbRouteAsync(
-            "native:razer",
-            "Razer Lian Li O11 case",
-            "razer-lianli",
-            IpcCommand.SetRazerRgb,
-            new RazerRgbRequestV1(RazerRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, RazerRgbRequestV1.ExactDeviceId),
-            response =>
-            {
-                RgbWriteResult? result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload)?.ToRgbWriteResult();
-                return (result?.WriteIssued == true, result?.Message);
-            },
-            outcomes,
-            reservedFamilies);
+            };
+
+        (string RouteId, string Name, string Family, IpcCommand Command, object Request, Func<IpcResponse, (bool, string?)> Inspect)[] routes =
+        [
+            ("native:kraken", "NZXT Kraken", "nzxt-kraken", IpcCommand.SetKrakenLighting,
+                new KrakenLightingRequestV1(KrakenLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, KrakenLightingRequestV1.ExactDeviceId),
+                Inspect<KrakenLightingResultV1>(result => result.ToRgbWriteResult())),
+            ("native:aura", "ASUS Aura headers", "asus-aura", IpcCommand.SetAuraLighting,
+                new AuraLightingRequestV1(AuraLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, AuraLightingRequestV1.ExactDeviceId),
+                Inspect<AuraLightingResultV1>(result => result.ToRgbWriteResult())),
+            ("native:dimm", "G.Skill Trident Z RAM", "dimm-rgb", IpcCommand.SetDimmRgb,
+                new DimmRgbRequestV1(DimmRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, DimmRgbRequestV1.ExactDeviceId),
+                Inspect<DimmRgbResultV1>(result => result.ToRgbWriteResult())),
+            ("native:razer", "Razer Lian Li O11 case", "razer-lianli", IpcCommand.SetRazerRgb,
+                new RazerRgbRequestV1(RazerRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, RazerRgbRequestV1.ExactDeviceId),
+                Inspect<RazerRgbResultV1>(result => result.ToRgbWriteResult())),
+        ];
+
+        foreach ((string routeId, string name, string family, IpcCommand command, object request, Func<IpcResponse, (bool, string?)> inspect) in routes)
+        {
+            await ApplyNativeRgbRouteAsync(routeId, name, family, command, request, inspect, outcomes, reservedFamilies);
+        }
     }
 
     private async Task ApplyNativeRgbRouteAsync(
