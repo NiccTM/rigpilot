@@ -45,11 +45,24 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
 
     // Restoring firmware default is the one call that must not fail permanently —
     // every caller (rollback, explicit reset, cooling-graph recovery) escalates an
-    // unrecovered failure straight to a full hardware write lock. A short pause
-    // before the first attempt lets the driver session settle after the preceding
-    // settle-poll burst, rather than immediately adding another call on top of it.
-    private static readonly TimeSpan ResetCooldownInterval = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan ResetRetryInterval = TimeSpan.FromMilliseconds(750);
+    // unrecovered failure straight to a full hardware write lock. A pause before the
+    // first attempt lets the driver session settle after the preceding settle-poll
+    // burst, rather than immediately adding another call on top of it.
+    //
+    // Why the settle windows are generous: the transport tries several in-session
+    // restore strategies and, only if all are refused, a last-resort NVAPI session
+    // release (NVIDIA.Unload). Live probing (--probe-gpu-fan-owner-restore,
+    // --probe-gpu-fan-unload-ownership) found the in-session restore is accepted
+    // while we own the fan, but the rapid-call burst from the apply's settle-poll can
+    // transiently make it return NVAPI_INVALID_USER_PRIVILEGE — which forces the
+    // fall-through to the session release, and that Unload strips ownership and
+    // poisons subsequent retries. So the highest-leverage lever is a longer settle
+    // before the FIRST attempt (let the burst drain so the in-session restore is
+    // accepted and the ownership-stripping fallback is never reached), backed by
+    // longer gaps between retries. Widening wall-clock time, not adding calls, is the
+    // documented mitigation for this driver-session fragility.
+    private static readonly TimeSpan ResetCooldownInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ResetRetryInterval = TimeSpan.FromMilliseconds(1500);
     private const int ResetRetryAttempts = 6;
 
     private readonly IGpuFanCoolerTransport _transport;
