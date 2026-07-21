@@ -128,6 +128,22 @@ if (args.Contains("--set-razer-usb-rgb", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--set-razer-custom", StringComparer.OrdinalIgnoreCase))
+{
+    // Addressable-matrix Razer lighting child: writes a per-LED custom frame (the O11
+    // Dynamic renders this, unlike the plain static effect) then the custom-frame effect.
+    // Args: <RRGGBB|off> [ledCount]. ledCount is exposed for live tuning of the O11's LED
+    // total; it defaults to 75 (covers the ~70-LED Razer Edition with margin).
+    int customIndex = Array.FindIndex(args, argument => string.Equals(argument, "--set-razer-custom", StringComparison.OrdinalIgnoreCase));
+    string customValue = customIndex >= 0 && customIndex + 1 < args.Length ? args[customIndex + 1] : string.Empty;
+    int customRows = customIndex >= 0 && customIndex + 2 < args.Length && int.TryParse(args[customIndex + 2], out int parsedRows) ? parsedRows : 4;
+    int customCols = customIndex >= 0 && customIndex + 3 < args.Length && int.TryParse(args[customIndex + 3], out int parsedCols) ? parsedCols : 16;
+    bool customOff = string.Equals(customValue, "off", StringComparison.OrdinalIgnoreCase);
+    RazerRgbResultV1 custom = RazerUsbRgbWriter.Write(customOff ? string.Empty : customValue, customOff, customFrameMatrix: (customRows, customCols));
+    Console.WriteLine(JsonSerializer.Serialize(custom, JsonDefaults.Options));
+    return;
+}
+
 if (args.Contains("--set-smbus-rgb", StringComparer.OrdinalIgnoreCase))
 {
     // Disposable DIMM RGB child: the production audited path. Detection +
