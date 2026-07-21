@@ -25,13 +25,16 @@ public static class KrakenX3LightingWriter
     private const byte SyncChannelStaticValue = 40; // liquidctl _STATIC_VALUE[0b111]
     private const int MessageLength = 64;
 
-    /// <summary>Builds the 64-byte fixed-colour report for the sync (ring + logo) channel.</summary>
+    /// <summary>Builds the 64-byte fixed-colour report for the sync (ring + logo) channel.
+    /// Kraken X3 firmware expects each triplet in <b>GRB</b> order, not RGB — the
+    /// liquidctl reference converts <c>[r, g, b]</c> to <c>[g, r, b]</c> before writing.
+    /// Sending RGB swaps the red and green channels (e.g. red renders as green).</summary>
     public static byte[] BuildFixedColourReport(byte red, byte green, byte blue)
     {
         byte[] message = new byte[MessageLength];
         WriteHeader(message);
-        message[7] = red;
-        message[8] = green;
+        message[7] = green;   // GRB wire order
+        message[8] = red;
         message[9] = blue;
         WriteFooter(message, colourCount: 1);
         return message;
