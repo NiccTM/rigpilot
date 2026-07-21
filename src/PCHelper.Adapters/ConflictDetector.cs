@@ -33,6 +33,17 @@ public static class ConflictDetector
         KnownControllers.FirstOrDefault(controller => string.Equals(controller.Id, conflictId, StringComparison.Ordinal))
             ?.ProcessNames ?? [];
 
+    /// <summary>
+    /// The curated install-path hints for a known controller id, or empty for an unrecognised
+    /// id. Some controllers (e.g. NZXT CAM's <c>service.exe</c>) run under a generic process
+    /// name and are only identifiable — for both detection and the "close blockers" action — by
+    /// a distinctive substring of their executable path. Like <see cref="ProcessNamesFor"/>,
+    /// this is a curated allowlist, never an arbitrary caller-supplied value.
+    /// </summary>
+    public static IReadOnlyList<string> PathHintsFor(string conflictId) =>
+        KnownControllers.FirstOrDefault(controller => string.Equals(controller.Id, conflictId, StringComparison.Ordinal))
+            ?.PathHints ?? [];
+
     /// <summary>Every known-controller id, exposed so callers can validate against the allowlist.</summary>
     public static IReadOnlyList<string> KnownControllerIds =>
         [.. KnownControllers.Select(controller => controller.Id)];

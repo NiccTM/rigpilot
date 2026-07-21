@@ -3484,6 +3484,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         .Select(conflict => conflict.DisplayName)
         .Distinct(StringComparer.OrdinalIgnoreCase) ?? []);
 
+    /// <summary>Distinct running conflicts that compete for a given control family set — for the
+    /// per-page conflict banners, so the GPU banner never names an AIO/lighting-only app.</summary>
+    private string RunningConflictSummaryFor(params string[] families) => string.Join(", ", _snapshot?.Conflicts
+        .Where(conflict => conflict.IsRunning
+            && conflict.ResourceFamilies.Any(family => families.Contains(family, StringComparer.OrdinalIgnoreCase)))
+        .Select(conflict => conflict.DisplayName)
+        .Distinct(StringComparer.OrdinalIgnoreCase) ?? []);
+
+    /// <summary>Running GPU-tuning/GPU-fan conflicts, for the GPU-page conflict banner.</summary>
+    public string RunningGpuConflictSummary => RunningConflictSummaryFor("GpuTuning", "GpuFan");
+
+    /// <summary>Running fan conflicts (motherboard/GPU/AIO), for the fan-page conflict banner.</summary>
+    public string RunningFanConflictSummary => RunningConflictSummaryFor("MotherboardFan", "GpuFan", "Aio");
+
     public string CloseConflictingAppsLabel => RunningConflictCount switch
     {
         0 => "No conflicting apps",
@@ -5610,6 +5624,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(CloseBlockersLabel));
         OnPropertyChanged(nameof(CloseConflictingAppsLabel));
         OnPropertyChanged(nameof(RunningConflictSummary));
+        OnPropertyChanged(nameof(RunningGpuConflictSummary));
+        OnPropertyChanged(nameof(RunningFanConflictSummary));
         _closeBlockersCommand.RaiseCanExecuteChanged();
         _closeConflictingAppsCommand?.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasImportantSensors));
