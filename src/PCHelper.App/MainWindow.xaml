@@ -982,11 +982,11 @@
         <!-- Cooling -->
         <ScrollViewer x:Name="CoolingPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="0,0,10,18">
-            <Border Style="{StaticResource CardStyle}" Padding="18">
+            <Border Style="{StaticResource CardStyle}" Background="{StaticResource AccentSoftBrush}" BorderBrush="#31557F" Padding="18">
               <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="42" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                <Border Width="34" Height="34" CornerRadius="9" Background="{StaticResource WarningSoftBrush}">
-                  <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource WarningBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <Border Width="34" Height="34" CornerRadius="9" Background="#203D60">
+                  <TextBlock Text="&#xE945;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
                 <StackPanel Grid.Column="1" Margin="0,0,18,0">
                   <TextBlock Text="Safe cooling control" FontWeight="SemiBold" FontSize="15" />
