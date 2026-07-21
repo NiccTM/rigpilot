@@ -1145,7 +1145,7 @@
                       <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
                         <Setter Property="Background" Value="{DynamicResource StateVerifiedBrush}" />
                       </DataTrigger>
-                      <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                      <DataTrigger Binding="{Binding HasRunningFanConflicts}" Value="True">
                         <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
                       </DataTrigger>
                     </Style.Triggers>
@@ -1164,7 +1164,7 @@
                         <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
                           <Setter Property="Visibility" Value="Collapsed" />
                           <Style.Triggers>
-                            <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                            <DataTrigger Binding="{Binding HasRunningFanConflicts}" Value="True">
                               <Setter Property="Visibility" Value="Visible" />
                             </DataTrigger>
                           </Style.Triggers>
@@ -1780,7 +1780,7 @@
                       <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
                         <Setter Property="Background" Value="{DynamicResource StateVerifiedBrush}" />
                       </DataTrigger>
-                      <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                      <DataTrigger Binding="{Binding HasRunningGpuConflicts}" Value="True">
                         <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
                       </DataTrigger>
                     </Style.Triggers>
@@ -1799,7 +1799,7 @@
                         <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
                           <Setter Property="Visibility" Value="Collapsed" />
                           <Style.Triggers>
-                            <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                            <DataTrigger Binding="{Binding HasRunningGpuConflicts}" Value="True">
                               <Setter Property="Visibility" Value="Visible" />
                             </DataTrigger>
                           </Style.Triggers>

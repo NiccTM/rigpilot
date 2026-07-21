@@ -3438,6 +3438,23 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public bool HasRunningConflicts => RunningConflictCount > 0;
 
+    /// <summary>
+    /// True when a running conflict competes for at least one of the given control families.
+    /// Used so a per-card "Blocked" indicator reflects only conflicts that affect that card's
+    /// controls — an AIO/lighting-only app (e.g. NZXT CAM) must not mark the GPU tuning card
+    /// blocked. Family strings match <see cref="ConflictDetector"/> (GpuTuning, GpuFan,
+    /// MotherboardFan, Aio, Lighting, UsbFan, ...).
+    /// </summary>
+    private bool HasRunningConflictAffecting(params string[] families) =>
+        _snapshot?.Conflicts.Any(conflict => conflict.IsRunning
+            && conflict.ResourceFamilies.Any(family => families.Contains(family, StringComparer.OrdinalIgnoreCase))) ?? false;
+
+    /// <summary>Running conflicts competing for GPU tuning or the GPU fan (not AIO/lighting-only apps).</summary>
+    public bool HasRunningGpuConflicts => HasRunningConflictAffecting("GpuTuning", "GpuFan");
+
+    /// <summary>Running conflicts competing for motherboard, GPU, or AIO fan control.</summary>
+    public bool HasRunningFanConflicts => HasRunningConflictAffecting("MotherboardFan", "GpuFan", "Aio");
+
     public string CloseBlockersLabel => RunningConflictCount switch
     {
         0 => "No blocking apps running",
@@ -5588,6 +5605,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(WarningCount));
         OnPropertyChanged(nameof(RunningConflictCount));
         OnPropertyChanged(nameof(HasRunningConflicts));
+        OnPropertyChanged(nameof(HasRunningGpuConflicts));
+        OnPropertyChanged(nameof(HasRunningFanConflicts));
         OnPropertyChanged(nameof(CloseBlockersLabel));
         OnPropertyChanged(nameof(CloseConflictingAppsLabel));
         OnPropertyChanged(nameof(RunningConflictSummary));
