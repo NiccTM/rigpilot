@@ -59,6 +59,7 @@ public sealed partial class MainViewModel
         double totalRam = 0;
         double totalCpu = 0;
         bool anyCpuKnown = false;
+        int cpuUnreadableCount = 0;
         long now = Stopwatch.GetTimestamp();
         HashSet<int> live = [];
 
@@ -128,6 +129,10 @@ public sealed partial class MainViewModel
                     totalCpu += cpu;
                     anyCpuKnown = true;
                 }
+                else
+                {
+                    cpuUnreadableCount++;
+                }
             }
         }
 
@@ -146,7 +151,12 @@ public sealed partial class MainViewModel
             return;
         }
 
-        string cpuPart = anyCpuKnown ? $" · {totalCpu:0.0}% CPU" : string.Empty;
+        // The "+" marks the CPU figure as a lower bound: a medium-integrity app
+        // cannot read the elevated service's or adapter host's CPU time (they show
+        // "—" per-row), so the total only sums the processes it could measure.
+        string cpuPart = anyCpuKnown
+            ? $" · {totalCpu:0.0}%{(cpuUnreadableCount > 0 ? "+" : string.Empty)} CPU"
+            : string.Empty;
         FootprintSummary =
             $"{totalRam:0} MB RAM{cpuPart} across {rows.Count} local process{(rows.Count == 1 ? string.Empty : "es")} — no cloud account, no telemetry, no bundled monitor.";
     }
