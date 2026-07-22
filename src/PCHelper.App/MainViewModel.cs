@@ -5998,14 +5998,34 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     /// Live read-only readings for the Simple Cooling page: spinning fans and
     /// pumps (RPM), their commanded duties (%), and liquid/coolant temperatures.
     /// </summary>
-    private static IEnumerable<SensorSample> SelectCoolingSensors(HardwareSnapshot snapshot)
+    // Fan sensor ids that have been observed spinning this session. A fan in
+    // zero-RPM idle mode (the GPU fans stop when the card is cool) still reports 0,
+    // so without this a filter of Value > 0 would drop it from the list and it
+    // would flicker back the moment it spun up. Once seen spinning, a fan stays
+    // listed at its live value — 0 while idle — which is stable and honest.
+    private readonly HashSet<string> _seenSpinningFanIds = new(StringComparer.Ordinal);
+
+    private IEnumerable<SensorSample> SelectCoolingSensors(HardwareSnapshot snapshot)
     {
         List<SensorSample> candidates = GoodSensors(snapshot);
 
+        foreach (SensorSample sample in candidates)
+        {
+            if (NormaliseUnit(sample.Unit) == "RPM" && sample.Value > 0)
+            {
+                _seenSpinningFanIds.Add(sample.SensorId);
+            }
+        }
+
+        // Every fan that is spinning now, plus every fan that has spun before and
+        // is currently idling at 0 — so a zero-RPM fan holds its place instead of
+        // vanishing. Headers that have never spun (empty motherboard connectors)
+        // are still hidden. The generous cap fits every real fan on a big rig.
         IEnumerable<SensorSample> speeds = candidates
-            .Where(sensor => NormaliseUnit(sensor.Unit) == "RPM" && sensor.Value > 0)
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "RPM"
+                && (sensor.Value > 0 || _seenSpinningFanIds.Contains(sensor.SensorId)))
             .OrderBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
-            .Take(8);
+            .Take(16);
         IEnumerable<SensorSample> duties = candidates
             .Where(sensor => NormaliseUnit(sensor.Unit) == "%"
                 && (sensor.Name.Contains("fan", StringComparison.OrdinalIgnoreCase)
