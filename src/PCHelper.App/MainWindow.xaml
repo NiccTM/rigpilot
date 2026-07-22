@@ -600,7 +600,10 @@
               </Border>
             </Grid>
 
-            <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="390">
+            <!-- Top margin restores the section gap the overview banners drop:
+                 they override CardStyle's 14px bottom margin with 0, so without
+                 this the banner and these cards would nearly touch. -->
+            <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="390" Margin="0,14,0,0">
               <Border Style="{StaticResource CardStyle}" Padding="20">
                 <StackPanel>
                   <Grid Margin="0,0,0,8">
