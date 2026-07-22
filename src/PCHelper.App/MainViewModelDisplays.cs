@@ -48,8 +48,7 @@ public sealed record OperationTargetDisplay(
             capability.State == CapabilityAccessState.Experimental);
     }
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record AutomationRuleDisplay(
@@ -68,8 +67,7 @@ public sealed record AutomationRuleDisplay(
         rule.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture),
         rule.Enabled ? "Enabled" : "Disabled");
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record SensorDisplay(string Name, string Device, string DisplayValue, string Severity, string Glyph);
@@ -212,8 +210,7 @@ public sealed record DeviceDisplay(
             $"{name} {device.Kind} {manufacturer} {model} {compatibilityLabel} {string.Join(' ', device.Properties.Values)}");
     }
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 
     /// <summary>
     /// Returns the value with control characters removed and trimmed, or null if
@@ -357,8 +354,7 @@ public sealed record CapabilityDisplay(
         _ => "Review the capability evidence before changing hardware state."
     };
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 /// <summary>
@@ -464,8 +460,7 @@ public sealed record ExperimentalControlDisplay(
             tone);
     }
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record DiagnosticDisplay(string Title, string Message, string Severity, string Remediation, string Glyph)
@@ -633,8 +628,7 @@ public sealed record HealthRuleDisplay(
             $"{rule.ConsecutiveObservations} consecutive observation(s), {rule.Cooldown.TotalSeconds:0} s cooldown{threshold}.");
     }
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record HealthAlertDisplay(
@@ -657,8 +651,7 @@ public sealed record HealthAlertDisplay(
         alert.State == HealthAlertState.Cleared ? "Safe" : "Warning",
         alert.State == HealthAlertState.Active);
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record TimelineEventDisplay(

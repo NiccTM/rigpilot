@@ -5917,8 +5917,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         && left.Action == right.Action
         && string.Equals(left.EmergencyProfileId, right.EmergencyProfileId, StringComparison.Ordinal);
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 
     private static string SensorGlyph(string unit) => NormaliseUnit(unit) switch
     {
