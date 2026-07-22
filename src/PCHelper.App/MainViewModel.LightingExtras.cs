@@ -833,7 +833,13 @@ public sealed partial class MainViewModel
         int failed = outcomes.Count(outcome => outcome.State == RgbApplyState.Failed);
         int unknown = outcomes.Count(outcome => outcome.State == RgbApplyState.Unknown);
         int skipped = outcomes.Count(outcome => outcome.State == RgbApplyState.Skipped);
-        RgbSyncStatus = $"{operationLabel}: {applied} applied · {blocked} blocked · {failed} failed before write · {unknown} unknown · {skipped} skipped. Successful routes without hardware colour read-back still require visual confirmation.";
+        string counts = $"{operationLabel}: {applied} applied · {blocked} blocked · {failed} failed before write · {unknown} unknown · {skipped} skipped.";
+        // The "confirm by sight" caveat only makes sense when a route actually
+        // wrote. With 0 applied (e.g. every route skipped because the bridge is
+        // off or a competing writer holds the family) it read as a non-sequitur.
+        RgbSyncStatus = applied > 0
+            ? $"{counts} Successful routes without hardware colour read-back still require visual confirmation."
+            : counts;
         if (showNotice)
         {
             ShowNotice(RgbSyncStatus, applied > 0 && blocked + failed + unknown == 0 ? "Success" : "Warning");
