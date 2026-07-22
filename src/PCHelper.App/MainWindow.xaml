@@ -3287,6 +3287,55 @@
               </StackPanel>
             </Border>
 
+            <!-- Sensor logging: surfaces the headless durable logger the service
+                 already runs (SQLite, from boot, no login) — the capability HWiNFO
+                 users ask for and RigPilot never advertised. Live badge tracks the
+                 service; retention text mirrors EnforceRetentionAsync. -->
+            <Border Style="{StaticResource CardStyle}" automation:AutomationProperties.AutomationId="Diagnostics.SensorLogging">
+              <StackPanel>
+                <Grid>
+                  <StackPanel>
+                    <TextBlock Text="Sensor logging" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="Durable, headless, and entirely local — no account, no upload." Style="{StaticResource MutedStyle}" Margin="0,4,0,0" />
+                  </StackPanel>
+                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" CornerRadius="12" BorderThickness="1" Padding="10,4">
+                    <Border.Style>
+                      <Style TargetType="Border">
+                        <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
+                        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding IsServiceOnline}" Value="True">
+                            <Setter Property="Background" Value="{StaticResource SafeSoftBrush}" />
+                            <Setter Property="BorderBrush" Value="{StaticResource SafeBrush}" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
+                    <TextBlock FontSize="12" FontWeight="SemiBold">
+                      <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                          <Setter Property="Text" Value="Paused" />
+                          <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsServiceOnline}" Value="True">
+                              <Setter Property="Text" Value="Logging" />
+                              <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </TextBlock.Style>
+                    </TextBlock>
+                  </Border>
+                </Grid>
+                <TextBlock Text="Every persisted sensor is recorded continuously by the RigPilot Windows service — from system start, with no user signed in and nothing uploaded. Alerts (health rules below) are evaluated the same way." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,13,0,0" />
+                <local:AdaptiveUniformGrid MaximumColumns="3" MinimumColumns="1" MinimumItemWidth="200" Margin="0,14,0,2">
+                  <Border Style="{StaticResource InsetCardStyle}" Margin="0,0,10,10"><StackPanel><TextBlock Text="FULL-RATE HISTORY" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="24 hours" FontSize="18" FontWeight="SemiBold" Margin="0,6,0,0" /><TextBlock Text="Every sample, as captured" Style="{StaticResource SubtleStyle}" Margin="0,2,0,0" /></StackPanel></Border>
+                  <Border Style="{StaticResource InsetCardStyle}" Margin="0,0,10,10"><StackPanel><TextBlock Text="AGGREGATED HISTORY" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="30 days" FontSize="18" FontWeight="SemiBold" Margin="0,6,0,0" /><TextBlock Text="Minute-by-minute, then pruned automatically" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" /></StackPanel></Border>
+                  <Border Style="{StaticResource InsetCardStyle}" Margin="0,0,10,10"><StackPanel><TextBlock Text="STORAGE" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="Local SQLite" FontSize="18" FontWeight="SemiBold" Margin="0,6,0,0" /><TextBlock Text="In ProgramData on this PC only" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" /></StackPanel></Border>
+                </local:AdaptiveUniformGrid>
+              </StackPanel>
+            </Border>
+
             <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="390">
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
