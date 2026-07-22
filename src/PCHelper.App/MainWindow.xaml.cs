@@ -400,6 +400,69 @@ public partial class MainWindow : Window
         }
     }
 
+    // --- Interactive fan-curve editor -----------------------------------------
+    // The canvas maps mouse position to (temperature, duty) and calls the view
+    // model, which rewrites the same text-points model the studio already saves.
+    private int _draggingCurvePoint = -1;
+
+    private void CoolingCurveCanvas_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel || sender is not System.Windows.IInputElement element)
+        {
+            return;
+        }
+
+        System.Windows.Point point = e.GetPosition(element);
+        int hit = viewModel.HitTestCurveHandle(point.X, point.Y);
+        if (hit >= 0)
+        {
+            _draggingCurvePoint = hit;
+            ((System.Windows.UIElement)sender).CaptureMouse();
+        }
+        else
+        {
+            viewModel.AddCurvePointAt(point.X, point.Y);
+        }
+
+        e.Handled = true;
+    }
+
+    private void CoolingCurveCanvas_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_draggingCurvePoint < 0 || DataContext is not MainViewModel viewModel || sender is not System.Windows.IInputElement element)
+        {
+            return;
+        }
+
+        System.Windows.Point point = e.GetPosition(element);
+        viewModel.MoveCurvePoint(_draggingCurvePoint, point.X, point.Y);
+    }
+
+    private void CoolingCurveCanvas_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_draggingCurvePoint >= 0)
+        {
+            _draggingCurvePoint = -1;
+            ((System.Windows.UIElement)sender).ReleaseMouseCapture();
+        }
+    }
+
+    private void CoolingCurveCanvas_MouseRightButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel || sender is not System.Windows.IInputElement element)
+        {
+            return;
+        }
+
+        System.Windows.Point point = e.GetPosition(element);
+        int hit = viewModel.HitTestCurveHandle(point.X, point.Y);
+        if (hit >= 0)
+        {
+            viewModel.RemoveCurvePoint(hit);
+            e.Handled = true;
+        }
+    }
+
     private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if ((Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)

@@ -5730,6 +5730,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(CustomCoolingCurveEligibilityReason));
         OnPropertyChanged(nameof(CustomCoolingCurvePreview));
         OnPropertyChanged(nameof(CustomCoolingCurvePreviewGeometry));
+        OnPropertyChanged(nameof(CustomCoolingCurveHandles));
         OnPropertyChanged(nameof(CustomCoolingCurveAxisLabel));
         _saveCustomCoolingCurveCommand.RaiseCanExecuteChanged();
     }

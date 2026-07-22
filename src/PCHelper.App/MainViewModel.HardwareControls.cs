@@ -345,6 +345,10 @@ public sealed partial class MainViewModel
                 FanControlSliders.Add(fan);
             }
         }
+
+        // The custom-undervolt preview is derived from the live power-limit
+        // slider's range, so refresh it whenever the sliders are rebuilt.
+        OnPropertyChanged(nameof(CustomUndervoltPreview));
     }
 
     public ICommand EnableGpuFanAutoModeCommand => _enableGpuFanAutoModeCommand;
@@ -856,6 +860,80 @@ public sealed partial class MainViewModel
             Value = watts,
         });
         UndervoltStatus = $"{UndervoltPresets.Describe(preset)} applied: power limit {watts:0} {power.Unit}, read-back verified. Run the frame-rate benchmark on Games & tools to confirm your games hold their FPS.";
+    }
+
+    private double _customUndervoltPercent = 80;
+
+    /// <summary>Custom efficiency target as a percentage of the GPU's stock power.</summary>
+    public double CustomUndervoltPercent
+    {
+        get => _customUndervoltPercent;
+        set
+        {
+            if (Set(ref _customUndervoltPercent, Math.Clamp(Math.Round(value), 50, 100)))
+            {
+                OnPropertyChanged(nameof(CustomUndervoltPreview));
+            }
+        }
+    }
+
+    /// <summary>Live watts the current custom percentage resolves to on this GPU.</summary>
+    public string CustomUndervoltPreview
+    {
+        get
+        {
+            GpuControlSlider? power = GpuControlSliders.FirstOrDefault(slider =>
+                slider.CapabilityId.StartsWith("gpupower.limit:", StringComparison.Ordinal));
+            if (power is null)
+            {
+                return "Turn on Hardware control to resolve the target in watts.";
+            }
+
+            double? target = UndervoltPresets.ComputeCustomTargetWatts(power.Minimum, power.Maximum, power.Default, CustomUndervoltPercent);
+            return target is double watts
+                ? $"≈ {watts:0} {power.Unit} ({CustomUndervoltPercent:0}% of stock). Lower heat and fan noise; most games stay near stock FPS."
+                : "This GPU's reported power range does not support a custom target.";
+        }
+    }
+
+    private AsyncCommand? _applyCustomUndervoltCommand;
+
+    public ICommand ApplyCustomUndervoltCommand => _applyCustomUndervoltCommand ??= new AsyncCommand(
+        _ => ApplyCustomUndervoltAsync(),
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
+
+    public async Task ApplyCustomUndervoltAsync()
+    {
+        GpuControlSlider? power = GpuControlSliders.FirstOrDefault(slider =>
+            slider.CapabilityId.StartsWith("gpupower.limit:", StringComparison.Ordinal));
+        if (power is null)
+        {
+            ShowNotice("The GPU power-limit control is not available. Turn on Hardware control and check the Devices page.", "Warning");
+            return;
+        }
+
+        double? target = UndervoltPresets.ComputeCustomTargetWatts(power.Minimum, power.Maximum, power.Default, CustomUndervoltPercent);
+        if (target is not double watts)
+        {
+            ShowNotice("A custom power target is not available for this GPU's reported power range.", "Warning");
+            return;
+        }
+
+        await ApplyGpuControlAsync(new GpuControlSlider
+        {
+            CapabilityId = power.CapabilityId,
+            AdapterId = power.AdapterId,
+            DeviceId = power.DeviceId,
+            Name = power.Name,
+            Minimum = power.Minimum,
+            Maximum = power.Maximum,
+            Default = power.Default,
+            Unit = power.Unit,
+            Value = watts,
+        });
+        UndervoltStatus = $"Custom power target applied: {watts:0} {power.Unit} ({CustomUndervoltPercent:0}% of stock), read-back verified. Run the frame-rate benchmark on Games & tools to confirm your games hold their FPS.";
     }
 
     // --- NZXT Kraken pump control ---------------------------------------------
