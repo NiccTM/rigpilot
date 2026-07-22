@@ -2154,46 +2154,8 @@
                   </TextBlock>
                   <TextBlock Text="{Binding LightingConflictReason}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,12" />
                   <Button Content="Test local SDK server" Command="{Binding ProbeOpenRgbCommand}" HorizontalAlignment="Left" ToolTipService.ShowOnDisabled="True" ToolTip="Enable the bridge and close competing lighting writers first." />
-                </StackPanel>
-              </Border>
-              <Border Style="{StaticResource CardStyle}" Padding="0">
-               <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <!-- Capability rail: green because static lighting is a
-                     supported, working feature that carries no hardware risk —
-                     its only limit is no colour read-back, so it is confirmed by
-                     sight (see the per-device results). Blue-grey while a
-                     competing lighting writer blocks the routes. The badge names
-                     the state in words. -->
-                <Border Width="3" CornerRadius="11,0,0,11" VerticalAlignment="Stretch">
-                  <Border.Style>
-                    <Style TargetType="Border">
-                      <Setter Property="Background" Value="{DynamicResource StateVerifiedBrush}" />
-                      <Style.Triggers>
-                        <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
-                          <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
-                        </DataTrigger>
-                      </Style.Triggers>
-                    </Style>
-                  </Border.Style>
-                </Border>
-                <StackPanel Grid.Column="1" Margin="22">
-                  <Grid>
-                    <TextBlock Text="Static lighting" Style="{StaticResource CardTitleStyle}" />
-                    <ContentControl HorizontalAlignment="Right" VerticalAlignment="Top">
-                      <ContentControl.Style>
-                        <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
-                          <Setter Property="Content" Value="Supported" />
-                          <Style.Triggers>
-                            <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
-                              <Setter Property="Content" Value="Blocked" />
-                            </DataTrigger>
-                          </Style.Triggers>
-                        </Style>
-                      </ContentControl.Style>
-                    </ContentControl>
-                  </Grid>
-                  <TextBlock Text="The bridge negotiates protocol support, enumerates exact controllers, enters custom mode, then updates every reported LED." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,14" />
+                  <Separator Margin="0,14,0,4" />
+                  <TextBlock Text="COLOUR &amp; COLOURWAY" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,8" />
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                     <StackPanel Margin="0,0,6,0">
@@ -2290,8 +2252,47 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
-                  <Separator Margin="0,4" />
-                  <TextBlock Text="KRAKEN COOLER" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                </StackPanel>
+              </Border>
+              <Border Style="{StaticResource CardStyle}" Padding="0">
+               <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <!-- Capability rail: green because static lighting is a
+                     supported, working feature that carries no hardware risk —
+                     its only limit is no colour read-back, so it is confirmed by
+                     sight (see the per-device results). Blue-grey while a
+                     competing lighting writer blocks the routes. The badge names
+                     the state in words. -->
+                <Border Width="3" CornerRadius="11,0,0,11" VerticalAlignment="Stretch">
+                  <Border.Style>
+                    <Style TargetType="Border">
+                      <Setter Property="Background" Value="{DynamicResource StateVerifiedBrush}" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
+                          <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="22">
+                  <Grid>
+                    <TextBlock Text="Static lighting" Style="{StaticResource CardTitleStyle}" />
+                    <ContentControl HorizontalAlignment="Right" VerticalAlignment="Top">
+                      <ContentControl.Style>
+                        <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
+                          <Setter Property="Content" Value="Supported" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
+                              <Setter Property="Content" Value="Blocked" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </ContentControl.Style>
+                    </ContentControl>
+                  </Grid>
+                  <TextBlock Text="Each device writes the colour chosen on the left through RigPilot's own contained adapters — no vendor app required. Most have no colour read-back, so confirm by sight." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,14" />
+                  <TextBlock Text="KRAKEN COOLER" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
                   <TextBlock Text="{Binding KrakenLightingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingStatus" />
                   <WrapPanel>
                     <Button Content="Apply to Kraken" Command="{Binding ApplyKrakenLightingCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
