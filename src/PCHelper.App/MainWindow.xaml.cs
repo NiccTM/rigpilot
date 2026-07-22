@@ -387,6 +387,19 @@ public partial class MainWindow : Window
         }
     }
 
+    // Drives the sidebar's outer ScrollViewer from the wheel. The nested
+    // navigation ListBox marks MouseWheel handled even when it cannot scroll,
+    // so without this the sidebar only scrolls by dragging the bar. Handling the
+    // tunnelling PreviewMouseWheel here runs before the ListBox sees the event.
+    private void SidebarScroll_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        if (sender is System.Windows.Controls.ScrollViewer scrollViewer)
+        {
+            scrollViewer.ScrollToVerticalOffset(scrollViewer.VerticalOffset - e.Delta);
+            e.Handled = true;
+        }
+    }
+
     private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if ((Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)

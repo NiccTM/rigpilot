@@ -240,7 +240,13 @@
                      Margin="4,10,4,0" />
         </StackPanel>
 
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <!-- PreviewMouseWheel is handled on the ScrollViewer itself: the nested
+             navigation ListBox otherwise swallows the wheel event (its own
+             ScrollViewer marks it handled even with nothing to scroll), so the
+             sidebar would only scroll by dragging the bar. Tunnelling here lets
+             the wheel drive this outer viewer directly. -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      PreviewMouseWheel="SidebarScroll_PreviewMouseWheel">
           <StackPanel>
             <TextBlock Text="CONTROL" Style="{StaticResource EyebrowStyle}" Margin="11,0,0,5" />
             <ListBox x:Name="Navigation"
