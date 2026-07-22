@@ -3175,6 +3175,47 @@
               </Border>
             </local:AdaptiveUniformGrid>
 
+            <!-- Footprint: the honest answer to the bloat that drives users off
+                 iCUE/CAM — exactly what RigPilot costs to run, live, with nothing
+                 to hide behind a cloud account. -->
+            <Border Style="{StaticResource CardStyle}" automation:AutomationProperties.AutomationId="Diagnostics.Footprint">
+              <StackPanel>
+                <Grid>
+                  <StackPanel>
+                    <TextBlock Text="RigPilot footprint" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="Exactly what the suite costs to run — local processes only, measured live." Style="{StaticResource MutedStyle}" Margin="0,4,0,0" />
+                  </StackPanel>
+                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
+                    <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
+                  </Border>
+                </Grid>
+                <TextBlock Text="{Binding FootprintSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,13,0,0"
+                           automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Diagnostics.FootprintSummary" />
+                <Grid Margin="0,12,0,2">
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="96" /><ColumnDefinition Width="72" /></Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="1" Text="RAM" Style="{StaticResource EyebrowStyle}" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Column="2" Text="CPU" Style="{StaticResource EyebrowStyle}" HorizontalAlignment="Right" />
+                </Grid>
+                <ItemsControl ItemsSource="{Binding Footprint}" automation:AutomationProperties.Name="RigPilot process footprint">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
+                        <Grid>
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="96" /><ColumnDefinition Width="72" /></Grid.ColumnDefinitions>
+                          <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Role}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding Name}" Style="{StaticResource SubtleStyle}" Margin="0,2,0,0" />
+                          </StackPanel>
+                          <TextBlock Grid.Column="1" Text="{Binding RamText}" FontFamily="{StaticResource DataFont}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="2" Text="{Binding CpuText}" FontFamily="{StaticResource DataFont}" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
             <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="390">
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>

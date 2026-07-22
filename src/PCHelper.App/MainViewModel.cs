@@ -724,7 +724,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
         _refreshTimer = new System.Threading.Timer(
             _ => System.Windows.Application.Current?.Dispatcher.BeginInvoke(
-                async () => await RefreshAsync(full: false, userInitiated: false)),
+                async () =>
+                {
+                    // Footprint sampling is local and independent of the service
+                    // fetch, so it keeps updating even if a refresh round fails.
+                    UpdateFootprint();
+                    await RefreshAsync(full: false, userInitiated: false);
+                }),
             null,
             Timeout.Infinite,
             Timeout.Infinite);
