@@ -3072,6 +3072,77 @@
               <Border Style="{StaticResource CardStyle}" Padding="17"><StackPanel><TextBlock Text="RECOVERY" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding SafeModeLabel}" FontSize="16" FontWeight="SemiBold" Margin="0,10,0,3" /><TextBlock Text="Safe mode and rollback state" Style="{StaticResource SubtleStyle}" /></StackPanel></Border>
             </local:AdaptiveUniformGrid>
 
+            <!-- Hardware ownership cockpit: the single "who owns my hardware right
+                 now" answer that CAM/iCUE/Armoury silently fight over. Green =
+                 RigPilot owns it; amber names the app that currently holds it.
+                 Reclaim uses the acknowledged Close blockers flow below. -->
+            <Border Style="{StaticResource CardStyle}" automation:AutomationProperties.AutomationId="Diagnostics.Ownership">
+              <StackPanel>
+                <TextBlock Text="Hardware ownership" Style="{StaticResource CardTitleStyle}" />
+                <TextBlock Text="{Binding OwnershipSummary}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,4"
+                           automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Diagnostics.OwnershipSummary" />
+                <ItemsControl ItemsSource="{Binding HardwareOwnership}" automation:AutomationProperties.Name="Hardware ownership by domain">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,11">
+                        <Grid>
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                          <Border Width="27" Height="27" CornerRadius="7" Background="{StaticResource SurfaceRaisedBrush}" VerticalAlignment="Top">
+                            <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="13" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                          </Border>
+                          <StackPanel Grid.Column="1" Margin="11,0,12,0" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Domain}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding Detail}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                          </StackPanel>
+                          <Border Grid.Column="2" CornerRadius="12" BorderThickness="1" Padding="10,4" VerticalAlignment="Center">
+                            <Border.Style>
+                              <Style TargetType="Border">
+                                <Setter Property="Background" Value="{StaticResource SafeSoftBrush}" />
+                                <Setter Property="BorderBrush" Value="{StaticResource SafeBrush}" />
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding Contended}" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}" />
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </Border.Style>
+                            <StackPanel Orientation="Horizontal">
+                              <TextBlock Text="&#xE73E;" FontFamily="{StaticResource IconFont}" FontSize="11" VerticalAlignment="Center" Margin="0,1,6,0">
+                                <TextBlock.Style>
+                                  <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                                    <Style.Triggers>
+                                      <DataTrigger Binding="{Binding Contended}" Value="True">
+                                        <Setter Property="Text" Value="&#xE7BA;" />
+                                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                      </DataTrigger>
+                                    </Style.Triggers>
+                                  </Style>
+                                </TextBlock.Style>
+                              </TextBlock>
+                              <TextBlock Text="{Binding Owner}" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                  <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                                    <Style.Triggers>
+                                      <DataTrigger Binding="{Binding Contended}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                      </DataTrigger>
+                                    </Style.Triggers>
+                                  </Style>
+                                </TextBlock.Style>
+                              </TextBlock>
+                            </StackPanel>
+                          </Border>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
             <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="390">
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>

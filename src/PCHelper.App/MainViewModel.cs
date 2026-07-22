@@ -5218,6 +5218,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             diagnostics.OrderBy(DiagnosticDisplay.Rank).ThenBy(item => item.Title, StringComparer.OrdinalIgnoreCase),
             diagnostic => diagnostic.Title,
             StringComparer.Ordinal);
+        RebuildHardwareOwnership();
         Replace(AdapterHealth, _snapshot.AdapterHealth
             .OrderBy(health => health.Healthy ? 1 : 0)
             .ThenBy(health => health.AdapterId, StringComparer.OrdinalIgnoreCase)
