@@ -94,12 +94,19 @@ public sealed record ProfileCardDisplay(
         ProfileV2? suiteProfile = null,
         AutoOcProfileValidationV1? autoOcValidation = null)
     {
-        (string objective, string glyph) = profile.Id.ToLowerInvariant() switch
-        {
-            "quiet" => ("Lower acoustic target", "\uE708"),
-            "performance" => ("Prioritise sustained output", "\uE945"),
-            _ => ("Everyday efficiency", "\uE9D2")
-        };
+        // The objective is a short subtitle under the profile name. Experimental
+        // profiles are direct hardware-control tests (GPU offsets, fan duty, etc.),
+        // so they must not inherit the stock "Everyday efficiency" line; only the
+        // built-in policy profiles carry an efficiency/acoustic/performance intent.
+        (string objective, string glyph) = profile.IsExperimental
+            ? ("Direct hardware control", "\uE7BA")
+            : profile.Id.ToLowerInvariant() switch
+            {
+                "quiet" => ("Lower acoustic target", "\uE708"),
+                "performance" => ("Prioritise sustained output", "\uE945"),
+                "efficiency" => ("Lower power draw", "\uE9D2"),
+                _ => ("Everyday efficiency", "\uE9D2")
+            };
         int manualOnlyCount = suiteProfile?.ManualOnlyActionIds.Count ?? 0;
         bool hasCoolingGraph = !string.IsNullOrWhiteSpace(suiteProfile?.CoolingGraphId);
         List<string> bundleParts = [];
