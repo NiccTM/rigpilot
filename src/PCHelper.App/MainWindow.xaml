@@ -117,18 +117,23 @@
     <DataTemplate x:Key="SensorRowTemplate">
       <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
         <Grid>
+          <!-- The value column is a fixed width, not Auto: an Auto column resizes
+               to each reading's text, and because the Name/Device columns are
+               proportional they would shift left and right every time a value's
+               width changed. A fixed right-aligned column plus the monospace data
+               font keeps the names in a stable column and the digits from jittering. -->
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="30" />
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="1.1*" />
-            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="96" />
           </Grid.ColumnDefinitions>
           <Border Width="25" Height="25" CornerRadius="6" Background="{StaticResource SurfaceRaisedBrush}">
             <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="12" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
           </Border>
-          <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="7,0,10,0" />
-          <TextBlock Grid.Column="2" Text="{Binding Device}" Style="{StaticResource MutedStyle}" VerticalAlignment="Center" Margin="0,0,12,0" />
-          <TextBlock Grid.Column="3" Text="{Binding DisplayValue}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="7,0,10,0" TextTrimming="CharacterEllipsis" />
+          <TextBlock Grid.Column="2" Text="{Binding Device}" Style="{StaticResource MutedStyle}" VerticalAlignment="Center" Margin="0,0,12,0" TextTrimming="CharacterEllipsis" />
+          <TextBlock Grid.Column="3" Text="{Binding DisplayValue}" FontFamily="{StaticResource DataFont}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center">
             <TextBlock.Style>
               <Style TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
