@@ -153,7 +153,8 @@ public enum IpcCommand
     SetRazerRgb,
     SetHardwareControlArmed,
     AdapterVerifyDefault,
-    AdapterVerifyRollback
+    AdapterVerifyRollback,
+    GpuFanSession
 }
 
 public static class ProtocolConstants

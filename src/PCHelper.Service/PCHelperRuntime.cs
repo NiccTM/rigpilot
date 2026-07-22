@@ -144,11 +144,17 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         // of GeForce card — so the NVML transport reported valid bounds yet every write
         // was refused. NVML remains the fallback when NVAPI exposes no controllable
         // cooler. An environment opt-in remains as a developer override inside the transport.
+        //
+        // The NVAPI session runs in a dedicated, recyclable helper process
+        // (RemoteGpuFanCoolerTransport) rather than in-service. This class of driver
+        // refuses every in-session restore-to-automatic, but a process exit releases
+        // the session and the driver reclaims the fan; hosting it out-of-process lets a
+        // refused restore escalate to killing just that helper — an instant reclaim,
+        // no service restart — and makes any helper death fail safe to firmware control.
         _gpuFanArmed = false;
         IGpuFanCoolerTransport? fanTransport = await SelectUsableFanTransportAsync(
             [
-                _ => Task.FromResult<IGpuFanCoolerTransport?>(
-                    NvApiGpuFanCoolerTransport.TryCreate(0, out NvApiGpuFanCoolerTransport nvapiFan, out string _) ? nvapiFan : null),
+                async candidateToken => await RemoteGpuFanCoolerTransport.TryCreateAsync(candidateToken).ConfigureAwait(false),
                 _ => Task.FromResult<IGpuFanCoolerTransport?>(
                     NvmlGpuFanCoolerTransport.TryCreate(enableWrites: true, out NvmlGpuFanCoolerTransport nvmlFan, out string _) ? nvmlFan : null),
             ],

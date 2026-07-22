@@ -1043,6 +1043,73 @@ if (args.Contains("--discover-hid", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--gpu-fan-session", StringComparer.OrdinalIgnoreCase))
+{
+    // Dedicated, recyclable NVAPI GPU-fan session. Running the fan's NVAPI session
+    // in this child rather than in the service exists for one reason: reclaim. This
+    // class of GeForce driver refuses every documented in-session restore-to-
+    // automatic (NVAPI_INVALID_USER_PRIVILEGE), but a process exit releases the
+    // session and the driver reclaims the fan. The service's
+    // RemoteGpuFanCoolerTransport drives this helper and, when an in-session restore
+    // is refused, kills it — returning the fan to the firmware curve in seconds
+    // without restarting the whole service. It also fails safe: if this helper dies
+    // for any reason, the fan reverts to firmware automatic rather than being
+    // stranded under manual control.
+    if (!NvApiGpuFanCoolerTransport.TryCreate(0, out NvApiGpuFanCoolerTransport sessionFan, out string sessionBindMessage))
+    {
+        Console.Error.WriteLine($"GPU fan session helper could not bind NVAPI: {sessionBindMessage}");
+        Environment.Exit(3);
+    }
+
+    using CancellationTokenSource fanSessionShutdown = new();
+    Console.CancelKeyPress += (_, cancelArgs) =>
+    {
+        cancelArgs.Cancel = true;
+        fanSessionShutdown.Cancel();
+    };
+
+    NamedPipeRequestServer fanServer = new(
+        pipeName,
+        FanSessionHandleAsync,
+        clientIdentityMode: NamedPipeClientIdentityMode.TokenAuthenticatedPrivateChannel);
+    Console.WriteLine("RigPilot GPU fan session helper is running.");
+    using (sessionFan)
+    {
+        await fanServer.RunAsync(fanSessionShutdown.Token);
+    }
+
+    return;
+
+    async Task<IpcResponse> FanSessionHandleAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return request.Command switch
+            {
+                IpcCommand.Handshake => Handshake(request),
+                IpcCommand.AdapterShutdown => ShutdownFanSession(request),
+                IpcCommand.GpuFanSession => await HandleFanSessionAsync(request, sessionFan, cancellationToken),
+                _ => Failure(request, "NOT_IMPLEMENTED", $"GPU fan session helper does not implement {request.Command}.")
+            };
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Failure(request, "UNAUTHORIZED", "Adapter-host session token is invalid.");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Failure(request, "GPU_FAN_SESSION_ERROR", exception.Message);
+        }
+    }
+
+    IpcResponse ShutdownFanSession(IpcRequest request)
+    {
+        _ = Unwrap<string>(request);
+        fanSessionShutdown.Cancel();
+        return Success(request, "GPU fan session helper is shutting down.");
+    }
+}
+
 using CancellationTokenSource shutdown = new();
 Console.CancelKeyPress += (_, eventArgs) =>
 {
@@ -1126,6 +1193,57 @@ async Task<IpcResponse> ReadSensorsAsync(IpcRequest request, CancellationToken c
 {
     _ = Unwrap<string>(request);
     return Success(request, await coordinator.Adapters[0].ReadSensorsAsync(cancellationToken));
+}
+
+async Task<IpcResponse> HandleFanSessionAsync(
+    IpcRequest request,
+    NvApiGpuFanCoolerTransport fan,
+    CancellationToken cancellationToken)
+{
+    GpuFanSessionRequest payload = Unwrap<GpuFanSessionRequest>(request);
+    switch (payload.Op)
+    {
+        case GpuFanSessionOps.Ping:
+        case GpuFanSessionOps.ReadBounds:
+        {
+            GpuFanBounds? bounds = await fan.ReadBoundsAsync(payload.ChannelId, cancellationToken);
+            return Success(request, new GpuFanSessionResult(bounds is not null, false, "bounds read", null, bounds));
+        }
+        case GpuFanSessionOps.ReadState:
+        {
+            GpuFanChannelState state = await fan.ReadStateAsync(payload.ChannelId, cancellationToken);
+            return Success(request, new GpuFanSessionResult(true, false, "state read", state, null));
+        }
+        case GpuFanSessionOps.SetManual:
+        {
+            await fan.SetManualDutyAsync(payload.ChannelId, payload.DutyPercent, cancellationToken);
+            return Success(request, new GpuFanSessionResult(true, false, $"manual {payload.DutyPercent}% commanded", null, null));
+        }
+        case GpuFanSessionOps.SetArmed:
+        {
+            fan.SetArmed(payload.Armed);
+            return Success(request, new GpuFanSessionResult(true, false, payload.Armed ? "armed" : "disarmed", null, null));
+        }
+        case GpuFanSessionOps.Restore:
+        {
+            try
+            {
+                await fan.RestoreAutomaticAsync(payload.ChannelId, cancellationToken);
+                GpuFanChannelState restored = await fan.ReadStateAsync(payload.ChannelId, cancellationToken);
+                return Success(request, new GpuFanSessionResult(true, false, "restored in-session", restored, null));
+            }
+            catch (GpuFanSafetyException exception)
+            {
+                // In-session restore was refused on this card. Report it (not as a
+                // hard error) so the service escalates to recycling this process,
+                // whose exit releases the NVAPI session and lets the driver reclaim
+                // the fan.
+                return Success(request, new GpuFanSessionResult(false, true, exception.Message, null, null));
+            }
+        }
+        default:
+            return Failure(request, "UNKNOWN_OP", $"Unknown GPU fan session op '{payload.Op}'.");
+    }
 }
 
 async Task<IpcResponse> PrepareAsync(IpcRequest request, CancellationToken cancellationToken)
