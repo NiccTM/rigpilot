@@ -643,15 +643,19 @@
                             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
                             <Setter Property="BorderThickness" Value="1" />
                             <Style.Triggers>
-                              <DataTrigger Binding="{Binding SafetyTone}" Value="Safe">
+                              <!-- Tone tracks the write-path state the badge names
+                                   (WriteStateTone), not the broader SafetyTone, so a
+                                   ready write path is never shown amber merely because
+                                   Experimental controls are present. -->
+                              <DataTrigger Binding="{Binding WriteStateTone}" Value="Safe">
                                 <Setter Property="Background" Value="{StaticResource SafeSoftBrush}" />
                                 <Setter Property="BorderBrush" Value="{StaticResource SafeBrush}" />
                               </DataTrigger>
-                              <DataTrigger Binding="{Binding SafetyTone}" Value="Warning">
+                              <DataTrigger Binding="{Binding WriteStateTone}" Value="Warning">
                                 <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
                                 <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}" />
                               </DataTrigger>
-                              <DataTrigger Binding="{Binding SafetyTone}" Value="Critical">
+                              <DataTrigger Binding="{Binding WriteStateTone}" Value="Critical">
                                 <Setter Property="Background" Value="{StaticResource CriticalSoftBrush}" />
                                 <Setter Property="BorderBrush" Value="{StaticResource CriticalBrush}" />
                               </DataTrigger>

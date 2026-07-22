@@ -2334,6 +2334,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged(nameof(CanUseServiceWrites));
             OnPropertyChanged(nameof(IsRecoveryRequired));
             OnPropertyChanged(nameof(WriteStateLabel));
+            OnPropertyChanged(nameof(WriteStateTone));
             _toggleHardwareControlCommand.RaiseCanExecuteChanged();
             _applyGpuControlCommand.RaiseCanExecuteChanged();
             _startGpuAutoOcCommand.RaiseCanExecuteChanged();
@@ -3761,6 +3762,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             ? "Service update required"
             : CanWrite ? "Service write path ready" : "Hardware writes locked";
 
+    /// <summary>
+    /// Badge tone for <see cref="WriteStateLabel"/>. It tracks the write-path
+    /// state the badge actually names, not the broader <c>SafetyTone</c>: a ready
+    /// write path must not render amber just because Experimental controls were
+    /// detected (that posture is carried by the summary text below the badge).
+    /// </summary>
+    public string WriteStateTone => !IsServiceOnline
+        ? "Warning"
+        : IsRecoveryRequired
+            ? "Critical"
+        : !CanUseServiceWrites
+            ? "Warning"
+            : CanWrite ? "Safe" : "Warning";
+
     public string ServiceVersion => _serviceCompatibility.ServiceVersion ?? _status?.Version ?? "Unavailable";
 
     public string AppVersion => _serviceCompatibility.ClientVersion;
@@ -4303,6 +4318,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(ConnectionTone));
         OnPropertyChanged(nameof(CanWrite));
         OnPropertyChanged(nameof(WriteStateLabel));
+        OnPropertyChanged(nameof(WriteStateTone));
         OnPropertyChanged(nameof(ServiceVersion));
         OnPropertyChanged(nameof(AppVersion));
         RebuildExperimentalControlCenter();
@@ -4319,6 +4335,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(IsRecoveryRequired));
         OnPropertyChanged(nameof(CanWrite));
         OnPropertyChanged(nameof(WriteStateLabel));
+        OnPropertyChanged(nameof(WriteStateTone));
         OnPropertyChanged(nameof(ConnectionTone));
         _toggleHardwareControlCommand.RaiseCanExecuteChanged();
         RaiseHardwareControlCanExecuteChanged();
@@ -5651,6 +5668,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(TuneAvailabilityTone));
         OnPropertyChanged(nameof(CanWrite));
         OnPropertyChanged(nameof(WriteStateLabel));
+        OnPropertyChanged(nameof(WriteStateTone));
         OnPropertyChanged(nameof(ServiceVersion));
         OnPropertyChanged(nameof(StateRevisionText));
         OnPropertyChanged(nameof(ServiceUptimeText));
