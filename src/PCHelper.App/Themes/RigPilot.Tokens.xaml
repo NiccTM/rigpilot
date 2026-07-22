@@ -126,6 +126,18 @@
               <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource StateBlockedBrush}" />
               <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource StateBlockedBrush}" />
             </Trigger>
+            <!-- Supported: a shipping feature that works but has no firmware
+                 read-back, so it is confirmed by sight rather than by an API
+                 read. Green (it is safe and working, never a risk state like
+                 Experimental), with the eye glyph to name the visual-confirmation
+                 nature honestly. -->
+            <Trigger Property="Content" Value="Supported">
+              <Setter TargetName="Pill" Property="Background" Value="{DynamicResource StateVerifiedSoftBrush}" />
+              <Setter TargetName="Pill" Property="BorderBrush" Value="{DynamicResource StateVerifiedBrush}" />
+              <Setter TargetName="Glyph" Property="Text" Value="&#xE7B3;" />
+              <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource StateVerifiedBrush}" />
+              <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource StateVerifiedBrush}" />
+            </Trigger>
             <Trigger Property="Content" Value="ReadOnly">
               <Setter TargetName="Glyph" Property="Text" Value="&#xE7B3;" />
             </Trigger>
