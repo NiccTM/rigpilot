@@ -169,16 +169,15 @@ public sealed record DeviceDisplay(
 {
     public static DeviceDisplay From(HardwareDevice device)
     {
-        string manufacturer = string.IsNullOrWhiteSpace(device.Manufacturer) ? "Unknown manufacturer" : device.Manufacturer;
-        string model = string.IsNullOrWhiteSpace(device.Model) ? "Model not reported" : device.Model;
-        // Some drives report an empty identity string; fall back to the model or a
-        // kind label so the card never renders with a blank title.
+        // Drive identity strings arrive as fixed-length buffers that some
+        // controllers leave padded with NUL or other control characters. Those
+        // are not whitespace, so IsNullOrWhiteSpace keeps them and the card
+        // renders blank. Sanitise every identity field to null when it carries no
+        // printable text, then fall back to model, then a kind label for the name.
         string kindLabel = SplitWords(device.Kind.ToString());
-        string name = !string.IsNullOrWhiteSpace(device.Name)
-            ? device.Name
-            : !string.IsNullOrWhiteSpace(device.Model)
-                ? device.Model
-                : $"Unnamed {kindLabel.ToLowerInvariant()}";
+        string manufacturer = Sanitise(device.Manufacturer) ?? "Unknown manufacturer";
+        string model = Sanitise(device.Model) ?? "Model not reported";
+        string name = Sanitise(device.Name) ?? Sanitise(device.Model) ?? $"Unnamed {kindLabel.ToLowerInvariant()}";
         device.Properties.TryGetValue("compatibilityLabel", out string? compatibilityLabel);
         device.Properties.TryGetValue("boardPartnerLabel", out string? boardPartnerLabel);
         string details = string.IsNullOrWhiteSpace(compatibilityLabel)
@@ -215,6 +214,32 @@ public sealed record DeviceDisplay(
 
     private static string SplitWords(string value) =>
         System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+
+    /// <summary>
+    /// Returns the value with control characters removed and trimmed, or null if
+    /// nothing printable remains. Handles NUL-padded identity buffers that
+    /// <see cref="string.IsNullOrWhiteSpace"/> does not treat as empty.
+    /// </summary>
+    private static string? Sanitise(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return null;
+        }
+
+        char[] buffer = new char[value.Length];
+        int length = 0;
+        foreach (char c in value)
+        {
+            if (!char.IsControl(c))
+            {
+                buffer[length++] = c;
+            }
+        }
+
+        string cleaned = new string(buffer, 0, length).Trim();
+        return cleaned.Length == 0 ? null : cleaned;
+    }
 }
 
 public sealed record CapabilityDisplay(
