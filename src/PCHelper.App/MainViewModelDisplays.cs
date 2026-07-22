@@ -171,6 +171,14 @@ public sealed record DeviceDisplay(
     {
         string manufacturer = string.IsNullOrWhiteSpace(device.Manufacturer) ? "Unknown manufacturer" : device.Manufacturer;
         string model = string.IsNullOrWhiteSpace(device.Model) ? "Model not reported" : device.Model;
+        // Some drives report an empty identity string; fall back to the model or a
+        // kind label so the card never renders with a blank title.
+        string kindLabel = SplitWords(device.Kind.ToString());
+        string name = !string.IsNullOrWhiteSpace(device.Name)
+            ? device.Name
+            : !string.IsNullOrWhiteSpace(device.Model)
+                ? device.Model
+                : $"Unnamed {kindLabel.ToLowerInvariant()}";
         device.Properties.TryGetValue("compatibilityLabel", out string? compatibilityLabel);
         device.Properties.TryGetValue("boardPartnerLabel", out string? boardPartnerLabel);
         string details = string.IsNullOrWhiteSpace(compatibilityLabel)
@@ -195,14 +203,14 @@ public sealed record DeviceDisplay(
         };
         return new DeviceDisplay(
             device.Id,
-            device.Name,
-            SplitWords(device.Kind.ToString()),
+            name,
+            kindLabel,
             manufacturer,
             model,
             details,
             glyph,
             compatibilityLabel,
-            $"{device.Name} {device.Kind} {manufacturer} {model} {compatibilityLabel} {string.Join(' ', device.Properties.Values)}");
+            $"{name} {device.Kind} {manufacturer} {model} {compatibilityLabel} {string.Join(' ', device.Properties.Values)}");
     }
 
     private static string SplitWords(string value) =>

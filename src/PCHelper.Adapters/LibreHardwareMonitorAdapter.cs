@@ -561,6 +561,18 @@ public sealed class LibreHardwareMonitorAdapter : IHardwareAdapter, IHardwareSta
     {
         foreach (IHardware hardware in _computer!.Hardware)
         {
+            // Network interfaces are outside RigPilot's cooling/RGB/GPU/CPU domain
+            // and have no controllable capabilities. Worse, Windows layers dozens
+            // of pseudo-adapters on each real NIC (WFP MAC-layer filters, QoS
+            // packet schedulers, WiFi filter drivers), so LibreHardwareMonitor
+            // reports them as "hardware" and they flood the device inventory (43 of
+            // 70 entries on a typical desktop). Skip the whole subsystem so devices,
+            // sensors, and control lookup all stay limited to relevant hardware.
+            if (hardware.HardwareType == HardwareType.Network)
+            {
+                continue;
+            }
+
             yield return hardware;
             foreach (IHardware subHardware in hardware.SubHardware)
             {
