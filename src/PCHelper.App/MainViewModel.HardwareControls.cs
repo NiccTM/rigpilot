@@ -159,7 +159,13 @@ public sealed partial class MainViewModel
             if (!ShouldCommitHardwareControlState(response.Success, result, enable))
             {
                 _hardwareControlArmedThisConnection = false;
-                ShowNotice(result.Message, result.RecoveryRequired ? "Danger" : "Warning");
+                // "Error" (not the unstyled "Danger") so a real recovery state reads
+                // red; clearsWhenRecovered lets the banner retire itself once the
+                // service reports the family restored.
+                ShowNotice(
+                    result.Message,
+                    result.RecoveryRequired ? "Error" : "Warning",
+                    clearsWhenRecovered: result.RecoveryRequired);
                 OnPropertyChanged(nameof(HardwareControlEnabled));
                 return false;
             }

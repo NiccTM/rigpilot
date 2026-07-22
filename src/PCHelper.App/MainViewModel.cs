@@ -156,6 +156,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _noticeText = string.Empty;
     private string _noticeTone = "Info";
     private bool _hasNotice;
+    // True while the visible notice reports a service-recovery condition, so it can
+    // be retired automatically once the service clears that condition instead of
+    // lingering until the user dismisses it by hand.
+    private bool _recoveryNoticeActive;
     private OperationTargetDisplay? _selectedCalibrationTarget;
     private OperationTargetDisplay? _selectedTuneTarget;
     private bool _advancedWritesAcknowledged;
@@ -4047,11 +4051,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             $"Safety: {SafetySummary}");
     }
 
-    public void ShowNotice(string message, string tone = "Info")
+    public void ShowNotice(string message, string tone = "Info", bool clearsWhenRecovered = false)
     {
         NoticeText = message;
         NoticeTone = tone;
         HasNotice = true;
+        // Any new notice supersedes a prior recovery notice; only a notice that
+        // opts in stays tied to the service-recovery state.
+        _recoveryNoticeActive = clearsWhenRecovered;
     }
 
     public void Dispose()
@@ -4123,6 +4130,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 // second, instead of lingering up to a full control-plane interval after the
                 // service has already recovered.
                 || _status.RecoveryRequired
+                // Poll on every tick while a recovery notice is up too, so it is
+                // retired within a second of the service clearing the condition.
+                || _recoveryNoticeActive
                 || refreshTime - _lastServiceControlPlaneRefresh >= ServiceControlPlaneRefreshInterval;
             if (refreshControlPlane)
             {
@@ -4142,6 +4152,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 {
                     _hardwareControlArmedThisConnection = false;
                     SetHardwareControlState(false);
+                }
+                else if (_recoveryNoticeActive)
+                {
+                    // The service has cleared the recovery condition the notice
+                    // reported (it self-recovers, e.g. after the GPU-fan NVAPI
+                    // restore settles), so retire the now-stale banner rather than
+                    // leaving it up until the user dismisses it.
+                    DismissNotice();
                 }
                 NotifyServiceWriteStateChanged();
                 // CanUseServiceWrites intentionally includes the live connection
@@ -6198,6 +6216,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         HasNotice = false;
         NoticeText = string.Empty;
+        _recoveryNoticeActive = false;
     }
 
     private bool Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
