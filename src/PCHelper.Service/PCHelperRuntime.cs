@@ -28,11 +28,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private AdapterCoordinator? _coordinator;
     private ProfileTransactionEngine? _engine;
     private AdapterPackManager? _adapterPackManager;
-    private NvmlGpuFanCoolerTransport? _gpuFanTransport;
+    private IGpuFanCoolerTransport? _gpuFanTransport;
     private IHardwareAdapter? _gpuFanAdapter;
     private volatile bool _gpuFanArmed;
     private string _gpuFanDeviceId = "nvidia:gpu-0";
-    private NvmlGpuPowerLimitTransport? _gpuPowerTransport;
+    private IGpuPowerLimitTransport? _gpuPowerTransport;
     private IHardwareAdapter? _gpuPowerAdapter;
     private volatile bool _gpuPowerArmed;
     private NvapiGpuClockOffsetTransport? _gpuClockTransport;
@@ -64,6 +64,13 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         "Safe mode has not been configured.");
     private DateTimeOffset _lastHealthSignalScan = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(5);
 
+    // The GPU power limit the operator last committed through RigPilot, in milliwatts, or null
+    // for "vendor default only". Hardware recovery treats this as an accepted resting state so a
+    // deliberately-raised power ceiling does not demand the NVAPI restore write the long-lived
+    // service is refused. Loaded on init before the power adapter is built and before recovery
+    // runs; kept current on every power apply and cleared on an explicit reset.
+    private uint? _committedGpuPowerLimitMilliwatts;
+
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         _store = await CreateStoreAsync(cancellationToken).ConfigureAwait(false);
@@ -79,6 +86,27 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             SafetyRecoveryStateV1.DefaultId,
             cancellationToken).ConfigureAwait(false)
             ?? _safetyRecoveryState with { UpdatedAt = DateTimeOffset.UtcNow };
+        GpuPowerCommitmentV1? gpuPowerCommitment = await _store.GetSuiteEntityAsync<GpuPowerCommitmentV1>(
+            SuiteEntityKind.GpuPowerCommitment,
+            GpuPowerCommitmentV1.DefaultId,
+            cancellationToken).ConfigureAwait(false);
+        if (gpuPowerCommitment is not null)
+        {
+            // A recorded commitment (including an explicit null after a reset) is authoritative.
+            _committedGpuPowerLimitMilliwatts = gpuPowerCommitment.TargetMilliwatts;
+        }
+        else
+        {
+            // Bootstrap for a runtime upgraded from a build that never recorded a commitment:
+            // adopt the limit the last committed profile set, so a power limit already applied
+            // before this build is treated as the operator's desired resting state and does not
+            // lock recovery. Persisted so this one-time derivation is not repeated.
+            uint? derived = await DeriveCommittedGpuPowerFromLatestProfileAsync(cancellationToken).ConfigureAwait(false);
+            if (derived is not null)
+            {
+                await UpdateGpuPowerCommitmentAsync(derived, cancellationToken).ConfigureAwait(false);
+            }
+        }
         foreach (OwnershipLeaseV1 lease in await _store.GetSuiteEntitiesAsync<OwnershipLeaseV1>(SuiteEntityKind.OwnershipLease, cancellationToken).ConfigureAwait(false))
         {
             _ownershipLeases.Restore(lease, DateTimeOffset.UtcNow);
@@ -109,51 +137,64 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         // and no write can occur until an operator explicitly arms it with an Experimental
         // acknowledgement for the exact device (SetGpuFanControlArmed). Deploying this code
         // therefore never arms a live fan write even though the service runs elevated. The
-        // adapter is registered only when NVML reports a usable fan transport with valid
-        // bounds. An environment opt-in remains as a developer override inside the transport.
+        // adapter is registered only when a usable fan transport with valid bounds is
+        // found. NVAPI is preferred over NVML: NVAPI's cooler API is the standard NVIDIA
+        // fan-write path and the surface the clock-offset control already uses on this
+        // GPU, whereas NVML's fan setters return NVML_ERROR_NO_PERMISSION on this class
+        // of GeForce card — so the NVML transport reported valid bounds yet every write
+        // was refused. NVML remains the fallback when NVAPI exposes no controllable
+        // cooler. An environment opt-in remains as a developer override inside the transport.
+        //
+        // The NVAPI session runs in a dedicated, recyclable helper process
+        // (RemoteGpuFanCoolerTransport) rather than in-service. This class of driver
+        // refuses every in-session restore-to-automatic, but a process exit releases
+        // the session and the driver reclaims the fan; hosting it out-of-process lets a
+        // refused restore escalate to killing just that helper — an instant reclaim,
+        // no service restart — and makes any helper death fail safe to firmware control.
         _gpuFanArmed = false;
-        if (NvmlGpuFanCoolerTransport.TryCreate(enableWrites: true, out NvmlGpuFanCoolerTransport fanTransport, out _))
+        IGpuFanCoolerTransport? fanTransport = await SelectUsableFanTransportAsync(
+            [
+                async candidateToken => await RemoteGpuFanCoolerTransport.TryCreateAsync(candidateToken).ConfigureAwait(false),
+                _ => Task.FromResult<IGpuFanCoolerTransport?>(
+                    NvmlGpuFanCoolerTransport.TryCreate(enableWrites: true, out NvmlGpuFanCoolerTransport nvmlFan, out string _) ? nvmlFan : null),
+            ],
+            cancellationToken).ConfigureAwait(false);
+        if (fanTransport is not null)
         {
-            GpuFanBounds? bounds = fanTransport.CanWrite
-                ? await fanTransport.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false)
-                : null;
-            if (bounds is { IsValid: true })
-            {
-                _gpuFanTransport = fanTransport;
-                _gpuFanDeviceId = "nvidia:gpu-0";
-                TraceableHardwareAdapter gpuFanAdapter = new(
-                    new NvidiaGpuFanAdapter(fanTransport, _gpuFanDeviceId, "0", () => _gpuFanArmed));
-                _gpuFanAdapter = gpuFanAdapter;
-                adapters.Add(gpuFanAdapter);
-            }
-            else
-            {
-                fanTransport.Dispose();
-            }
+            _gpuFanTransport = fanTransport;
+            _gpuFanDeviceId = "nvidia:gpu-0";
+            TraceableHardwareAdapter gpuFanAdapter = new(
+                new NvidiaGpuFanAdapter(fanTransport, _gpuFanDeviceId, "0", () => _gpuFanArmed));
+            _gpuFanAdapter = gpuFanAdapter;
+            adapters.Add(gpuFanAdapter);
         }
 
         // Experimental GPU power-limit control: identical disarmed-by-default pattern.
         // The capability registers ReadOnly and no write can occur until an operator
         // explicitly arms it with an Experimental acknowledgement for the exact device
-        // (SetGpuPowerLimitArmed). Registered only when NVML reports valid constraints.
+        // (SetGpuPowerLimitArmed). NVAPI is preferred over NVML: NVML's power setter
+        // returns NVML_ERROR_NO_PERMISSION on this class of GeForce card (the same
+        // restriction as its fan setters), so the NVML transport reported valid
+        // constraints yet every write was refused. NVAPI expresses the limit as a
+        // percentage of the default TDP, so the default TDP in milliwatts — read
+        // reliably from NVML, whose reads work even though its writes do not — is
+        // passed as the conversion anchor. NVML remains the fallback if NVAPI is
+        // unavailable.
         _gpuPowerArmed = false;
-        if (NvmlGpuPowerLimitTransport.TryCreate(enableWrites: true, out NvmlGpuPowerLimitTransport powerTransport, out _))
+        IGpuPowerLimitTransport? powerTransport = await SelectUsablePowerTransportAsync(cancellationToken).ConfigureAwait(false);
+        if (powerTransport is not null)
         {
-            GpuPowerLimitBounds? powerBounds = powerTransport.CanWrite
-                ? await powerTransport.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false)
-                : null;
-            if (powerBounds is { IsValid: true })
-            {
-                _gpuPowerTransport = powerTransport;
-                TraceableHardwareAdapter gpuPowerAdapter = new(
-                    new NvidiaGpuPowerLimitAdapter(powerTransport, _gpuFanDeviceId, "0", () => _gpuPowerArmed));
-                _gpuPowerAdapter = gpuPowerAdapter;
-                adapters.Add(gpuPowerAdapter);
-            }
-            else
-            {
-                powerTransport.Dispose();
-            }
+            _gpuPowerTransport = powerTransport;
+            TraceableHardwareAdapter gpuPowerAdapter = new(
+                new NvidiaGpuPowerLimitAdapter(
+                    powerTransport,
+                    _gpuFanDeviceId,
+                    "0",
+                    () => _gpuPowerArmed,
+                    isConflicted: null,
+                    committedTargetMilliwatts: () => _committedGpuPowerLimitMilliwatts));
+            _gpuPowerAdapter = gpuPowerAdapter;
+            adapters.Add(gpuPowerAdapter);
         }
 
         // Experimental GPU clock offsets (core + memory): identical disarmed-by-default
@@ -208,6 +249,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _adapterPackManager = CreateAdapterPackManager();
         await RecoverPendingTransactionAsync(cancellationToken).ConfigureAwait(false);
         await RefreshAsync(persistSensors: true, cancellationToken).ConfigureAwait(false);
+        await EvaluateAutoOcProfilesOnStartupAsync(cancellationToken).ConfigureAwait(false);
         foreach (ProfileV2 profile in CapabilityProfileFactory.Create(GetSnapshot()))
         {
             await _store.SaveSuiteEntityAsync(SuiteEntityKind.ProfileV2, profile.Id, profile, cancellationToken).ConfigureAwait(false);
@@ -265,6 +307,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 .ToArray();
             await _store!.AppendAsync(history, cancellationToken).ConfigureAwait(false);
         }
+        await EvaluateActiveAutoOcFingerprintAsync(snapshot, cancellationToken).ConfigureAwait(false);
         await EvaluateHealthRulesAsync(snapshot, cancellationToken).ConfigureAwait(false);
         await TickCoolingGraphAsync(snapshot, cancellationToken).ConfigureAwait(false);
     }
@@ -352,7 +395,14 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.GetProfilesV2 => Success(
                     request,
                     await _store!.GetSuiteEntitiesAsync<ProfileV2>(SuiteEntityKind.ProfileV2, cancellationToken).ConfigureAwait(false)),
+                IpcCommand.GetAutoOcProfileValidations => Success(
+                    request,
+                    await _store!.GetSuiteEntitiesAsync<AutoOcProfileValidationV1>(SuiteEntityKind.AutoOcProfileValidation, cancellationToken).ConfigureAwait(false)),
+                IpcCommand.PreviewProfileV2 => await PreviewProfileV2Async(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SaveProfileV2 => await SaveProfileV2Async(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.GetGpuFanState => Success(
+                    request,
+                    await ReadGpuFanStateAsync(cancellationToken).ConfigureAwait(false)),
                 IpcCommand.GetCoolingGraphs => Success(
                     request,
                     await _store!.GetSuiteEntitiesAsync<CoolingGraphV1>(SuiteEntityKind.CoolingGraph, cancellationToken).ConfigureAwait(false)),
@@ -413,6 +463,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.StartCalibration => await StartCalibrationAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StartTune => await StartTuneAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.StartAutoOc => await StartAutoOcAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.StartAutoOcV3 => await StartAutoOcV3Async(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.AbortOperation => AbortOperation(request),
                 IpcCommand.GetOperationStatus => Success(request, GetOperationStatus()),
                 IpcCommand.GetOperationById => await GetOperationByIdAsync(request, cancellationToken).ConfigureAwait(false),
@@ -1314,6 +1365,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         EnsureExpectedRevision(request);
         ApplyProfileRequest payload = IpcJson.FromElement<ApplyProfileRequest>(request.Payload)
             ?? throw new InvalidDataException("ApplyProfile requires an ApplyProfileRequest payload.");
+        string? previousProfileId = _engine!.ActiveProfileId;
         string? protectionError = await ValidateProtectedCoolingActionsAsync(payload.Profile.Actions, cancellationToken).ConfigureAwait(false);
         if (protectionError is not null)
         {
@@ -1343,6 +1395,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
 
         await _store!.SaveProfileAsync(payload.Profile, cancellationToken).ConfigureAwait(false);
+        await CaptureGpuPowerCommitmentAsync(transaction, cancellationToken).ConfigureAwait(false);
+        await CompleteAutoOcActiveSessionAsync(previousProfileId, countSuccessfulColdBoot: false, cancellationToken).ConfigureAwait(false);
         return Success(request, new ApplyProfileResult(transaction, _engine.ActiveProfileId));
     }
 
@@ -1360,6 +1414,15 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         EnsureExpectedRevision(request);
         ApplyProfileV2Request payload = IpcJson.FromElement<ApplyProfileV2Request>(request.Payload)
             ?? throw new InvalidDataException("ApplyProfileV2 requires an ApplyProfileV2Request payload.");
+        string? autoOcValidationError = await ValidateAutoOcProfileForApplyAsync(
+            payload.Profile,
+            payload.Source,
+            cancellationToken).ConfigureAwait(false);
+        if (autoOcValidationError is not null)
+        {
+            return Failure(request, "AUTO_OC_VALIDATION_REQUIRED", autoOcValidationError);
+        }
+        string? previousProfileId = _engine!.ActiveProfileId;
         Dictionary<string, CapabilityDescriptorV2> capabilitiesV2 = GetCapabilitiesV2()
             .ToDictionary(item => item.Capability.Id, StringComparer.Ordinal);
         ProfileValidationResult validation = ProfileV2Validator.Validate(
@@ -1448,7 +1511,18 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             coolingControls).ConfigureAwait(false);
         if (transaction.State == ProfileTransactionState.RecoveryRequired)
         {
-            _rollbackBlocked = true;
+            // A profile with no direct hardware actions that only activates a cooling
+            // graph can only have reached RecoveryRequired through the cooling-graph
+            // replace above (nothing else ran) — the graph's own outputs are always
+            // duty-percent-bounded fan/pump controls, never clock, power, or voltage.
+            // ReplaceActiveCoolingGraphTransactionAsync already published the cooling
+            // subsystem's own RecoveryRequired state, so scope the failure there
+            // instead of locking every unrelated hardware capability service-wide.
+            bool isCoolingGraphOnlyProfile = hardwareProfile.Actions.Count == 0 && requestedCoolingGraph is not null;
+            if (!isCoolingGraphOnlyProfile)
+            {
+                _rollbackBlocked = true;
+            }
             return FailureWithPayload(
                 request,
                 "RECOVERY_REQUIRED",
@@ -1464,7 +1538,186 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             payload.Profile.Id,
             payload.Profile,
             cancellationToken).ConfigureAwait(false);
+        await CaptureGpuPowerCommitmentAsync(transaction, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!string.Equals(previousProfileId, payload.Profile.Id, StringComparison.Ordinal))
+            {
+                await CompleteAutoOcActiveSessionAsync(previousProfileId, countSuccessfulColdBoot: false, cancellationToken).ConfigureAwait(false);
+            }
+            await ActivateAutoOcProfileAsync(payload.Profile.Id, payload.Source, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await FailClosedAfterAutoOcEvidenceErrorAsync(payload.Profile, exception).ConfigureAwait(false);
+            throw;
+        }
         return Success(request, new ApplyProfileResult(transaction, _engine.ActiveProfileId));
+    }
+
+    private async Task<IpcResponse> PreviewProfileV2Async(IpcRequest request, CancellationToken cancellationToken)
+    {
+        PreviewProfileV2Request payload = IpcJson.FromElement<PreviewProfileV2Request>(request.Payload)
+            ?? throw new InvalidDataException("PreviewProfileV2 requires a PreviewProfileV2Request payload.");
+        Dictionary<string, CapabilityDescriptorV2> capabilities = GetCapabilitiesV2()
+            .ToDictionary(item => item.Capability.Id, StringComparer.Ordinal);
+        List<ProfileDryRunActionV1> linkedActions = [];
+        List<string> linkedConflicts = [];
+        List<string> linkedRequiredCapabilities = [];
+
+        if (payload.Profile.CoolingGraphId is string coolingGraphId)
+        {
+            CoolingGraphV1? graph = await _store!.GetSuiteEntityAsync<CoolingGraphV1>(
+                SuiteEntityKind.CoolingGraph,
+                coolingGraphId,
+                cancellationToken).ConfigureAwait(false);
+            if (graph is null)
+            {
+                const string message = "The linked cooling graph is unavailable; no profile mutation should start.";
+                linkedActions.Add(new(
+                    "linked-cooling",
+                    "Cooling",
+                    coolingGraphId,
+                    ProfileDryRunActionState.Blocked,
+                    true,
+                    null,
+                    message));
+                linkedConflicts.Add(message);
+            }
+            else
+            {
+                string[] missingOutputs = graph.Outputs
+                    .Select(item => item.CapabilityId)
+                    .Where(item => !capabilities.ContainsKey(item))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                string? graphError = missingOutputs.Length > 0
+                    ? $"Cooling outputs are unavailable: {string.Join(", ", missingOutputs)}."
+                    : await ValidateCoolingGraphOutputRolesAsync(graph, cancellationToken).ConfigureAwait(false)
+                        ?? await ValidateCoolingGraphQualificationAsync(graph, cancellationToken).ConfigureAwait(false);
+                if (graphError is null)
+                {
+                    string[] unconfirmedCoolingDevices = payload.Profile.IsExperimental
+                        ? graph.Outputs
+                            .Select(item => capabilities[item.CapabilityId].Capability.DeviceId)
+                            .Distinct(StringComparer.Ordinal)
+                            .Where(item => !payload.ConfirmedDeviceIds.Contains(item, StringComparer.Ordinal))
+                            .ToArray()
+                        : [];
+                    if (unconfirmedCoolingDevices.Length > 0)
+                    {
+                        string message = $"Exact-device confirmation is missing for linked cooling outputs: {string.Join(", ", unconfirmedCoolingDevices)}.";
+                        linkedActions.Add(new(
+                            "linked-cooling",
+                            "Cooling",
+                            graph.Name,
+                            ProfileDryRunActionState.RequiresConfirmation,
+                            true,
+                            null,
+                            message));
+                        linkedConflicts.Add(message);
+                    }
+                    else
+                    {
+                        linkedRequiredCapabilities.AddRange(graph.Outputs.Select(item => item.CapabilityId));
+                        linkedActions.Add(new(
+                            "linked-cooling",
+                            "Cooling",
+                            graph.Name,
+                            ProfileDryRunActionState.Ready,
+                            true,
+                            null,
+                            "Ready; cooling replacement participates in the service transaction and its prior graph is restored on failure."));
+                    }
+                }
+                else
+                {
+                    linkedActions.Add(new(
+                        "linked-cooling",
+                        "Cooling",
+                        graph.Name,
+                        ProfileDryRunActionState.Blocked,
+                        true,
+                        null,
+                        graphError));
+                    linkedConflicts.Add(graphError);
+                }
+            }
+        }
+
+        AddCompanionPreview(
+            payload.Profile.LightingSceneId,
+            payload.KnownLightingSceneIds,
+            "linked-lighting",
+            "Lighting",
+            "lighting scene",
+            linkedActions,
+            linkedConflicts);
+        AddCompanionPreview(
+            payload.Profile.OsdLayoutId,
+            payload.KnownOsdLayoutIds,
+            "linked-osd",
+            "OSD",
+            "OSD layout",
+            linkedActions,
+            linkedConflicts);
+
+        ProfileDryRunResultV1 result = ProfileDryRunPlanner.Build(
+            payload,
+            capabilities,
+            linkedActions,
+            linkedConflicts);
+        if (linkedRequiredCapabilities.Count > 0)
+        {
+            result = result with
+            {
+                RequiredCapabilities = result.RequiredCapabilities
+                    .Concat(linkedRequiredCapabilities)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(item => item, StringComparer.Ordinal)
+                    .ToArray()
+            };
+        }
+        return Success(request, result);
+    }
+
+    private static void AddCompanionPreview(
+        string? referenceId,
+        IReadOnlyList<string> knownIds,
+        string actionId,
+        string domain,
+        string label,
+        List<ProfileDryRunActionV1> actions,
+        List<string> conflicts)
+    {
+        if (string.IsNullOrWhiteSpace(referenceId))
+        {
+            return;
+        }
+
+        if (knownIds.Contains(referenceId, StringComparer.Ordinal))
+        {
+            actions.Add(new(
+                actionId,
+                domain,
+                referenceId,
+                ProfileDryRunActionState.IndependentCompanion,
+                true,
+                null,
+                $"The linked {label} is available, but runs in the user session after the verified service commit and reports independently."));
+            return;
+        }
+
+        string message = $"The linked {label} '{referenceId}' is unavailable in this user session.";
+        actions.Add(new(
+            actionId,
+            domain,
+            referenceId,
+            ProfileDryRunActionState.Blocked,
+            true,
+            null,
+            message));
+        conflicts.Add(message);
     }
 
     private async Task<IpcResponse> SaveAutomationRuleAsync(IpcRequest request, CancellationToken cancellationToken)
@@ -1536,8 +1789,32 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return Failure(request, "RESET_NOT_AVAILABLE", "Only Verified capabilities with explicit reset semantics can be reset.");
         }
 
-        IHardwareAdapter adapter = _coordinator!.Adapters.First(item => item.Manifest.Id == capability.AdapterId);
-        await adapter.ResetToDefaultAsync(capability.Id, cancellationToken).ConfigureAwait(false);
+        string? activeProfileId = _engine!.ActiveProfileId;
+        if (capability.Id.StartsWith(NvidiaGpuPowerLimitAdapter.CapabilityPrefix, StringComparison.Ordinal))
+        {
+            // An explicit operator reset must reach the vendor default, so drop any committed
+            // limit first — otherwise the adapter would treat the current committed value as an
+            // accepted resting state and skip the restore write.
+            await UpdateGpuPowerCommitmentAsync(null, cancellationToken).ConfigureAwait(false);
+        }
+
+        HardwareRecoveryResult recovery = await _engine.RestoreDefaultsAsync(
+            [new HardwareControlLeaseItemV1(capability.AdapterId, capability.Id)],
+            cancellationToken).ConfigureAwait(false);
+        if (!recovery.AllDefaultsVerified)
+        {
+            _rollbackBlocked = true;
+            string message = recovery.Errors.Count == 0
+                ? "The adapter did not return a successful default-state read-back."
+                : string.Join(" ", recovery.Errors);
+            await MarkAutoOcRecoveryRequiredAsync(activeProfileId, message, CancellationToken.None).ConfigureAwait(false);
+            return Failure(
+                request,
+                "RECOVERY_REQUIRED",
+                $"Reset outcome is not verified; writes are locked until recovery succeeds. {message}");
+        }
+
+        await CompleteAutoOcActiveSessionAsync(activeProfileId, countSuccessfulColdBoot: false, cancellationToken).ConfigureAwait(false);
         await RefreshAsync(persistSensors: false, cancellationToken).ConfigureAwait(false);
         return Success(request, capability.Id);
     }
@@ -2379,6 +2656,34 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return Failure(request, "OPERATION_NOT_ELIGIBLE", eligibility.Reason);
         }
 
+        if (ValidateTuneWorkload(capability, payload) is (string code, string reason))
+        {
+            return Failure(request, code, reason);
+        }
+
+        TuneSensorBindingV2? binding = null;
+        WorkloadHostController? workloadController = null;
+        if (payload.WorkloadHost is WorkloadHostDescriptorV1 descriptor)
+        {
+            try
+            {
+                binding = GpuTuneSensorBindingResolver.Resolve(snapshot, capability.DeviceId);
+                workloadController = new WorkloadHostController(descriptor);
+                WorkloadHostStatusV1 ready = await workloadController.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+                if (!ready.Ready || ready.Running || ready.Mode != AutoOcWorkloadMode.Stopped)
+                {
+                    return Failure(
+                        request,
+                        "WORKLOAD_HOST_NOT_READY",
+                        ready.Error ?? "The workload host did not start in a clean stopped state.");
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return Failure(request, "WORKLOAD_HOST_NOT_READY", exception.Message);
+            }
+        }
+
         payload = payload with { CandidateScreeningTime = candidateTime };
         HardwareOperationStatus status = CreateOperationStatus(
             HardwareOperationKind.Tuning,
@@ -2392,7 +2697,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         try
         {
             await _store!.SaveOperationAsync(status, cancellationToken).ConfigureAwait(false);
-            Task task = RunTuneOperationAsync(status.Id, payload, capability, operationCancellation!);
+            Task task = RunTuneOperationAsync(
+                status.Id, payload, capability, binding, workloadController, operationCancellation!);
             RegisterOperationTask(status.Id, task);
             return Success(request, status);
         }
@@ -2401,6 +2707,34 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             ReleaseOperationReservation(status.Id);
             throw;
         }
+    }
+
+    /// <summary>
+    /// A CPU or GPU stability claim is only meaningful under load: the screening
+    /// monitor refuses to certify a candidate that never reached the required
+    /// measured device utilisation. Requiring the isolated workload host up front
+    /// turns a search that could only ever end in "no candidate passed screening"
+    /// into an explicit, actionable refusal. Cooling-domain calibration keeps the
+    /// unloaded search, which is correct for it.
+    /// </summary>
+    /// <returns>An error code and reason, or null when the request is acceptable.</returns>
+    internal static (string Code, string Reason)? ValidateTuneWorkload(
+        CapabilityDescriptor capability,
+        StartTuneRequest payload)
+    {
+        if (payload.WorkloadHost is not WorkloadHostDescriptorV1 descriptor)
+        {
+            return capability.Domain is ControlDomain.Cpu or ControlDomain.Gpu
+                ? ("TUNE_WORKLOAD_REQUIRED",
+                    "Tuning a CPU or GPU control requires the isolated exact-device workload host; an unloaded search cannot establish stability.")
+                : null;
+        }
+
+        return payload.WorkloadMode is not (AutoOcWorkloadMode.Core or AutoOcWorkloadMode.Memory or AutoOcWorkloadMode.Combined)
+            || !string.Equals(descriptor.TargetDeviceId, capability.DeviceId, StringComparison.Ordinal)
+            ? ("TUNE_WORKLOAD_TARGET_INVALID",
+                "The workload host must name a running mode and target the exact device that owns the tuned control.")
+            : null;
     }
 
     private async Task<IpcResponse> StartAutoOcAsync(IpcRequest request, CancellationToken cancellationToken)
@@ -2502,6 +2836,136 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
+    private async Task<IpcResponse> StartAutoOcV3Async(IpcRequest request, CancellationToken cancellationToken)
+    {
+        if (_rollbackBlocked)
+        {
+            return Failure(request, "ROLLBACK_BLOCKED", "Auto OC V3 is blocked until pending hardware recovery succeeds.");
+        }
+
+        EnsureExpectedRevision(request);
+        StartAutoOcV3Request payload = IpcJson.FromElement<StartAutoOcV3Request>(request.Payload)
+            ?? throw new InvalidDataException("StartAutoOcV3 requires a StartAutoOcV3Request payload.");
+        string? constraintError = AutoOcV3Policy.Validate(payload.Constraints);
+        if (payload.SchemaVersion != StartAutoOcV3Request.CurrentSchemaVersion
+            || !payload.ConfirmExperimental
+            || !payload.ConfirmDevice
+            || !string.Equals(payload.DeviceId, payload.WorkloadHost.TargetDeviceId, StringComparison.Ordinal))
+        {
+            return Failure(request, "AUTO_OC_V3_NOT_CONFIRMED", "Auto OC V3 requires feature negotiation plus Experimental and exact-device confirmation.");
+        }
+        if (constraintError is not null)
+        {
+            return Failure(request, "AUTO_OC_V3_CONSTRAINT_INVALID", constraintError);
+        }
+
+        HardwareSnapshot snapshot = GetSnapshot();
+        CapabilityDescriptor? core = snapshot.Capabilities.FirstOrDefault(capability =>
+            string.Equals(capability.Id, payload.CoreCapabilityId, StringComparison.Ordinal));
+        CapabilityDescriptor? memory = snapshot.Capabilities.FirstOrDefault(capability =>
+            string.Equals(capability.Id, payload.MemoryCapabilityId, StringComparison.Ordinal));
+        CapabilityDescriptor? power = string.IsNullOrWhiteSpace(payload.PowerLimitCapabilityId)
+            ? null
+            : snapshot.Capabilities.FirstOrDefault(capability =>
+                string.Equals(capability.Id, payload.PowerLimitCapabilityId, StringComparison.Ordinal));
+        if (core is null
+            || memory is null
+            || !core.Id.StartsWith("gpuclock.core:", StringComparison.Ordinal)
+            || !memory.Id.StartsWith("gpuclock.memory:", StringComparison.Ordinal)
+            || !string.Equals(core.DeviceId, payload.DeviceId, StringComparison.Ordinal)
+            || !string.Equals(memory.DeviceId, payload.DeviceId, StringComparison.Ordinal)
+            || core.Range is null
+            || memory.Range is null
+            || (payload.PowerLimitCapabilityId is not null
+                && (power is null
+                    || !power.Id.StartsWith("gpupower.limit:", StringComparison.Ordinal)
+                    || !string.Equals(power.DeviceId, payload.DeviceId, StringComparison.Ordinal)
+                    || power.Range?.Default is null)))
+        {
+            return Failure(request, "AUTO_OC_V3_TARGET_INVALID", "Auto OC V3 requires exact bounded core, memory, and optional power-limit controls on one GPU.");
+        }
+
+        StartTuneRequest coreRequest = CreateAutoOcTuneRequest(core, safetyMargin: 15, payload.Constraints);
+        StartTuneRequest memoryRequest = CreateAutoOcTuneRequest(memory, safetyMargin: 100, payload.Constraints);
+        StartTuneRequest? powerRequest = power is null ? null : CreateAutoOcPowerRequest(power, payload.Constraints);
+        AutoOcTuneStage[] stages = power is null
+            ? [new(coreRequest, core, FindAdapter(core.AdapterId)), new(memoryRequest, memory, FindAdapter(memory.AdapterId))]
+            : [new(coreRequest, core, FindAdapter(core.AdapterId)), new(memoryRequest, memory, FindAdapter(memory.AdapterId)), new(powerRequest!, power, FindAdapter(power.AdapterId))];
+        foreach (AutoOcTuneStage stage in stages)
+        {
+            HardwareOperationEligibility eligibility = HardwareOperationEligibilityEvaluator.ForTuning(
+                stage.Capability,
+                stage.Request.Plan,
+                payload.ConfirmExperimental,
+                payload.ConfirmDevice);
+            if (!eligibility.Eligible)
+            {
+                return Failure(request, "AUTO_OC_V3_NOT_ELIGIBLE", eligibility.Reason);
+            }
+        }
+
+        TuneSensorBindingV2 binding;
+        HardwareFingerprintV1 fingerprint;
+        WorkloadHostController workload;
+        try
+        {
+            binding = GpuTuneSensorBindingResolver.Resolve(snapshot, payload.DeviceId);
+            if (!HardwareFingerprintBuilder.TryCreate(
+                    snapshot,
+                    payload.DeviceId,
+                    binding.BoundDeviceIds,
+                    out HardwareFingerprintV1? capturedFingerprint,
+                    out string fingerprintReason))
+            {
+                return Failure(request, "AUTO_OC_V3_FINGERPRINT_INCOMPLETE", fingerprintReason);
+            }
+            fingerprint = capturedFingerprint!;
+            workload = new WorkloadHostController(payload.WorkloadHost);
+            WorkloadHostStatusV1 ready = await workload.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            if (!ready.Ready || ready.Running || ready.Mode != AutoOcWorkloadMode.Stopped)
+            {
+                return Failure(request, "WORKLOAD_HOST_NOT_READY", ready.Error ?? "The workload host did not start in a clean stopped state.");
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Failure(request, "WORKLOAD_HOST_NOT_READY", exception.Message);
+        }
+
+        HardwareOperationStatus status = CreateOperationStatus(
+            HardwareOperationKind.AutoOc,
+            core,
+            $"Auto OC V3 ({payload.Constraints.Objective}) is queued; no candidate has been applied.");
+        if (!TryReserveOperation(status, out CancellationTokenSource? operationCancellation))
+        {
+            return Failure(request, "OPERATION_ACTIVE", "Another calibration or tuning operation is already active.");
+        }
+
+        try
+        {
+            await _store!.SaveOperationAsync(status, cancellationToken).ConfigureAwait(false);
+            Task task = RunAutoOcV3OperationAsync(
+                status.Id,
+                payload.DeviceId,
+                payload.Constraints,
+                fingerprint,
+                new AutoOcTuneStage(coreRequest, core, FindAdapter(core.AdapterId)),
+                new AutoOcTuneStage(memoryRequest, memory, FindAdapter(memory.AdapterId)),
+                power is null ? null : new AutoOcTuneStage(powerRequest!, power, FindAdapter(power.AdapterId)),
+                binding,
+                workload,
+                operationCancellation!);
+            RegisterOperationTask(status.Id, task);
+            return Success(request, status);
+        }
+        catch
+        {
+            ReleaseOperationReservation(status.Id);
+            try { await workload.StopAsync(CancellationToken.None).ConfigureAwait(false); } catch { }
+            throw;
+        }
+    }
+
     private static StartTuneRequest CreateAutoOcTuneRequest(CapabilityDescriptor capability, double safetyMargin)
     {
         NumericRange range = capability.Range
@@ -2531,6 +2995,63 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             MaximumCandidates: 12,
             RefinementCandidates: 5,
             SafetyMargin: safetyMargin,
+            ThermalHeadroomCelsius: 4);
+    }
+
+    private static StartTuneRequest CreateAutoOcTuneRequest(
+        CapabilityDescriptor capability,
+        double safetyMargin,
+        AutoOcObjectiveConstraintsV3 constraints)
+    {
+        StartTuneRequest request = CreateAutoOcTuneRequest(capability, safetyMargin);
+        return request with
+        {
+            Plan = request.Plan with
+            {
+                Objective = constraints.Objective,
+                TemperatureCeilingCelsius = constraints.TemperatureCeilingCelsius,
+                PowerCeilingWatts = constraints.PowerCeilingWatts
+            },
+            CandidateScreeningTime = constraints.CandidateScreeningDuration ?? TimeSpan.FromSeconds(30)
+        };
+    }
+
+    private static StartTuneRequest CreateAutoOcPowerRequest(
+        CapabilityDescriptor capability,
+        AutoOcObjectiveConstraintsV3 constraints)
+    {
+        NumericRange range = capability.Range
+            ?? throw new InvalidOperationException("Auto OC power target has no numeric bounds.");
+        double stock = range.Default
+            ?? throw new InvalidOperationException("Auto OC V3 refuses a power-limit control without a controller-reported stock value.");
+        bool maximize = constraints.Objective == TuningObjective.Performance;
+        TunePlan plan = new(
+            Guid.NewGuid().ToString("N"),
+            capability.DeviceId,
+            constraints.Objective,
+            new Dictionary<string, TuneBounds>(StringComparer.Ordinal)
+            {
+                [capability.Id] = maximize
+                    ? new TuneBounds(stock, range.Maximum, range.Step)
+                    : new TuneBounds(range.Minimum, stock, range.Step)
+            },
+            constraints.CandidateScreeningDuration ?? TimeSpan.FromSeconds(30),
+            constraints.TemperatureCeilingCelsius,
+            constraints.PowerCeilingWatts,
+            Provisional: true,
+            SoakStartedAt: null,
+            ActiveUseRequired: TimeSpan.FromHours(10),
+            ColdBootsRequired: 3);
+        return new StartTuneRequest(
+            plan,
+            capability.Id,
+            maximize ? TuneDirection.Maximize : TuneDirection.Minimize,
+            ConfirmExperimental: true,
+            ConfirmDevice: true,
+            CandidateScreeningTime: constraints.CandidateScreeningDuration ?? TimeSpan.FromSeconds(30),
+            MaximumCandidates: 12,
+            RefinementCandidates: 3,
+            SafetyMargin: 0,
             ThermalHeadroomCelsius: 4);
     }
 
@@ -2788,6 +3309,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         string operationId,
         StartTuneRequest request,
         CapabilityDescriptor capability,
+        TuneSensorBindingV2? binding,
+        WorkloadHostController? workload,
         CancellationTokenSource operationCancellation)
     {
         try
@@ -2795,9 +3318,24 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             await TransitionOperationAsync(
                 operationId,
                 HardwareOperationState.Running,
-                "Bounded candidate search started.").ConfigureAwait(false);
+                workload is null
+                    ? "Bounded candidate search started."
+                    : "Exact-device workload host authenticated; bounded candidate search started.").ConfigureAwait(false);
             IHardwareAdapter adapter = FindAdapter(capability.AdapterId);
-            RuntimeTuneScreeningMonitor monitor = new(GetSnapshot, capability);
+            RuntimeTuneScreeningMonitor monitor = workload is null
+                ? new RuntimeTuneScreeningMonitor(GetSnapshot, capability)
+                : new RuntimeTuneScreeningMonitor(
+                    GetSnapshot,
+                    capability,
+                    sensorBinding: binding,
+                    workload: workload,
+                    requiredWorkloadMode: request.WorkloadMode,
+                    requiredAverageLoadPercent: 70);
+            if (workload is not null)
+            {
+                await workload.SetModeAsync(request.WorkloadMode!.Value, operationCancellation.Token).ConfigureAwait(false);
+            }
+
             TuneResult result = await HardwareTuneEngine.RunAsync(
                 request,
                 capability,
@@ -2837,6 +3375,21 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
         finally
         {
+            if (workload is not null)
+            {
+                // The load must stop even when the search was cancelled or threw,
+                // so use None rather than the operation's token. A failure to stop
+                // is logged, never allowed to mask the outcome that brought us here.
+                try
+                {
+                    await workload.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    ServiceLog.CommandFailed(logger, IpcCommand.StartTune, exception);
+                }
+            }
+
             await FinishOperationTaskAsync(operationId, operationCancellation).ConfigureAwait(false);
         }
     }
@@ -2860,6 +3413,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 "Exact-GPU workload host authenticated; capturing the prior core and memory state.").ConfigureAwait(false);
             IHardwareAdapter coreAdapter = FindAdapter(coreCapability.AdapterId);
             IHardwareAdapter memoryAdapter = FindAdapter(memoryCapability.AdapterId);
+            // Legacy StartAutoOc fallback path; the app selects V3. See FullAutoOcEngine.
+#pragma warning disable CS0618 // Type or member is obsolete
             AutoOcResultV2 result = await FullAutoOcEngine.RunAsync(
                 deviceId,
                 coreRequest,
@@ -2885,6 +3440,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                     progress,
                     message),
                 operationCancellation.Token).ConfigureAwait(false);
+#pragma warning restore CS0618
             if (result.GeneratedProfile is ProfileV2 generated
                 && result.AllRequestedFamiliesVerified
                 && result.PriorStateRestored
@@ -2904,6 +3460,93 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 calibrationResult: null,
                 tuneResult: null,
                 autoOcResult: result).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+        {
+            await AbortOperationAsync(operationId).ConfigureAwait(false);
+        }
+        catch (HardwareOperationRecoveryException exception)
+        {
+            _rollbackBlocked = true;
+            await FailOperationAsync(operationId, exception, recoveryRequired: true).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await FailOperationAsync(operationId, exception, recoveryRequired: false).ConfigureAwait(false);
+        }
+        finally
+        {
+            await FinishOperationTaskAsync(operationId, operationCancellation).ConfigureAwait(false);
+        }
+    }
+
+    private async Task RunAutoOcV3OperationAsync(
+        string operationId,
+        string deviceId,
+        AutoOcObjectiveConstraintsV3 constraints,
+        HardwareFingerprintV1 fingerprint,
+        AutoOcTuneStage core,
+        AutoOcTuneStage memory,
+        AutoOcTuneStage? power,
+        TuneSensorBindingV2 binding,
+        WorkloadHostController workload,
+        CancellationTokenSource operationCancellation)
+    {
+        try
+        {
+            await TransitionOperationAsync(
+                operationId,
+                HardwareOperationState.Running,
+                "Exact-GPU workload host authenticated; capturing three stock-state baseline measurements.").ConfigureAwait(false);
+            AutoOcResultV3 result = await FullAutoOcV3Engine.RunAsync(
+                deviceId,
+                constraints,
+                fingerprint,
+                core,
+                memory,
+                power,
+                mode => new RuntimeTuneScreeningMonitor(
+                    GetSnapshot,
+                    mode == AutoOcWorkloadMode.Memory ? memory.Capability : core.Capability,
+                    sensorBinding: binding,
+                    workload: workload,
+                    requiredWorkloadMode: mode,
+                    requiredAverageLoadPercent: 70),
+                workload,
+                (progress, message) => ReportOperationProgress(
+                    operationId,
+                    message.Contains("screen", StringComparison.OrdinalIgnoreCase)
+                        || message.Contains("Baseline", StringComparison.OrdinalIgnoreCase)
+                            ? HardwareOperationState.Screening
+                            : HardwareOperationState.Running,
+                    progress,
+                    message),
+                operationCancellation.Token).ConfigureAwait(false);
+            if (result.GeneratedProfile is ProfileV2 generated
+                && result.ValidationState == AutoOcValidationState.Provisional
+                && result.AllRequestedFamiliesVerified
+                && result.RestorationProof is { PriorStateRestored: true, HardwareStateKnown: true })
+            {
+                AutoOcProfileValidationV1 validation = AutoOcValidationPolicy.Create(result);
+                await _store!.SaveSuiteEntityAsync(
+                    SuiteEntityKind.AutoOcProfileValidation,
+                    validation.Id,
+                    validation,
+                    CancellationToken.None).ConfigureAwait(false);
+                await _store.SaveSuiteEntityAsync(
+                    SuiteEntityKind.ProfileV2,
+                    generated.Id,
+                    generated,
+                    CancellationToken.None).ConfigureAwait(false);
+                IncrementSuiteRevision();
+            }
+
+            await CompleteOperationAsync(
+                operationId,
+                result.Message,
+                calibrationResult: null,
+                tuneResult: null,
+                autoOcResultV3: result).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
         {
@@ -3046,7 +3689,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         string message,
         FanCalibrationResult? calibrationResult,
         TuneResult? tuneResult,
-        AutoOcResultV2? autoOcResult = null)
+        AutoOcResultV2? autoOcResult = null,
+        AutoOcResultV3? autoOcResultV3 = null)
     {
         HardwareOperationStatus status = UpdateOperation(
             operationId,
@@ -3059,6 +3703,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 CalibrationResult = calibrationResult,
                 TuneResult = tuneResult,
                 AutoOcResult = autoOcResult,
+                AutoOcResultV3 = autoOcResultV3,
                 Error = null
             });
         await _store!.SaveOperationAsync(status, CancellationToken.None).ConfigureAwait(false);
@@ -3339,6 +3984,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         await _hardwareMutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Stop any curve that drives the GPU fan before resetting it. This transaction
+            // resets each family to its default and verifies the read-back, and an active
+            // cooling graph re-commands its outputs every tick — so it overwrites the reset
+            // inside the verification window and the family fails even though the reset
+            // itself succeeded. That is what left the fan stranded under manual control on
+            // disarm. Arming resets too, so the same race applies there whenever a curve is
+            // already running, and both paths are covered here.
+            if (available.Any(family =>
+                string.Equals(family.Name, HardwareControlFamilyNames.GpuFan, StringComparison.Ordinal)))
+            {
+                await DeactivateGpuFanCoolingGraphAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             foreach (HardwareControlFamilyDefinition family in available)
             {
                 family.SetTransportGate(true);
@@ -3358,7 +4016,24 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
             if (!allVerified)
             {
-                _rollbackBlocked = true;
+                // Scoped the same way as the cooling-graph recovery paths: the GPU
+                // fan family's duty is always clamped to a safe bound before any
+                // write reaches hardware, unlike power limit or clock offset, so an
+                // unverified fan reset alone does not need to lock every other
+                // requested family too.
+                // Record why each family failed. The per-family detail is otherwise returned
+                // only in the IPC payload, so a failure that the caller renders as its
+                // generic summary leaves no trace of the actual cause anywhere on disk.
+                foreach (HardwareControlFamilyResult failed in results.Where(result => !result.ReadBackVerified))
+                {
+                    ServiceLog.HardwareControlFamilyResetFailed(logger, failed.Family, failed.Message);
+                }
+
+                if (!OnlyGpuFanFamilyFailed(results))
+                {
+                    _rollbackBlocked = true;
+                }
+
                 await SaveHardwareRecoveryRequiredLeaseAsync(available, results, CancellationToken.None).ConfigureAwait(false);
             }
 
@@ -3379,8 +4054,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 results,
                 allVerified
                     ? request.Armed
-                        ? $"Hardware control armed only after default-state read-back verified {available.Length} requested family/families."
-                        : $"Hardware control disarmed after vendor/default state was restored and read back for {available.Length} requested family/families."
+                        ? $"Hardware control armed only after default-state read-back verified {available.Length} requested {(available.Length == 1 ? "family" : "families")}."
+                        : $"Hardware control disarmed after vendor/default state was restored and read back for {available.Length} requested {(available.Length == 1 ? "family" : "families")}."
                     : "RecoveryRequired: at least one requested hardware family could not be restored and read back at its default state.");
         }
         catch (Exception operationException)
@@ -3416,7 +4091,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 || _rollbackBlocked;
             if (recoveryRequired)
             {
-                _rollbackBlocked = true;
+                // As above, an unverified GPU-fan-only failure marks recovery for the
+                // fan family (via the lease below) but does not hard-lock every
+                // capability service-wide, provided nothing else is implicated and no
+                // prior lock is already in force.
+                bool fanOnly = !_rollbackBlocked
+                    && operationException is not HardwareStateUnknownException
+                    && recoveryResults.Count == available.Length
+                    && OnlyGpuFanFamilyFailed(recoveryResults);
+                if (!fanOnly)
+                {
+                    _rollbackBlocked = true;
+                }
+
                 await SaveHardwareRecoveryRequiredLeaseAsync(
                     available,
                     recoveryResults,
@@ -3576,6 +4263,83 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         return families.ToArray();
     }
 
+    /// <summary>
+    /// Records the GPU power limit an applied transaction committed (if any) as the operator's
+    /// desired resting state, so hardware recovery will accept it instead of demanding the
+    /// vendor default. A transaction with no GPU power action leaves the prior commitment
+    /// untouched, so applying an unrelated profile (e.g. lighting) never wipes it.
+    /// </summary>
+    private async Task CaptureGpuPowerCommitmentAsync(ProfileTransaction transaction, CancellationToken cancellationToken)
+    {
+        foreach (PreparedAction prepared in transaction.PreparedActions)
+        {
+            if (!prepared.Action.CapabilityId.StartsWith(NvidiaGpuPowerLimitAdapter.CapabilityPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (prepared.Action.Value.Kind == ControlValueKind.Numeric
+                && prepared.Action.Value.Numeric is double watts
+                && double.IsFinite(watts) && watts > 0)
+            {
+                await UpdateGpuPowerCommitmentAsync((uint)Math.Round(watts * 1000d), cancellationToken).ConfigureAwait(false);
+            }
+
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Reads the GPU power limit (in milliwatts) set by the most recent committed profile that
+    /// carried a power-limit action, or null if none did. Used once to bootstrap the commitment
+    /// on a runtime upgraded from a build that did not record it.
+    /// </summary>
+    private async Task<uint?> DeriveCommittedGpuPowerFromLatestProfileAsync(CancellationToken cancellationToken)
+    {
+        ProfileTransaction? committed = await _store!.GetLatestCommittedAsync(cancellationToken).ConfigureAwait(false);
+        if (committed is null)
+        {
+            return null;
+        }
+
+        foreach (PreparedAction prepared in committed.PreparedActions)
+        {
+            if (prepared.Action.CapabilityId.StartsWith(NvidiaGpuPowerLimitAdapter.CapabilityPrefix, StringComparison.Ordinal)
+                && prepared.Action.Value.Kind == ControlValueKind.Numeric
+                && prepared.Action.Value.Numeric is double watts
+                && double.IsFinite(watts) && watts > 0)
+            {
+                return (uint)Math.Round(watts * 1000d);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Sets and persists the committed GPU power limit (null clears it). Persisted so it
+    /// survives a service restart, which is exactly when recovery needs it to avoid the
+    /// refused NVAPI restore write.
+    /// </summary>
+    private async Task UpdateGpuPowerCommitmentAsync(uint? targetMilliwatts, CancellationToken cancellationToken)
+    {
+        _committedGpuPowerLimitMilliwatts = targetMilliwatts;
+        if (_store is null)
+        {
+            return;
+        }
+
+        await _store.SaveSuiteEntityAsync(
+            SuiteEntityKind.GpuPowerCommitment,
+            GpuPowerCommitmentV1.DefaultId,
+            new GpuPowerCommitmentV1(
+                GpuPowerCommitmentV1.CurrentSchemaVersion,
+                GpuPowerCommitmentV1.DefaultId,
+                targetMilliwatts,
+                DateTimeOffset.UtcNow),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task SaveHardwareRecoveryRequiredLeaseAsync(
         IEnumerable<HardwareControlFamilyDefinition> families,
         IEnumerable<HardwareControlFamilyResult> results,
@@ -3624,6 +4388,143 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         public const string GpuClock = "GPU clock offset";
     }
 
+    /// <summary>
+    /// Returns the first candidate that both reports it can write and exposes valid
+    /// bounds, disposing every candidate it does not select (including ones tried
+    /// after an earlier unusable one). The candidate order encodes the preference —
+    /// NVAPI before the NVML fallback — and a usable earlier candidate short-circuits
+    /// the rest so the fallback's native runtime is never even loaded.
+    /// </summary>
+    /// <summary>
+    /// Stops the active cooling graph when — and only when — it drives the GPU fan, so that
+    /// disarming can hand the fan back to the driver without the curve immediately taking it
+    /// again. Only one graph is active at a time and it may be driving case fans instead, so
+    /// this checks the graph's outputs first: deactivating unconditionally would silently
+    /// drop case-fan control as a side effect of a GPU-only operation.
+    /// </summary>
+    private async Task DeactivateGpuFanCoolingGraphAsync(CancellationToken cancellationToken)
+    {
+        await _coolingGraphGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
+            string fanCapabilityId = $"{NvidiaGpuFanAdapter.CapabilityPrefix}0";
+            bool drivesGpuFan = active is not null
+                && active.Graph.Outputs.Any(output =>
+                    string.Equals(output.CapabilityId, fanCapabilityId, StringComparison.Ordinal));
+            if (!drivesGpuFan)
+            {
+                return;
+            }
+
+            _activeCoolingGraph = null;
+            _adaptiveCooling = null;
+            PublishInactiveCoolingStatus(
+                "GPU fan control was disarmed; the fan curve stopped and the driver curve was restored.");
+        }
+        finally
+        {
+            _coolingGraphGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Reads live GPU fan state for diagnostics. Read-only: it never arms, writes, or
+    /// resets, so it is safe to call while the fan is locked out or mid-fault — which is
+    /// exactly when the answer is wanted.
+    /// </summary>
+    private async Task<GpuFanStateV1> ReadGpuFanStateAsync(CancellationToken cancellationToken)
+    {
+        IGpuFanCoolerTransport? transport = _gpuFanTransport;
+        if (transport is null)
+        {
+            return new GpuFanStateV1(false, false, "Unavailable", null, null, "unavailable");
+        }
+
+        GpuFanChannelState state = await transport.ReadStateAsync("0", cancellationToken).ConfigureAwait(false);
+        return new GpuFanStateV1(
+            true,
+            _gpuFanArmed,
+            state.Policy.ToString(),
+            state.CommandedDutyPercent,
+            state.MeasuredDutyPercent,
+            transport is NvApiGpuFanCoolerTransport nvapi
+                ? nvapi.DescribeClientFanCoolerControl()
+                : "not an NVAPI transport");
+    }
+
+    internal static async Task<IGpuFanCoolerTransport?> SelectUsableFanTransportAsync(
+        IReadOnlyList<Func<CancellationToken, Task<IGpuFanCoolerTransport?>>> orderedCandidates,
+        CancellationToken cancellationToken)
+    {
+        foreach (Func<CancellationToken, Task<IGpuFanCoolerTransport?>> create in orderedCandidates)
+        {
+            IGpuFanCoolerTransport? candidate = await create(cancellationToken).ConfigureAwait(false);
+            if (candidate is null)
+            {
+                continue;
+            }
+
+            if (candidate.CanWrite
+                && await candidate.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true })
+            {
+                return candidate;
+            }
+
+            candidate.Dispose();
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Selects the GPU power-limit transport, preferring NVAPI over NVML. NVAPI
+    /// expresses the limit as a percentage of the default TDP, so the default TDP in
+    /// milliwatts is first read via NVML — whose reads work even though its power
+    /// setter is refused on GeForce — and passed to NVAPI as the milliwatt anchor.
+    /// If NVML cannot supply that anchor, or NVAPI exposes no P0 power policy, NVML
+    /// is used as the (write-refused) fallback so the capability still registers and
+    /// reads.
+    /// </summary>
+    private static async Task<IGpuPowerLimitTransport?> SelectUsablePowerTransportAsync(CancellationToken cancellationToken)
+    {
+        uint? defaultTdpMilliwatts = null;
+        if (NvmlGpuPowerLimitTransport.TryCreate(enableWrites: false, out NvmlGpuPowerLimitTransport nvmlReader, out _))
+        {
+            if (await nvmlReader.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true } anchorBounds)
+            {
+                defaultTdpMilliwatts = anchorBounds.DefaultMilliwatts;
+            }
+
+            nvmlReader.Dispose();
+        }
+
+        if (defaultTdpMilliwatts is uint anchor
+            && NvApiGpuPowerLimitTransport.TryCreate(0, anchor, enableWrites: true, out NvApiGpuPowerLimitTransport nvapi, out string _))
+        {
+            if (nvapi.CanWrite
+                && await nvapi.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true })
+            {
+                return nvapi;
+            }
+
+            nvapi.Dispose();
+        }
+
+        if (NvmlGpuPowerLimitTransport.TryCreate(enableWrites: true, out NvmlGpuPowerLimitTransport nvml, out string _))
+        {
+            if (nvml.CanWrite
+                && await nvml.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true })
+            {
+                return nvml;
+            }
+
+            nvml.Dispose();
+        }
+
+        return null;
+    }
+
     private async Task<IpcResponse> SetGpuFanControlArmedAsync(IpcRequest request, CancellationToken cancellationToken)
     {
         EnsureExpectedRevision(request);
@@ -3658,6 +4559,13 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
         if (!payload.Armed)
         {
+            // Stop the curve before restoring. An active cooling graph re-commands the fan
+            // every tick, so a restore issued underneath it is overwritten within the settle
+            // window: the fan reads Manual again and the family fails its default-state
+            // verification even though the restore itself succeeded. The curve has to stop
+            // owning the fan before handing it back to the driver means anything.
+            await DeactivateGpuFanCoolingGraphAsync(cancellationToken).ConfigureAwait(false);
+
             // Return the fan to the driver automatic curve while still armed, then disarm,
             // so disarming never strands the fan in a manual state.
             foreach (string fanChannel in (string[])["0", "1"])
@@ -3668,7 +4576,11 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 }
                 catch (Exception restoreException) when (restoreException is GpuFanSafetyException or InvalidOperationException)
                 {
-                    // Nothing to restore (never written) or a transient driver error.
+                    // Nothing to restore (never written) or a transient driver error. Disarm
+                    // still proceeds, but the reason is recorded: swallowing it silently hides
+                    // the case where the fan is genuinely stranded under manual control, which
+                    // is indistinguishable from the benign case at the call site.
+                    ServiceLog.GpuFanDisarmRestoreFailed(logger, fanChannel, restoreException);
                 }
             }
         }
@@ -4087,9 +4999,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     {
         // RigPilot's in-house native Razer USB lighting write (no Synapse
         // dependency). Experimental and double-confirmed; extended-matrix
-        // static effect only — no firmware/profile/EEPROM command class — runs
+        // custom-frame path — no firmware/profile/EEPROM command class — runs
         // in the crash-contained Adapter Host child, and the firmware's status
-        // reply is read back before WriteIssued may be reported.
+        // reply is read back before WriteIssued may be reported. The O11 Dynamic
+        // is a plain EXTENDED matrix that acknowledges but never renders the
+        // single static effect; it lights only from a per-row custom frame with
+        // the matrix brightness raised, which --set-razer-custom issues (4x16).
         RazerRgbRequestV1 payload = IpcJson.FromElement<RazerRgbRequestV1>(request.Payload)
             ?? throw new InvalidDataException("SetRazerRgb requires a RazerRgbRequestV1 payload.");
         if (payload.Validate() is string refusal)
@@ -4099,7 +5014,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
         string argument = payload.TurnOff ? "off" : payload.Colour.Trim().TrimStart('#');
         ContainedRazerRgb razer = new(
-            () => new AdapterHostControllerDiscoveryProcess("--set-razer-usb-rgb", argument));
+            () => new AdapterHostControllerDiscoveryProcess("--set-razer-custom", argument));
         RazerRgbResultV1 result = await razer.WriteAsync(cancellationToken).ConfigureAwait(false);
         return Success(request, result);
     }
@@ -4229,6 +5144,132 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         return Success(request, await GetSafetyRecoveryStatusAsync(cancellationToken).ConfigureAwait(false));
     }
 
+    /// <summary>
+    /// Keeps an active automatic cooling profile tracking the machine instead of
+    /// staying on whichever curve was chosen at the moment the button was
+    /// pressed. Recognises the profile by the stable id the adaptive factory
+    /// emits, so this needs no new protocol surface: the dashboard applies an
+    /// automatic profile exactly as before and the service then owns it.
+    /// Switching is deliberately conservative — <see cref="AdaptiveCoolingController"/>
+    /// requires a sustained hold and a minimum dwell before changing curve, and
+    /// only bypasses both to escalate.
+    /// </summary>
+    private async Task TickAdaptiveCoolingAsync(HardwareSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        if (_rollbackBlocked)
+        {
+            return;
+        }
+
+        ActiveCoolingGraphRuntime? active = _activeCoolingGraph;
+        if (active is null
+            || !active.ProfileId.StartsWith(AdaptiveProfileIdPrefix, StringComparison.Ordinal)
+            || !TryReadAdaptiveGraphIdentity(active.Graph, out string outputName, out CoolingCurveMode currentMode))
+        {
+            _adaptiveCooling = null;
+            return;
+        }
+
+        DateTimeOffset now = snapshot.CapturedAt;
+        AdaptiveCoolingState state = _adaptiveCooling is { } tracked
+            && string.Equals(tracked.ProfileId, active.ProfileId, StringComparison.Ordinal)
+            && tracked.State.ActiveMode == currentMode
+                ? tracked.State
+                : AdaptiveCoolingState.Start(currentMode, now);
+
+        (double? cpu, double? gpu, bool stale) = ReadAdaptiveTemperatures(snapshot, now);
+        AdaptiveCoolingDecision decision = AdaptiveCoolingController.Evaluate(state, cpu, gpu, stale, now);
+        _adaptiveCooling = new AdaptiveCoolingTracking(active.ProfileId, decision.State);
+        if (!decision.ShouldApply || decision.Mode == currentMode)
+        {
+            return;
+        }
+
+        try
+        {
+            CapabilityDescriptor[] outputs = [.. snapshot.Capabilities.Where(capability =>
+                active.Graph.Outputs.Any(output => string.Equals(output.CapabilityId, capability.Id, StringComparison.Ordinal)))];
+            if (outputs.Length == 0)
+            {
+                return;
+            }
+
+            AdaptiveCoolingProfileDraft draft = AdaptiveCoolingProfileFactory.CreateAutomaticMode(
+                outputs,
+                outputName,
+                snapshot.Sensors,
+                preferGpuSourceOnly: outputName.Contains("GPU", StringComparison.OrdinalIgnoreCase),
+                decision.Mode);
+            await _store!.SaveSuiteEntityAsync(
+                SuiteEntityKind.CoolingGraph, draft.Graph.Id, draft.Graph, cancellationToken).ConfigureAwait(false);
+            ActiveCoolingGraphRuntime replacement = await CreateActiveCoolingGraphAsync(
+                draft.Profile.Id, draft.Graph, draft.Profile.SafetyLimits, cancellationToken).ConfigureAwait(false);
+            await ReplaceActiveCoolingGraphTransactionAsync(replacement, cancellationToken).ConfigureAwait(false);
+            _adaptiveCooling = new AdaptiveCoolingTracking(draft.Profile.Id, decision.State);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // A failed mode switch must never disturb the curve already running:
+            // the previous graph stays active and the next tick retries.
+            ServiceLog.CoolingGraphDeactivated(logger, exception);
+        }
+    }
+
+    private const string AdaptiveProfileIdPrefix = "auto.profile.";
+
+    /// <summary>
+    /// Recovers the output-set name and the currently active curve mode from the
+    /// adaptive graph's generated name ("Case fans balanced mode").
+    /// </summary>
+    private static bool TryReadAdaptiveGraphIdentity(
+        CoolingGraphV1 graph,
+        out string outputName,
+        out CoolingCurveMode mode)
+    {
+        outputName = string.Empty;
+        mode = CoolingCurveMode.Balanced;
+        string[] parts = graph.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 3
+            || !string.Equals(parts[^1], "mode", StringComparison.OrdinalIgnoreCase)
+            || !Enum.TryParse(parts[^2], ignoreCase: true, out mode))
+        {
+            return false;
+        }
+
+        outputName = string.Join(' ', parts[..^2]);
+        return outputName.Length > 0;
+    }
+
+    /// <summary>
+    /// Current CPU-package and GPU-core temperatures, plus whether the readings
+    /// that exist are too old to trust. Absent readings are reported as absent,
+    /// never as cool — the controller escalates on both.
+    /// </summary>
+    private static (double? Cpu, double? Gpu, bool Stale) ReadAdaptiveTemperatures(
+        HardwareSnapshot snapshot,
+        DateTimeOffset now)
+    {
+        TimeSpan maximumAge = TimeSpan.FromSeconds(30);
+        double? Read(string name)
+        {
+            SensorSample? sample = snapshot.Sensors.FirstOrDefault(candidate =>
+                string.Equals(candidate.Unit, "°C", StringComparison.OrdinalIgnoreCase)
+                && candidate.Quality == SensorQuality.Good
+                && candidate.Value.HasValue
+                && candidate.Name.Contains(name, StringComparison.OrdinalIgnoreCase));
+            return sample?.Value;
+        }
+
+        bool stale = snapshot.Sensors
+            .Where(sample => string.Equals(sample.Unit, "°C", StringComparison.OrdinalIgnoreCase))
+            .Any(sample => now - sample.Timestamp > maximumAge);
+        return (Read("CPU Package"), Read("GPU Core"), stale);
+    }
+
+    private sealed record AdaptiveCoolingTracking(string ProfileId, AdaptiveCoolingState State);
+
+    private AdaptiveCoolingTracking? _adaptiveCooling;
+
     private async Task<ActiveCoolingGraphRuntime> CreateActiveCoolingGraphAsync(
         string profileId,
         CoolingGraphV1 graph,
@@ -4298,6 +5339,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         await _coolingGraphGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         ActiveCoolingGraphRuntime? previous = _activeCoolingGraph;
         HardwareSnapshot snapshot = GetSnapshot();
+        SeedRetainedOutputRateLimits(previous, requested);
         try
         {
             CoolingGraphRuntimeTick firstTick = requested.Runtime.Evaluate(
@@ -4381,6 +5423,17 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
             if (recoveryErrors.Count > 0)
             {
+                Volatile.Write(ref _coolingRuntimeStatus, new CoolingRuntimeStatusV1(
+                    CoolingRuntimeStatusV1.CurrentSchemaVersion,
+                    requested.ProfileId,
+                    requested.Graph.Id,
+                    CoolingRuntimeState.RecoveryRequired,
+                    DateTimeOffset.UtcNow,
+                    EmergencySince: null,
+                    new Dictionary<string, double>(),
+                    [],
+                    new Dictionary<string, int>(),
+                    $"RecoveryRequired: {exception.Message} Recovery errors: {string.Join("; ", recoveryErrors)}"));
                 throw new HardwareStateUnknownException(
                     "cooling-policy",
                     "ReplaceActiveCoolingGraph",
@@ -4396,8 +5449,55 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
+    /// <summary>
+    /// A freshly constructed <see cref="ActiveCoolingGraphRuntime"/> has an empty
+    /// <c>LastApplied</c>, so its first tick skips the per-output slew limit
+    /// entirely and commands the raw curve value in one write — e.g. switching a
+    /// GPU-fan auto-mode from Cooling (53%) to Silent (30% at the same
+    /// temperature) demanded an instant 23-point drop. That outran the fan's
+    /// physical settle window on the reference rig, failed verification, and the
+    /// resulting recovery attempt could itself fail and lock all hardware writes.
+    /// For any output the new graph retains from the previous one, carry over the
+    /// previous graph's last commanded duty and timestamp so the replacement's
+    /// first tick is rate-limited exactly like any other tick, instead of getting
+    /// an unbounded first jump.
+    /// </summary>
+    internal static void SeedRetainedOutputRateLimits(
+        ActiveCoolingGraphRuntime? previous,
+        ActiveCoolingGraphRuntime requested)
+    {
+        if (previous is null)
+        {
+            return;
+        }
+
+        HashSet<string> requestedOutputs = requested.Graph.Outputs
+            .Select(output => output.CapabilityId)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (CoolingGraphOutputV1 output in previous.Graph.Outputs)
+        {
+            if (!requestedOutputs.Contains(output.CapabilityId))
+            {
+                continue;
+            }
+
+            if (previous.LastApplied.TryGetValue(output.CapabilityId, out double duty)
+                && previous.LastAppliedAt.TryGetValue(output.CapabilityId, out DateTimeOffset at))
+            {
+                requested.LastApplied[output.CapabilityId] = duty;
+                requested.LastAppliedAt[output.CapabilityId] = at;
+            }
+        }
+    }
+
     private async Task TickCoolingGraphAsync(HardwareSnapshot snapshot, CancellationToken cancellationToken)
     {
+        // Continuous adaptive cooling runs before the cooling/mutation gates are
+        // taken: switching modes re-enters the activation transaction, which
+        // acquires the cooling gate itself, so deciding and swapping here keeps
+        // that path deadlock-free.
+        await TickAdaptiveCoolingAsync(snapshot, cancellationToken).ConfigureAwait(false);
+
         if (_rollbackBlocked)
         {
             CoolingRuntimeStatusV1 current = Volatile.Read(ref _coolingRuntimeStatus);
@@ -4573,12 +5673,47 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         PreparedAction prepared = await adapter.PrepareAsync(action, cancellationToken).ConfigureAwait(false);
         await adapter.ApplyAsync(prepared, cancellationToken).ConfigureAwait(false);
         ActionVerification verification = await adapter.VerifyAsync(prepared, cancellationToken).ConfigureAwait(false);
-        if (!verification.Success)
+        if (!verification.Success
+            && !await IsAcceptableZeroRpmIdleAsync(capability, dutyPercent, verification, cancellationToken).ConfigureAwait(false))
         {
             throw new InvalidOperationException($"Cooling output '{capability.Name}' did not read back after a graph update: {verification.Message}");
         }
 
         active.LastApplied[capability.Id] = dutyPercent;
+    }
+
+    private const double ZeroRpmIdleObservedCeilingPercent = 2.0;
+
+    /// <summary>
+    /// A case fan that the motherboard/BIOS keeps stopped at low temperature — or
+    /// that simply will not spin at a low commanded duty — reads back ~0%, the same
+    /// zero-RPM idle the GPU fan exhibits. For a NON-safety-critical output that is an
+    /// acceptable realisation of a below-maximum duty, not a control failure, so the
+    /// running cooling loop tolerates it instead of failing closed and locking cooling.
+    /// A pump or CPU fan (safety-critical) is NEVER excused — it must physically reach
+    /// its commanded duty, so a stopped pump/CPU fan still fails closed — and a
+    /// maximum/emergency command must physically move any fan. This tolerance lives only
+    /// in the running cooling loop; the commissioning/calibration paths keep their strict
+    /// stop-and-restart verification, so enabling a true zero-RPM curve point is unchanged.
+    /// The GPU fan reaches its own zero-RPM acceptance inside its adapter, so it never
+    /// gets here; this covers the motherboard case-fan outputs.
+    /// </summary>
+    private async Task<bool> IsAcceptableZeroRpmIdleAsync(
+        CapabilityDescriptor capability,
+        double commandedDutyPercent,
+        ActionVerification verification,
+        CancellationToken cancellationToken)
+    {
+        if (capability.Range is not NumericRange range
+            || commandedDutyPercent >= range.Maximum - 1e-6
+            || verification.ObservedValue?.Numeric is not double observed
+            || observed > ZeroRpmIdleObservedCeilingPercent)
+        {
+            return false;
+        }
+
+        CoolingOutputAssignmentV1? assignment = await GetCoolingOutputAssignmentAsync(capability, cancellationToken).ConfigureAwait(false);
+        return assignment is not { IsSafetyCritical: true };
     }
 
     private async Task RecoverCoolingGraphFailureAsync(
@@ -4599,7 +5734,14 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _activeCoolingGraph = null;
         if (errors.Count > 0)
         {
-            _rollbackBlocked = true;
+            // This is deliberately narrower than the general rollback-blocked lock:
+            // a cooling graph's outputs are structurally guaranteed to be duty-percent
+            // fan/pump controls (Cooling/CoolingSafety domain, always clamped to a safe
+            // bound by the adapter, the graph engine, and this runtime's own step
+            // limiter before any write reaches hardware) — never clock, power, or
+            // voltage. An unresolved fan-reset is a bookkeeping gap, not a physical
+            // danger, so it blocks further cooling automation (below) without locking
+            // every unrelated GPU/case-fan capability service-wide.
             Volatile.Write(ref _coolingRuntimeStatus, new CoolingRuntimeStatusV1(
                 CoolingRuntimeStatusV1.CurrentSchemaVersion,
                 active.ProfileId,
@@ -4765,18 +5907,309 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             DateTimeOffset.UtcNow);
     }
 
+    private async Task<string?> ValidateAutoOcProfileForApplyAsync(
+        ProfileV2 profile,
+        ProfileActivationSource source,
+        CancellationToken cancellationToken)
+    {
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profile.Id,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return profile.Id.StartsWith("auto-oc-v3-", StringComparison.OrdinalIgnoreCase)
+                ? "This generated Auto OC profile has no local validation record. Imported or orphaned tune results remain inactive."
+                : null;
+        }
+
+        if (!HardwareFingerprintBuilder.TryCreate(
+                GetSnapshot(),
+                record.HardwareFingerprint.DeviceId,
+                [record.HardwareFingerprint.DeviceId],
+                out HardwareFingerprintV1? current,
+                out string fingerprintReason))
+        {
+            return fingerprintReason;
+        }
+        if (!AutoOcValidationPolicy.FingerprintMatches(record.HardwareFingerprint, current!))
+        {
+            AutoOcProfileValidationV1 invalidated = AutoOcValidationPolicy.InvalidateFingerprint(record, DateTimeOffset.UtcNow);
+            await SaveAutoOcValidationAsync(invalidated, cancellationToken).ConfigureAwait(false);
+            if (string.Equals(_engine!.ActiveProfileId, profile.Id, StringComparison.Ordinal))
+            {
+                await RestoreInvalidatedAutoOcProfileAsync(profile.Id, invalidated, CancellationToken.None).ConfigureAwait(false);
+            }
+            return invalidated.Message;
+        }
+
+        return AutoOcValidationPolicy.CanActivate(record, current!, source, out string reason)
+            ? null
+            : reason;
+    }
+
+    private async Task ActivateAutoOcProfileAsync(
+        string profileId,
+        ProfileActivationSource source,
+        CancellationToken cancellationToken)
+    {
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+
+        AutoOcProfileValidationV1 active = AutoOcValidationPolicy.Activate(
+            record,
+            _serviceInstanceId,
+            source,
+            DateTimeOffset.UtcNow);
+        await SaveAutoOcValidationAsync(active, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task CompleteAutoOcActiveSessionAsync(
+        string? profileId,
+        bool countSuccessfulColdBoot,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(profileId))
+        {
+            return;
+        }
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+
+        AutoOcProfileValidationV1 completed = AutoOcValidationPolicy.Deactivate(
+            record,
+            _serviceInstanceId,
+            DateTimeOffset.UtcNow,
+            countSuccessfulColdBoot);
+        if (completed != record)
+        {
+            await SaveAutoOcValidationAsync(completed, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task MarkAutoOcRecoveryRequiredAsync(
+        string? profileId,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(profileId))
+        {
+            return;
+        }
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+        await SaveAutoOcValidationAsync(
+            AutoOcValidationPolicy.MarkRecoveryRequired(record, DateTimeOffset.UtcNow, message),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task EvaluateAutoOcProfilesOnStartupAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<AutoOcProfileValidationV1> records = await _store!
+            .GetSuiteEntitiesAsync<AutoOcProfileValidationV1>(SuiteEntityKind.AutoOcProfileValidation, cancellationToken)
+            .ConfigureAwait(false);
+        HardwareSnapshot snapshot = GetSnapshot();
+        foreach (AutoOcProfileValidationV1 record in records)
+        {
+            AutoOcProfileValidationV1 updated = AutoOcValidationPolicy.InvalidateUncleanSession(
+                record,
+                _serviceInstanceId,
+                DateTimeOffset.UtcNow);
+            if (HardwareFingerprintBuilder.TryCreate(
+                    snapshot,
+                    record.HardwareFingerprint.DeviceId,
+                    [record.HardwareFingerprint.DeviceId],
+                    out HardwareFingerprintV1? current,
+                    out _)
+                && !AutoOcValidationPolicy.FingerprintMatches(record.HardwareFingerprint, current!))
+            {
+                updated = AutoOcValidationPolicy.InvalidateFingerprint(updated, DateTimeOffset.UtcNow);
+            }
+            if (updated != record)
+            {
+                await SaveAutoOcValidationAsync(updated, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task EvaluateActiveAutoOcFingerprintAsync(
+        HardwareSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        string? activeProfileId = _engine?.ActiveProfileId;
+        if (string.IsNullOrWhiteSpace(activeProfileId))
+        {
+            return;
+        }
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            activeProfileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+
+        bool fingerprintAvailable = HardwareFingerprintBuilder.TryCreate(
+            snapshot,
+            record.HardwareFingerprint.DeviceId,
+            [record.HardwareFingerprint.DeviceId],
+            out HardwareFingerprintV1? current,
+            out _);
+        if (fingerprintAvailable && AutoOcValidationPolicy.FingerprintMatches(record.HardwareFingerprint, current!))
+        {
+            return;
+        }
+
+        AutoOcProfileValidationV1 invalidated = AutoOcValidationPolicy.InvalidateFingerprint(record, DateTimeOffset.UtcNow);
+        await SaveAutoOcValidationAsync(invalidated, cancellationToken).ConfigureAwait(false);
+        await RestoreInvalidatedAutoOcProfileAsync(activeProfileId, invalidated, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task EvaluateAutoOcStabilitySignalsAsync(
+        IReadOnlyList<HealthSystemSignal> signals,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        string? activeProfileId = _engine?.ActiveProfileId;
+        if (string.IsNullOrWhiteSpace(activeProfileId) || signals.Count == 0)
+        {
+            return;
+        }
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            activeProfileId,
+            cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return;
+        }
+
+        AutoOcStabilityEventV1[] relevant = signals.Select(signal => new AutoOcStabilityEventV1(
+            signal.Kind == HealthSystemSignalKind.Whea
+                ? AutoOcStabilityEventKind.Whea
+                : AutoOcStabilityEventKind.DisplayDriverReset,
+            signal.Timestamp,
+            signal.Message)).ToArray();
+        AutoOcProfileValidationV1 invalidated = AutoOcValidationPolicy.RecordStabilityEvents(record, relevant, now);
+        if (invalidated == record)
+        {
+            return;
+        }
+
+        await SaveAutoOcValidationAsync(invalidated, cancellationToken).ConfigureAwait(false);
+        await RestoreInvalidatedAutoOcProfileAsync(activeProfileId, invalidated, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task RestoreInvalidatedAutoOcProfileAsync(
+        string profileId,
+        AutoOcProfileValidationV1 record,
+        CancellationToken cancellationToken)
+    {
+        HardwareControlLeaseV1? lease = await _store!.GetSuiteEntityAsync<HardwareControlLeaseV1>(
+            SuiteEntityKind.HardwareControlLease,
+            HardwareControlLeaseV1.DefaultId,
+            cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<HardwareControlLeaseItemV1> controls = lease is { } activeLease
+            && string.Equals(activeLease.ActiveProfileId, profileId, StringComparison.Ordinal)
+            ? activeLease.Controls
+            : [];
+        if (controls.Count == 0)
+        {
+            ProfileV2? profile = await _store.GetSuiteEntityAsync<ProfileV2>(
+                SuiteEntityKind.ProfileV2,
+                profileId,
+                cancellationToken).ConfigureAwait(false);
+            controls = profile?.HardwareActions
+                .Select(item => new HardwareControlLeaseItemV1(item.AdapterId, item.CapabilityId))
+                .ToArray() ?? [];
+        }
+
+        SetGpuTransportRecoveryGate(armed: true);
+        HardwareRecoveryResult recovery;
+        try
+        {
+            recovery = await _engine!.RestoreDefaultsAsync(controls, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            SetGpuTransportRecoveryGate(armed: false);
+            _gpuFanArmed = false;
+            _gpuPowerArmed = false;
+            _gpuClockArmed = false;
+        }
+        if (!recovery.AllDefaultsVerified)
+        {
+            _rollbackBlocked = true;
+            string error = recovery.Errors.Count == 0
+                ? "Default-state read-back did not complete."
+                : string.Join(" ", recovery.Errors);
+            await SaveAutoOcValidationAsync(
+                AutoOcValidationPolicy.MarkRecoveryRequired(record, DateTimeOffset.UtcNow, error),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private async Task FailClosedAfterAutoOcEvidenceErrorAsync(ProfileV2 profile, Exception exception)
+    {
+        _rollbackBlocked = true;
+        await MarkAutoOcRecoveryRequiredAsync(
+            profile.Id,
+            $"The hardware profile committed but its active-use evidence could not be persisted: {exception.GetType().Name}.",
+            CancellationToken.None).ConfigureAwait(false);
+        AutoOcProfileValidationV1? record = await _store!.GetSuiteEntityAsync<AutoOcProfileValidationV1>(
+            SuiteEntityKind.AutoOcProfileValidation,
+            profile.Id,
+            CancellationToken.None).ConfigureAwait(false);
+        if (record is not null)
+        {
+            await RestoreInvalidatedAutoOcProfileAsync(profile.Id, record, CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private async Task SaveAutoOcValidationAsync(
+        AutoOcProfileValidationV1 record,
+        CancellationToken cancellationToken)
+    {
+        await _store!.SaveSuiteEntityAsync(
+            SuiteEntityKind.AutoOcProfileValidation,
+            record.Id,
+            record,
+            cancellationToken).ConfigureAwait(false);
+        IncrementSuiteRevision();
+    }
+
     private async Task EvaluateHealthRulesAsync(HardwareSnapshot snapshot, CancellationToken cancellationToken)
     {
         IReadOnlyList<HealthRuleV1> rules = await _store!
             .GetSuiteEntitiesAsync<HealthRuleV1>(SuiteEntityKind.HealthRule, cancellationToken)
             .ConfigureAwait(false);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        IReadOnlyList<HealthSystemSignal> signals = _healthSignalProbe.ReadSince(_lastHealthSignalScan, now);
+        _lastHealthSignalScan = now;
+        await EvaluateAutoOcStabilitySignalsAsync(signals, now, cancellationToken).ConfigureAwait(false);
         if (rules.Count == 0)
         {
             return;
         }
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        IReadOnlyList<HealthSystemSignal> signals = _healthSignalProbe.ReadSince(_lastHealthSignalScan, now);
-        _lastHealthSignalScan = now;
         IReadOnlyList<HealthAlertEventV1> existing = await GetHealthAlertsAsync(cancellationToken).ConfigureAwait(false);
         IReadOnlyList<HealthAlertEventV1> changes = _healthRuleEngine.Evaluate(rules, snapshot.Sensors, signals, existing, now);
         foreach (HealthAlertEventV1 change in changes)
@@ -5017,7 +6450,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 _gpuClockArmed = false;
             }
 
-            _rollbackBlocked = !recovery.AllDefaultsVerified;
+            _rollbackBlocked = !recovery.AllDefaultsVerified && !OnlyGpuFanRecoveryFailed(recovery);
             if (pending is not null)
             {
                 ProfileTransaction recovered = pending with
@@ -5058,6 +6491,33 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _gpuClockTransport?.SetArmed(armed);
     }
 
+    /// <summary>
+    /// True when every failed default-state verification belongs to the GPU fan
+    /// adapter specifically. Fan duty is always clamped to a safe bound before any
+    /// write reaches hardware (the adapter, the graph engine, and the runtime's own
+    /// step limiter all enforce it) — never clock, power, or voltage — so an
+    /// unresolved fan recovery does not carry the same risk as leaving those other
+    /// domains unproven. Used to scope the global write lock away from a
+    /// startup/shutdown recovery that only ever touched the fan.
+    /// </summary>
+    internal static bool OnlyGpuFanRecoveryFailed(HardwareRecoveryResult recovery) =>
+        !recovery.AllDefaultsVerified
+        && recovery.Verifications
+            .Where(verification => !verification.Success)
+            .All(verification => verification.AdapterId == NvidiaGpuFanAdapter.AdapterId);
+
+    /// <summary>
+    /// Family-result counterpart to <see cref="OnlyGpuFanRecoveryFailed"/> for the
+    /// arm/disarm transaction path: true when at least one family failed read-back
+    /// and every one that did is the GPU fan family. Same rationale — fan duty is
+    /// structurally safety-bounded, clock/power are not.
+    /// </summary>
+    internal static bool OnlyGpuFanFamilyFailed(IReadOnlyList<HardwareControlFamilyResult> results) =>
+        results.Any(result => !result.ReadBackVerified)
+        && results
+            .Where(result => !result.ReadBackVerified)
+            .All(result => result.Family == HardwareControlFamilyNames.GpuFan);
+
     private async Task CompleteCleanShutdownAsync()
     {
         if (_store is null || _engine is null)
@@ -5070,6 +6530,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             HardwareControlLeaseV1.DefaultId,
             CancellationToken.None).ConfigureAwait(false);
         HardwareControlLeaseItemV1[] controls = lease?.Controls.ToArray() ?? [];
+        string? activeProfileId = _engine.ActiveProfileId ?? lease?.ActiveProfileId;
         SetGpuTransportRecoveryGate(armed: true);
         HardwareRecoveryResult recovery;
         try
@@ -5094,7 +6555,21 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             marker.Id,
             marker,
             CancellationToken.None).ConfigureAwait(false);
-        _rollbackBlocked = !recovery.AllDefaultsVerified;
+        _rollbackBlocked = !recovery.AllDefaultsVerified && !OnlyGpuFanRecoveryFailed(recovery);
+        if (recovery.AllDefaultsVerified)
+        {
+            await CompleteAutoOcActiveSessionAsync(
+                activeProfileId,
+                countSuccessfulColdBoot: true,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        else
+        {
+            string message = recovery.Errors.Count == 0
+                ? "Clean-shutdown default-state verification did not complete."
+                : string.Join(" ", recovery.Errors);
+            await MarkAutoOcRecoveryRequiredAsync(activeProfileId, message, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     private IpcResponse Success<T>(IpcRequest request, T payload) => new(
@@ -5211,7 +6686,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
-    private sealed class ActiveCoolingGraphRuntime(
+    internal sealed class ActiveCoolingGraphRuntime(
         string profileId,
         CoolingGraphV1 graph,
         IReadOnlyDictionary<string, FanCalibrationV2> calibrations,

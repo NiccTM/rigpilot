@@ -357,7 +357,13 @@ public sealed record StartTuneRequest(
     // Stop climbing once a passing candidate's peak temperature reaches within
     // this many degrees of the ceiling, so the result keeps thermal headroom
     // instead of only stability headroom. 0 = climb purely to the stability edge.
-    double ThermalHeadroomCelsius = 0);
+    double ThermalHeadroomCelsius = 0,
+    // Isolated exact-device workload driven for the duration of the search. A
+    // CPU or GPU stability claim is only meaningful under load, so the single-
+    // domain tuning path supplies the same host the composite Auto OC uses.
+    // Null keeps the unloaded search used by cooling-domain calibration.
+    WorkloadHostDescriptorV1? WorkloadHost = null,
+    AutoOcWorkloadMode? WorkloadMode = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter<AutoOcWorkloadMode>))]
 public enum AutoOcWorkloadMode
@@ -455,7 +461,14 @@ public sealed record TuneScreeningResult(
     string Message,
     double? MaximumTemperatureCelsius,
     double? AveragePowerWatts,
-    double? AverageClockMegahertz);
+    double? AverageClockMegahertz,
+    double? ThroughputScore = null,
+    double? AverageFanRpm = null,
+    // Smallest observed margin between any bound temperature sensor and that
+    // sensor's OWN ceiling. The peak temperature alone cannot answer "how close
+    // to a limit are we", because hot spot and memory junction run far hotter
+    // than the core and are governed by different limits.
+    double? SmallestThermalMarginCelsius = null);
 
 public sealed record TuneCandidateResult(
     double Value,
@@ -502,7 +515,8 @@ public sealed record HardwareOperationStatus(
     FanCalibrationResult? CalibrationResult,
     TuneResult? TuneResult,
     string? Error,
-    AutoOcResultV2? AutoOcResult = null);
+    AutoOcResultV2? AutoOcResult = null,
+    AutoOcResultV3? AutoOcResultV3 = null);
 
 public sealed record AutomationRuleV1(
     int SchemaVersion,

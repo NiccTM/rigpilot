@@ -80,6 +80,7 @@ internal static class Program
             : 0;
 
         bool portable = args.Contains("portable", StringComparer.OrdinalIgnoreCase);
+        bool onboarding = args.Contains("onboarding", StringComparer.OrdinalIgnoreCase);
         using MainViewModel viewModel = new() { IsPortableMode = portable };
         try
         {
@@ -88,6 +89,10 @@ internal static class Program
             // in its first presentation frame.
             viewModel.InitialiseAsync(startAutomaticRefresh: false).GetAwaiter().GetResult();
             viewModel.IsAdvancedLab = advancedLab;
+            if (onboarding)
+            {
+                viewModel.ShowOnboardingForSnapshot(step: 2);
+            }
         }
         catch (Exception exception)
         {

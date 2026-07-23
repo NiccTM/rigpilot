@@ -3,23 +3,6 @@ using PCHelper.Contracts;
 
 namespace PCHelper.Core;
 
-public readonly record struct RgbColour(byte Red, byte Green, byte Blue)
-{
-    public static RgbColour Blend(RgbColour left, RgbColour right, double amount)
-    {
-        double value = Math.Clamp(amount, 0, 1);
-        return new RgbColour(
-            (byte)Math.Round(left.Red + ((right.Red - left.Red) * value)),
-            (byte)Math.Round(left.Green + ((right.Green - left.Green) * value)),
-            (byte)Math.Round(left.Blue + ((right.Blue - left.Blue) * value)));
-    }
-
-    public RgbColour Scale(double amount) => new(
-        (byte)Math.Round(Red * Math.Clamp(amount, 0, 1)),
-        (byte)Math.Round(Green * Math.Clamp(amount, 0, 1)),
-        (byte)Math.Round(Blue * Math.Clamp(amount, 0, 1)));
-}
-
 public readonly record struct LedCoordinate(int Index, double X, double Y);
 
 public sealed record EffectFrameInput(

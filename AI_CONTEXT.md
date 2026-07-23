@@ -10,7 +10,7 @@ RigPilot is a GPL-3.0 Windows desktop control suite inspired by G-Helper's low-f
 
 RigPilot is the public display brand as of 13 July 2026. `PCHelper` remains the deliberate internal identity for namespaces, service name, named-pipe names, CLI executable, local operator group, and `%ProgramData%\PCHelper` state. Do not rename those identifiers without a separately tested data and service migration.
 
-Current workspace target: `0.5.5-alpha`, a protocol-v2 desktop-suite development line with transactional GPU control, continuous cooling, exact-route RGB, commissioning, gaming workflow, recovery, and contained adapter hosts. It is not a qualified release and it does not claim certified CPU, GPU, motherboard-fan, pump, AIO, firmware, or RGB families. Controlled reference-system passes remain Experimental and do not satisfy the certification gate. The unsigned `0.5.5-preview.1` release shape is compiled read-only: every service mutation returns `PUBLIC_PREVIEW_READ_ONLY` while monitoring remains available.
+Current workspace target: `0.7.0`, a protocol-v2 desktop-suite development line with transactional GPU control, continuous cooling, exact-route RGB, commissioning, gaming workflow, recovery, and contained adapter hosts. It is not a qualified release and it does not claim certified CPU, GPU, motherboard-fan, pump, AIO, firmware, or RGB families. Controlled reference-system passes remain Experimental and do not satisfy the certification gate. The unsigned `0.6.0-preview.1` release shape is compiled read-only: every service mutation returns `PUBLIC_PREVIEW_READ_ONLY` while monitoring remains available.
 
 Supported operating-system target:
 
@@ -131,7 +131,7 @@ Manual profile selection overrides automation. Other rules use numeric priority 
 | Portable mode | Implemented, read-only | `PCHelper.App --portable` runs without the service or any pipe server: read-only in-process probe, writes locked, distinct "Portable (read-only)" labelling. |
 | Localization | Scaffolding live | `Localization/Strings.resx` + satellites (German reference), `L10n`/`{loc:Loc}`, `--culture` startup switch, per-key English fallback; portable-mode strings extracted first. Workflow and top-8 language list in `docs/localization.md`; safety wording never ships machine-translated. |
 | PawnIO | Read-only telemetry live via LibreHardwareMonitor | The signed PawnIO driver is installed and running on the reference machine (2026-07-15); LibreHardwareMonitorLib 0.9.6 loads its embedded RyzenSMU/AMDFamily17 modules through it, delivering per-core SMU power, Tctl/Tdie, CCD Tdie, SVI2 voltages, and effective clocks. Telemetry only: do not claim any privileged *write* or controller support merely because PawnIO is installed — CPU/SMU tuning stays Blocked. |
-| NVIDIA GPU control (fan/power/clock) | Implemented, arm-gated, Experimental | NVML fan-duty and power-limit adapters plus NVAPI pstates20 core/memory clock-offset adapters (documented public SDK only; no voltage entry is ever constructed). All disarmed by default: each family registers ReadOnly and needs its `SetGpu*Armed` Experimental + exact-device acknowledgement; disarm and service stop restore defaults. The deployed fan policy requests a 20% uncalibrated minimum but always preserves a higher controller-reported minimum; the reference RTX 3090 currently reports 30–100%. VF editor / OC Scanner deferred by documented-API policy. |
+| NVIDIA GPU control (fan/power/clock) | Implemented, arm-gated, Experimental | NVAPI is the primary transport for fan duty (cooler API) and power limit (client power policies); NVML is retained only as a fallback / read-only anchor, because this class of GeForce card refuses NVML's fan and power *setters* with `NVML_ERROR_NO_PERMISSION` while the equivalent NVAPI calls succeed — see the 2026-07-20 snapshot. NVAPI pstates20 core/memory clock-offset adapters unchanged (documented public SDK only; no voltage entry is ever constructed). **As of 0.7.0 the NVAPI GPU-fan session runs out-of-process in a dedicated, recyclable helper** (`PCHelper.AdapterHost --gpu-fan-session` behind `RemoteGpuFanCoolerTransport`), which both fixed the refused in-session restore and makes any helper death fail safe to firmware control — see the 2026-07-22 snapshot and the "GPU fan restore" section. All disarmed by default: each family registers ReadOnly and needs its `SetGpu*Armed` Experimental + exact-device acknowledgement; disarm and service stop restore defaults. Fan verification polls a bounded settle window (up to 8×250 ms) before comparing to tolerance, because the NVAPI cooler reports live level, not setpoint, mid-ramp. The deployed fan policy requests a 20% uncalibrated minimum but always preserves a higher controller-reported minimum; the reference RTX 3090 currently reports 30–100%. VF editor / OC Scanner deferred by documented-API policy. |
 | AMD/Intel CPU tuning | Gated scaffolding only — Blocked everywhere | `ISmuTuningTransport` seam (PPT/TDC/EDC only, fakes only — **no SMU write transport exists in the repo**), `AmdSmuTuningAdapter` double-gated on a qualification witness AND the acknowledged arm, `CpuTuneBootSentinel` boot-recovery journal wired at service start, and `SetCpuTuningArmed` IPC/CLI that refuses with `CPU_TUNING_QUALIFICATION_REQUIRED`. Live writes stay blocked until the full gate in `docs/qualification/cpu-tuning-and-intel-arc.md` passes. |
 | AMD/Intel GPU vendor bridges | Feasibility detectors only | `amd.adlx` and `intel.igcl` presence-only detectors (never initialise the vendor library, expose no write, silent on absent hardware). Real ADLX/IGCL telemetry/tuning waits for physical Radeon/Arc systems. |
 | Fan calibration/control loop | Implemented, Experimental | 100%-downward 5-point calibration, stable median windows, optional non-critical-fan stop, consecutive state confirmation, multi-cycle restart candidate promotion, hysteresis-aware stop duty, per-sensor thermal ceilings, rollback, cancellation, status, and boot recovery exist. Owner-selected uncalibrated automatic curves now use a 20% configured floor, while any higher controller minimum still wins. The pump stays at its separate 60% floor, CPU/pump role protections remain, and zero-RPM stays disabled. RTX 3090 restart verification remains rejected after inconsistent hysteresis and an 85.2 °C hotspot abort. |
@@ -853,7 +853,492 @@ Version 1.0 is blocked by any unresolved BSOD, stuck fan, failed reset, unauthor
 - Unsigned public previews compile the service with `RigPilotPublicUnsignedPreview=true`. Every `IpcCommandPolicy` mutation returns `PUBLIC_PREVIEW_READ_ONLY`; read-only monitoring remains available. `runtime-contract.json` records the trust policy, and payload validation executes the published service's `--print-release-policy` probe rather than trusting the manifest alone.
 - The release workflow supports staged SignPath signing of runtime components, MSI, and bundle, followed by Authenticode verification, runtime hash refresh, checksums, SPDX SBOM, and provenance attestations. SignPath organisation/project/configuration values remain external enrolment inputs. A PFX path remains as a fallback.
 - Public startup is offline: the GitHub update request now runs only from the explicit dashboard action. `CODE_SIGNING.md` and `PRIVACY.md` define roles, approval, local data, and every network route.
-- Verification: 376 core + 453 integration tests passed (829 total), workflow files parsed as YAML, `0.5.5-preview.1` published locally with `publicUnsignedPreview=true;writesAllowed=false`, runtime payload validation passed, and WiX built `RigPilot.Installer.msi` with 0 warnings/errors. No service deployment, installation, or hardware write occurred.
+- Verification: 376 core + 453 integration tests passed (829 total), workflow files parsed as YAML, `0.5.5-preview.1` was built with `publicUnsignedPreview=true;writesAllowed=false`, runtime payload validation passed, and WiX built `RigPilot.Installer.msi` with 0 warnings/errors. The tagged CI run later published this exact read-only payload as a GitHub prerelease. No service deployment, installation, or hardware write occurred.
+
+## Verification snapshot: 2026-07-18 (trusted daily-driver onboarding and verified reset)
+
+- The first-run tour is now a seven-step guided Simple-mode workflow: read-only hardware/ownership scan, capability-state explanation, Quiet/Efficiency/Performance selection, three-sample telemetry baseline, explicit eligibility/omission dry run, one service-owned profile transaction, and an independent Windows-default restoration proof. The initial stock-safe mode bundle changes only the discovered Windows power scheme; cooling, tuning, lighting, and OSD are explicitly omitted rather than presented as atomic when they are not.
+- Mode choices use the shared neutral mode style and acquire a blue border only from confirmed `Tag=True` selection state. Hardware action buttons are neutral. Hardware-control, profile-apply, reset, and existing hardware-feature commands remain clickable when unavailable and open their prerequisite or recovery reason.
+- `ResetHardware` now routes through `ProfileTransactionEngine.RestoreDefaultsAsync`; success requires `IHardwareStateVerifier.VerifyDefaultStateAsync`. Missing or mismatched read-back sets the service recovery lock and returns `RECOVERY_REQUIRED`, so the onboarding restoration result cannot be inferred from a reset call alone.
+- Verification: Debug build completed with 0 warnings/errors; 376 core + 458 integration tests passed before the final clickability assertion was added, and the focused onboarding/UI/core suites passed. The read-only snapshot host rendered the guided mode-selection step at 1240x800 with only Efficiency outlined blue. No installed service was replaced and no hardware mutation was issued.
+
+## Verification snapshot: 2026-07-18 (Auto OC V3 and profile dry-run evidence)
+
+- `StartAutoOcV3` is an optional feature-negotiated protocol-v2 operation. The service requires exact bounded core/memory controls on one GPU, optionally accepts a bounded controller-reported power-limit control, captures three stock-state throughput baselines, rejects variation above the requested limit (3% from the dashboard), and selects Performance, Efficiency, or Quiet candidates only from measured workload results. The final combined synthetic screen defaults to 20 minutes. PresentMon remains optional supplementary evidence and cannot weaken the synthetic gate. No voltage action is constructed.
+- Auto OC V3 captures a GPU identity/VBIOS/display-driver fingerprint, keeps generated profiles `Experimental` and `Provisional`, and always restores every captured prior control in reverse order with independent read-back. Any unproved restore becomes `RecoveryRequired`; only a provisional result with all requested families verified and a known restored state is persisted. Physical qualification and the 10 active-use hours/seven calendar days/three cold boots promotion gate remain incomplete.
+- `PreviewProfileV2` is read-only and feature-negotiated. It reports required capabilities, optional omissions, ownership conflicts, linked cooling qualification, missing exact-device or hazard acknowledgements, service-atomic domains, user-session lighting/OSD companions, and the exact rollback boundary. The dashboard exposes a neutral Dry run action and consumes the same result before current-profile apply; it blocks missing read-back or linked resources rather than starting a partial bundle.
+- Verification: Debug build completed with 0 warnings/errors; 386 core + 460 integration tests passed (846 total). New fake-adapter/policy coverage proves baseline rejection, objective scoring, final restoration, workload throughput/RPM capture, profile conflict/read-back blocking, unsigned-preview read-only classification, and feature negotiation. The profiles page rendered at 1240x900 in portable read-only mode with no clipping. No installed service was replaced and no hardware mutation was issued.
+
+## Verification snapshot: 2026-07-18 (Auto OC tune-validity lifecycle; four evidence-soundness holes closed)
+
+- **`AutoOcProfileValidationV1` + `AutoOcValidationPolicy`** complete the promotion gate that Auto OC V3 left open: durable per-profile records, service session accounting (`Activate`/`Deactivate`/unclean-session invalidation), fingerprint-drift invalidation, `RecoveryRequired` marking, and a read path (`GetAutoOcProfileValidations`) through to the profile card. Stability events are fed from the real `WindowsSystemHealthSignalProbe`. Cold boots are credited only at clean shutdown when defaults verify.
+- **All four defects fixed here are one class: absence of evidence scored as favorable.** This is the recurring failure mode in this codebase, because the favorable outcome is almost always the `else` branch — it is invisible unless you deliberately ask "what happens when this data is missing?"
+  1. **Idle time counted as proof of stability.** `Deactivate` credited `now - started`, pure wall clock, so a machine idling at the desktop for ten hours accrued the full 10-hour gate. A tune that had never done a minute of work could reach `Validated` — the state that unlocks *automatic* game/startup/automation activation. Active use now accrues only via `RecordActiveUseSample`, requiring the tuned GPU at ≥25% utilisation, clamped to a 30 s maximum per sample so a sleep/resume gap cannot inject unobserved hours. Absent utilisation telemetry is not qualifying load.
+  2. **`Rejected` was missing from the promotion guard.** `EvaluatePromotion` guarded only `Invalidated`/`RecoveryRequired`, so accruing evidence rewrote a refused or discarded tune back to `Provisional` and onward to `Validated`. All three write points (promotion, sample accrual, session opening) now share one `IsTerminal` predicate rather than three hand-maintained state lists that can drift.
+  3. **Missing sensors read as cool.** `AdaptiveCoolingController` fell through to `Choose(null, null, …)` → `Balanced`, so a machine reporting no temperatures would have had its cooling *stepped down*. Absent readings now escalate identically to stale ones; an already-cooling system holds without re-issuing writes.
+  4. **Late crash signals were discarded.** WHEA/display-reset detection lags because the probe polls, so a crash at 12:59 could surface after a 13:00 shutdown closed the session — and that session was banked as a *successful cold boot*. Records now retain the last closed session window and attribute late events to it; events outside every window stay unattributed.
+- **Verified sound, no change needed:** `HardwareFingerprintBuilder.TryCreate` refuses to build a fingerprint unless identity, VBIOS, and driver are all present, so an unreadable field can never become an empty-equals-empty match. This is the reference example — *reject at capture, so comparison never has to reason about missing data*. Also audited and found correctly guarded: every non-test `.All()` call site (vacuous-truth on empty sequences — the apply gate early-returns on `available.Length == 0`, the recovery gate requires `Count == available.Length`, `SupportsNonZeroCurve` requires `Count > 0`, the release gate always has baseline requirements), and long-lived graph state (a fresh `CoolingGraphRuntime` per activation keeps the unpruned dictionaries bounded).
+- **`PrivilegedServiceBoundaryTests`** lock in two properties users of this software category consistently ask for and vendor suites consistently break: the SYSTEM service references **no networking assembly** (no telemetry, no accounts, no silent update channel — true by construction, now enforced at build time) and the long-lived runtime stays deterministically disposable, a structural guard against the handle-leak class that has starved kernel resources in a competing lighting service.
+
+## Verification snapshot: 2026-07-18 (continuous adaptive cooling and fan start/stop — policy plus wiring)
+
+- **Both policies shipped tested-but-dead first, then were wired.** `AdaptiveCoolingController` and `FanStartStopPolicy` initially had full test coverage and *zero* non-test references — the defects were documented and fixed in policy while remaining entirely unfixed in behaviour. Worth remembering: a fix that nothing calls is not a fix.
+- **Continuous adaptive cooling.** Previously `CoolingModeSelector.Choose` was called from exactly one place — the button handler — so "Adaptive" picked a curve once at click time and the hysteresis only mattered across manual re-clicks. `TickAdaptiveCoolingAsync` now evaluates every telemetry tick in the service, so it keeps working with the dashboard closed. It recognises an automatic profile by the stable `auto.profile.` id the factory already emits, so **no new protocol surface** was added. Switching requires a 15 s sustained hold plus a 60 s dwell; both guards are bypassed **only to escalate** (emergency temperature ≥85 °C or missing/stale telemetry), never to reduce cooling. Evaluation runs *before* the cooling and mutation gates are taken, because the activation transaction acquires the cooling gate itself — evaluating inside it would deadlock on the first mode switch. A failed switch is caught and leaves the running curve untouched.
+- **Fan start/stop** is applied as the final output stage, after slew: a stop must reach a true 0% *below* the calibration floor the earlier stages enforce, and slew-limiting the restart boost would defeat it. **Stopping is a privilege, not a setting** — it requires an opt-in `StopBelowPercent` *and* `FanCalibrationPolicy.SupportsVerifiedFanStop` evidence for that exact fan. A pump or protected CPU fan never earns that calibration, so no configuration can stop one, including from a corrupted persisted state (covered by test). Leaving rest commands at least the *measured* restart duty, overriding a too-low user setting, so a fan told to go 0% → 15% cannot sit stalled at 0 RPM while the curve believes it is spinning. Graph validation rejects configurations where the restart duty is at or below the stop threshold, which would oscillate.
+- **Forum research grounding these priorities** (2026-07): the most-cited technical failure in this category is a vendor lighting service leaking >7M handles until kernel resources starve, alongside failure to re-recognise hardware after reinstall; the most-repeated feature request across comparable projects is fan-oscillation control (hysteresis + response time), with users describing the changing fan *pitch* as worse than the noise. The hold/dwell design is that pattern applied to mode switching. Curve-parity audit against Fan Control: hysteresis, response time, step up/down, mix, RPM calibration, `Sync`, `FeedbackAuto` (auto-curve), and per-output `Offset` **already existed** — only start and stop were genuinely missing. `CompetitorImporters` (ingesting Fan Control configs) is an under-sold adoption lever.
+
+## Verification snapshot: 2026-07-18 (adapter-host probe timeout — root cause of stale sensors and missing motherboard fan control)
+
+- **The defect.** The LibreHardwareMonitor topology probe takes **~16.5 s** with elevated access on the reference ROG STRIX X570-E (measured, twice, both cold). `AdapterHostProxy` applied a single 10 s `OperationTimeout` to every host call, so the probe was killed and the host recycled **on every capture**. The failure was self-perpetuating: the 30 s topology cache never populated, so the next capture reran the same doomed probe. This had been happening continuously; LHM had effectively never completed a probe in this deployment.
+- **One timeout, three symptoms that looked unrelated.** (1) A fixed ~11.0–11.2 s per capture (10 s timeout + ~1 s recycle) — stable *because it was a timeout, not variable work*. Since each adapter stamps its samples when read and `AdapterCoordinator` stamps `CapturedAt` at the **end** of the sequential loop, every adapter's sensors appeared ~11 s stale, exceeding the cooling engine's 3 s `maximumSampleAge` and rejecting **all** automatic fan curves with `PROFILE_REJECTED … Sensor is stale`. (2) Zero `lhm.control` capabilities, hiding all seven Nuvoton NCT6798D motherboard fans; the Cooling page reported "0 outputs" (the motherboard *device* still appeared, because that comes from WMI via `SystemInventoryAdapter`, not LHM). (3) `ADAPTER_FAILED` on every snapshot.
+- **The fix.** Topology discovery gets `TopologyProbeTimeout` = 45 s via an optional per-call budget on `SendReadAsync`. Sensor reads, health checks, and **mutations deliberately keep the 10 s `OperationTimeout`**: a mutation that outlives its timeout leaves hardware state unknown (`HardwareStateUnknownException`) and must be detected quickly rather than waited out. Widening that path would trade a safety property for a green checkmark.
+- **Measured before → after on the reference rig:** sensor age vs capture 11.2 s → **0.61 s**; snapshot age 1.3–10.8 s → 0.5–1.2 s; `lhm.control` capabilities 2 (GPU only) → **9** (+7 NCT6798D fans, all Experimental); adapter warnings every capture → **none**.
+- **Live adaptive-cooling verification** (first successful activation): dashboard reported *"Adaptive cooling picked Balanced: GPU 59 °C — the Balanced curve fits"*; service reported `ActiveProfileId=auto.profile.case-fans`, `GraphId=auto.cooling.case-fans`, `State=Normal`. Fan duties moved 58.4% → 65.9% (RPM 1277 → 1424). Across five samples over 25 s with temperature drifting 60 → 59 °C the mode **held** with no re-application — the 15 s hold and 60 s dwell behaving as designed. **Not yet exercised on hardware: a genuine mode transition** (crossing 75 °C under load to escalate to Cooling, then stepping back after dwell).
+- **A UI gap found only by testing:** the "Adaptive (pick for me)" button existed solely in the case-fan section, which had zero outputs while this bug was live, whereas GPU fans — which worked — had no Adaptive button at all despite `StartAdaptiveCoolingAsync(gpuFans: true)` being fully implemented. The feature was unreachable on the reference machine. A GPU-side button was added.
+- **A wrong hypothesis, recorded deliberately.** Before measuring, storage SMART was assumed to dominate capture cost; LibreHardwareMonitor was given tiered updates (storage/network on a 30 s cadence) and that change was published and installed. It moved the number **zero** — the timeout was on the *probe* path, not the sensor path. The tiering is retained only because it carries **honest per-subsystem update timestamps**: skipping a subsystem while stamping its samples with collection time would report stale data as fresh, which is the same defect class this codebase keeps closing. The 16.5 s measurement that actually identified the bug took one command and would have saved an entire publish/install cycle. **Measure before optimising; a suspiciously stable duration is a timeout, not work.**
+- Verification: Debug build 0 warnings/errors; **885 tests** (422 core + 463 integration). Shipped as `0.5.5-alpha-20260718-180633`; installed service hash matches the published payload. Branch `codex/competitive-leadership` → [PR #25](https://github.com/NiccTM/rigpilot/pull/25) (6 commits, 48 files).
+
+## Verification snapshot: 2026-07-18 (Auto OC end-to-end test — three defects fixed, one architectural blocker identified and NOT fixed)
+
+**Auto OC does not work. The blocker is now precisely identified rather than mysterious.** Driving the shipped UI on the reference rig found four distinct defects; three are fixed, the fourth is architectural and is the next session's first task.
+
+- **Defect A (fixed): the workload host could never launch from a deployed payload.** `WorkloadHostSession.ResolveExecutablePath` accepted a co-located `PCHelper.WorkloadHost.exe` on `File.Exists` alone. The published `app/` directory receives that apphost as a project-reference build side-effect **without** its managed `.dll`, so the check passed on a launcher that cannot start ("The application to execute does not exist: …\app\PCHelper.WorkloadHost.dll") and the correct sibling `workload-host/` component was never reached. Auto OC V3 had therefore never run on any deployed install — only from a dev build where both files sit together. `IsLaunchable` now requires the managed assembly, not just the apphost. Same pattern as the rest of the day: **testing for a proxy artifact instead of the thing that must actually be present.**
+- **Defect B (fixed): the remedy destroyed the diagnosis.** Both Auto OC engines threw `could not prove N control state(s)` and discarded the individual exceptions into an `AggregateException` that never reached storage; only the count string persisted. The adapter trace that held the detail is a bounded 512-entry in-memory buffer, and the failure told the operator to restart the service — which flushes it. Failures now record `control name (capability id): ExceptionType: reason` per control **in the message itself**, because that string is what reaches the durable operation record. This fix is the only reason Defect D was found; it paid for itself on the first run after deployment.
+- **Defect C (fixed): a genuine safety deadlock in the restore path.** `RollbackAsync` restores by calling `SetOffsetAsync`, which calls the transport's `EnsureWriteArmed()`. Auto OC disarms when it finishes, so: **disarm → restore is a write → write refused → cannot prove default state → RecoveryRequired → writes locked → still cannot restore.** The gate protecting against unauthorised writes blocked the write the safety system itself needs to return hardware to stock. The adapter layer already encoded the right intent (rollback is deliberately exempt from its own `EnsureWritesEnabled`); the transport did not honour it one layer down. Added `IGpuClockOffsetTransport.RestoreOffsetAsync`, which bypasses **only** the arm gate — transport-enabled, not-disposed, editable-P0, and driver-delta-range checks all still apply — and pointed rollback/reset at it. A restore can only move hardware toward the state it was already in, so refusing one strictly increases risk. Tests pin that an ordinary apply is **still** refused while disarmed.
+- **Defect D (NOT fixed — architectural): NVAPI/NVML writes are refused in the LocalSystem service context.** With Defect C removed, the restore reached the driver and failed there. Exact durable evidence: `GPU power limit (gpupower.limit:0): InvalidOperationException: nvmlDeviceSetPowerManagementLimit failed with NVML result 4` (= `NVML_ERROR_NO_PERMISSION`), and both clock offsets: `NVIDIAApiException: NVAPI_INVALID_USER_PRIVILEGE`. The service runs as **LocalSystem** (session 0, no interactive desktop); NVAPI performance-state writes and NVML power-limit writes refuse that context. All three controls fail identically and reproducibly, which is why every Auto OC run ended `RecoveryRequired`. The likely fix is to perform these writes from the signed-in user session — the pattern `PCHelper.WorkloadHost` already uses — rather than the SYSTEM service.
+- **Unresolved contradiction that must be settled before fixing D.** These same writes **succeeded earlier the same day**: GPU core +15 MHz and memory +15 MHz applied with read-back verification, and GPU fan/power writes verified live. Something differs between that path and the Auto OC V3 restore path. Do not design a user-session transport until this is explained — a working path may already exist, and building a second one would be wasted work on a wrong assumption.
+- **Hardware was never left modified.** Verified independently with `nvidia-smi` after every failed run: `power.limit 350.00 W = power.default_limit 350.00 W`, memory at its normal idle P-state, core/memory offsets 0 MHz. RigPilot failed closed and locked its own writes because it could not *prove* restoration, not because the GPU was left tuned. Clearing the lock is **Diagnostics → Reset verified controls**.
+- **Also found, not fixed: "Auto OC core" and "Auto OC memory" silently do nothing.** They route to the legacy `StartTune` path, which has **no workload generator**, so they screen an idle GPU and return in ~1 second with `State=Completed`, `ProgressPercent=100`, zero candidates, and the benign-sounding "No candidate passed screening". A user would reasonably conclude their card has no headroom. Only "Full Auto OC" reaches `StartAutoOcV3` with the isolated workload host. These two buttons should be repointed at V3 or removed — a product decision, since V3 tunes core and memory as one operation.
+- **Deploy-script robustness:** running `Update-LocalAlphaRuntime.ps1` twice in succession **silently downgrades** the active runtime — its restore-then-install flow restores the pre-existing image, so the second run reverts the first. This cost a full diagnostic cycle (a fix appeared not to work because a stale build was active). Verify the installed binary hash against the published payload before concluding a fix failed. A repeat run should be a no-op or refuse, not a rollback.
+- Verification: Debug build 0 warnings/errors; **890 tests** (424 core + 466 integration) at the diagnostics fix, 893 with the restore-path tests. Auto OC V3 confirmed to genuinely execute (operation `Kind=AutoOc`, workload host launched, GPU loaded to ~109 W and 9502 MHz memory) — it is the restoration stage alone that fails.
+
+## Verification snapshot: 2026-07-18 (Live Full Auto OC run against the deployed 0.5.6 — restore-verification fix confirmed; new baseline-load finding)
+
+- **User-witnessed live run** against the installed 0.5.6 service (preflight Ready, dashboard 0.5.6), driven through the published app via UI Automation (`Performance.FullAutoOc`). Operation `1a4986b4bf974976b549fa4eda5b6d4e`, `Kind=AutoOc`, ran 23:38:46→23:38:56 UTC.
+- **The false-RecoveryRequired failure mode is gone — the fix works live.** All three restore writes were refused exactly as Defect D predicts (`gpupower.limit:0` → `nvmlDeviceSetPowerManagementLimit` NVML result 4; both clock offsets → `NVAPI_INVALID_USER_PRIVILEGE`), but `restorationProof` read every control back at its captured prior value (350 W, 0 MHz, 0 MHz) and recorded per-control "the hardware was never moved". Result: `priorStateRestored=true`, `hardwareStateKnown=true`, **`recoveryRequired=false`, `writesEnabled=true`, no write lock** after the run. Independently confirmed with nvidia-smi before and after: 210/405 MHz idle clocks and 350.00 W limit unchanged.
+- **New durable evidence for the D investigation — the run now fails one stage *earlier* than the write refusal.** `validationState=Rejected` at **Baseline sample 1**: "The screening workload did not produce at least 70% measured target-device load; no stability claim was recorded." The workload genuinely ran from the service context (average power 87.6 W vs ~30 W idle, max temp 66.7 °C, 10 s duration) but under-loaded the 350 W card (~25%). So Defect D currently has two distinct LocalSystem symptoms to explain: (a) NVAPI/NVML write refusal, and (b) the screening workload no longer reaching the 70% load bar — where a prior dev-context run reached ~109 W. Same caution as the standing contradiction note: characterise why the load differs (session context? workload-host path? measurement?) before designing any fix.
+- No source changes in this pass; evidence-gathering only. The other session's uncommitted restore-verification work on this branch is untouched.
+
+## Verification snapshot: 2026-07-18 (Live feature test sweep on 0.5.6: Auto OC, GPU fan curve, case-fan adaptive, RGB)
+
+- **User-requested live test of four subsystems** against the deployed 0.5.6 service, driven through the published app via UI Automation + CLI, with nvidia-smi and service status as independent witnesses. No conflicting controllers were running; all GPU/fan controls Experimental and unblocked.
+- **GPU fan auto curve: PASS end-to-end.** Balanced mode → cooling graph `auto.cooling.gpu-fan` Normal, commanded `gpufan.duty:0` = 53.5%, and nvidia-smi read the physical fan at 52% (was 0%). So `nvmlDeviceSetFanSpeed`-class writes **work** from LocalSystem.
+- **Case-fan adaptive: PASS.** "Adaptive (pick for me)" read live temps, picked Silent ("GPU 44 °C"), and activated `auto.profile.case-fans`: six NCT6798D PWM outputs at ~31.8%, protected header (control/4) correctly excluded. Left running.
+- **RGB: PASS 4/4 routes.** CLI Kraken write plus app "Sync colour to all devices": Kraken ring+logo (no read-back), both Aura channels (no read-back), Trident Z (1 DIMM controller, 20 SMBus transactions, identity `0x77='DIMM_LED-0103'`), and **Razer case acknowledged by firmware (status 0x02)** — the one verified route. Combined result honestly reported "4 applied · 0 blocked · 0 failed".
+- **Legacy "Auto OC core" button is worse than documented: it now LOCKS WRITES.** On 0.5.6 it reached `RecoveryRequired` at 5% (`Kind=Tuning`) — the legacy StartTune path has no restore-verification, so the defect the V3 fix killed still fires there. Compounding it: `_rollbackBlocked` is **never cleared at runtime** (no code path sets it false; Diagnostics "Reset verified controls" does not touch it), so the only recovery is an elevated service restart. Do not press Auto OC core/memory until these buttons are repointed at V3 or removed (existing product decision).
+- **Second write-lock reproduction — fan-mode switching.** With the GPU-fan graph active, activating case fans replaces the profile; releasing the GPU fan calls `nvmlDeviceSetFanControlPolicy(auto)`, which is refused (NVML result 4) → `PROFILE_REJECTED` → cooling runtime `RecoveryRequired` → full write lock (second elevated restart needed). Yet `gpu-fan-disarm` via CLI succeeded and read back "driver automatic policy" moments later. **Precise defect-D data: per-API, not blanket — SetFanSpeed works, SetFanControlPolicy(auto)/SetPowerManagementLimit/NVAPI p-state writes are refused, and the two release paths behave differently.**
+- **App-side gating friction found (UI bugs, not hardware):** (1) fan-mode clicks silently no-op with a misleading "Turn on Hardware control in the header first" notice when the app's snapshot is stale (gpufan captured ReadOnly while disarmed) — Refresh fixes it; (2) the header Hardware-control toggle would not commit on a fresh service (`SetHardwareControlArmed` all-families verification fails) until the three per-family CLI arms had run once, while the checkbox visual showed On with the badge showing Off — an honest-state mismatch to fix.
+- End state: service 0.5.6 healthy, writes enabled, no recovery flag; case fans on the adaptive Silent curve; GPU fan back on driver auto policy; RGB at the synced colour; GPU clocks/power stock (verified 210/405 MHz, 350 W). Evidence-gathering only; no source changes.
+
+## Verification snapshot: 2026-07-18 (Single-domain tune restore-verification fix — deployed and live-verified)
+
+- **The legacy-tune write-lock is fixed.** Both `RestoreOriginalAsync` implementations in `HardwareOperations.cs` (the `HardwareTuneEngine` tune path and the calibration path) now restore through `HardwareRestoreVerification.RestoreAndVerifyAsync`: a refused restore write whose read-back proves the captured prior value is a proven restore, not an unknown state. Only genuinely unproven state still escalates to ResetToDefault → `HardwareOperationRecoveryException` (unchanged fail-closed semantics). This closes the gap the V3 fix left: the "Auto OC core"/"Auto OC memory" buttons and any single-domain tune could still lock all service writes on the LocalSystem refusal.
+- **Test truthfulness:** `FakeNumericAdapter` now implements `IHardwareStateVerifier` (matching every production tunable adapter — LHM, all three NVIDIA adapters, WindowsPowerAdapter, AdapterHostProxy) plus `ApplyThrows`/`RollbackThrows` modelling the live all-writes-refused shape. New regression test `RefusedWritesWithProvenReadBackFailHonestlyWithoutRecovery` pins: refused writes + proven read-back → the driver refusal propagates as the failure, no `HardwareOperationRecoveryException`, no firmware reset.
+- Suite **906 tests (430 core + 476 integration), 0 warnings** — includes this fix plus the previously uncommitted single-domain workload work (`ValidateTuneWorkload`, buttons launching the user-session workload host).
+- **Published 0.5.6-alpha (7 components incl. workload-host, protocol 2, Passed) and user-approved UAC deploy.** Installed `PCHelper.Core.dll` hash `E4423256…` matches the published payload exactly (the install folder is again misnamed `0.5.5-alpha-…` — the known folder-naming defect; trust the hash and the service's reported 0.5.6-alpha, not the path).
+- **Live re-test of the exact failing button ("Auto OC core"):** the run now launches the isolated workload host, fails honestly at the refused apply — `state=Failed`, `error=NVAPI_INVALID_USER_PRIVILEGE`, "the prior control state was restored" — with **`writesEnabled=true`, `recoveryRequired=false`** after the run, and nvidia-smi confirming stock (210/405 MHz, 350 W). Two hours earlier this same click ended `RecoveryRequired` at 5% and needed an elevated restart.
+- Still open, unchanged: Defect D itself (per-API LocalSystem refusals; the per-API map from the test sweep is the design input), the profile-swap `SetFanControlPolicy(auto)` lock path (in `ProfileTransactionEngine`/deactivation, not touched by this fix), `_rollbackBlocked` having no runtime clear, and the deploy folder-naming defect.
+- **Stale "Auto-tuning started…" banner fixed (user screenshot).** The single-domain paths awaited the operation but discarded the outcome (`_ = await WaitForOperationAsync(...)`), so the optimistic start notice from `StartTuneCoreAsync` persisted after the run had already failed. New `ShowTuneOutcomeNotice` (MainViewModel.HardwareControls.cs) replaces the banner with the terminal outcome — Success only when a profile was generated; Completed-without-result, Failed (with the operation's `Error`), Aborted, RecoveryRequired (Error tone), and superseded each get honest wording — wired into both `StartGpuClockAutoOcAsync` and `StartSelectedTuneAsync` (Full Auto OC already had its own outcome notice). Dashboard-only: republished 0.5.6-alpha app (no service redeploy). Live-verified: the same click now ends with the banner reading "GPU core clock auto-tuning failed: … NVAPI_INVALID_USER_PRIVILEGE"; writes enabled, no recovery. Suite 906 tests, 0 warnings.
+
+## Verification snapshot: 2026-07-20 (Auto OC "Defect D" retired — real cause was a refused NVML fan-policy call poisoning NVAPI, not LocalSystem; workload saturation, per-sensor thermal ceilings, plateau warmup; NVAPI fan/power transports replace refused NVML setters; fan-assist removed, pre-V3 engine deprecated)
+
+- **Three blockers found and fixed driving Full Auto OC end-to-end, on top of the 07-18 restore-verification fix.** The workload host now saturates the GPU (a deep in-flight dispatch queue AND large-enough individual dispatches — either alone left it at 37-38% load; both together reached Core 100%, Combined 100%, Memory 96.6%, at 322-327 W / 73 °C peak). GPU temperature ceilings are now judged per sensor (edge / hot spot / memory junction) instead of the peak of every bound sensor against one operator ceiling — GDDR6X memory junction runs near the core's 83 °C ceiling by design and was halting every run at the first candidate. Refused clock writes now name domain, requested value, and the driver's own delta range in the durable operation record, because the adapter-trace buffer that used to hold this detail is a bounded 512-entry ring that per-second sensor polling flushed within seconds.
+- **The clock-write refusal that the 07-18 entries called "Defect D — NVAPI/NVML writes refused in the LocalSystem service context" was wrong, and is retired.** Manual core/memory clock offsets (+15, +30, +100 MHz) applied and read back correctly from the LocalSystem service throughout this session, including while the workload host ran at 100% — session 0 was never the blocker. The actual refusal had two real causes: (a) the engine screening its own no-op 0 kHz candidate against hardware already at 0 kHz — refused identically to a rollback-to-stock when already at stock — fixed by skipping a write once read-back proves the requested state is already current; and (b) a regression introduced this same session — holding the GPU fan high via `nvmlDeviceSetFanControlPolicy(manual)` is refused `NVML_ERROR_NO_PERMISSION` on this GeForce, and left the driver session refusing subsequent NVAPI pstate writes (`NVAPI_INVALID_USER_PRIVILEGE`) even though the identical write had just succeeded at arm time. Diagnosed via a write-origin discriminator (apply/restore, current delta, arm state) added to the failure message, across three deploys; fixed by gating the fan assist off, then deleting it outright once the NVAPI fan transport replaced its purpose. NVAPI access across the core adapter, memory adapter, periodic capability probe, and tuning engine is now serialized behind one shared handle-lock — previously only `SetArmed` was guarded, every read/write was not.
+- **Baseline measurement fixed twice.** First, a 45 s discarded warmup window before sampling, because a cold GPU boosts higher than a warm one (sample 1 at 76 °C / 278 W scored 302 vs. warm samples at 80-83 °C / 332 W scoring 290 — 4.03% variation against a 3% limit, purely the transient). A live re-test then showed the *fixed duration* itself was wrong: without the fan assist the card settles toward a higher equilibrium than 45 s reaches (86.4→88.0 °C still climbing through the window, 4.89% variation). Warmup now repeats discarded load windows and stops when two consecutive windows agree in peak temperature within 1 °C, capped at twelve 15 s windows, with cap-exhaustion reported explicitly so a later variation rejection can be told apart from noise. Clock regression is now measured within a run against that run's own baseline rather than a monitor-construction-time snapshot carried over from a previous mode, which had been comparing e.g. memory 9752→5842 MHz across two unrelated operating states.
+- **NVML fan and power *setters* are refused on this GeForce class; NVAPI is not.** Fan control moved to a fully-written but previously unselected NVAPI cooler transport (present since the 0.4.0 capture), NVML kept only as fallback when NVAPI exposes no controllable cooler. A follow-up fix polls the fan level toward target across a bounded settle window (≤8×250 ms) before verifying, because the NVAPI cooler reports live level, not setpoint, mid-ramp — a valid 50% apply had been rolling back after reading 41% mid-ramp. **Live-verified:** 50% GPU fan apply held and read back correctly; disarm restored the automatic curve (nvidia-smi 0%). Power limit got a new `NvApiGpuPowerLimitTransport` over NVAPI client power policies (P0 entry only), converting NVAPI's PCM units to the adapter's milliwatt contract using NVML's default-TDP read (NVML reads still work; only its writes are refused) as the anchor — NVAPI preferred, NVML fallback. **Live-verified:** manual 300 W apply (throttle-only, below the 350 W default) read back at 300 W via NVAPI and nvidia-smi; disarm restored 350 W.
+- **Hygiene close-out.** The fan-assist path (`TryHoldGpuFanHighAsync`, its two consts, and the V3-runner capture/restore plumbing) is deleted outright, now fully superseded by the NVAPI fan transport. The pre-V3 `FullAutoOcEngine` (reachable only through the legacy `StartAutoOc` IPC command — the app always selects V3) is marked `[Obsolete]`; the one retained legacy call site and its test file suppress CS0618 with an explaining comment, so any *new* call site fails the build under `-warnaserror`.
+- Verification per commit across the session: 923 → 936 → 940 → 942 → 946 → 950 → 961 tests, 0 warnings throughout.
+- **Still open, not yet live-confirmed:** whether the plateau-based warmup is tight enough across the full baseline-variation gate to let a run actually ship a candidate overclock. The prior fixed-duration warmup was confirmed insufficient live; the plateau replacement had not been re-run live as of the session's last commit. This is the next session's first task — it is a measurement-tuning question, not the architectural clock-write blocker the 07-18 entries described.
+
+## Verification snapshot: 2026-07-20 (GPU fan mode-switch write-lock — blast radius scoped to the fan; zero-RPM root cause identified)
+
+Driving the GPU-fan auto-mode buttons (Performance page: Silent / Balanced / Cooling / Adaptive) live on the reference rig surfaced a chain of defects. All fixes below are Debug/Release-green (975 tests, 0 warnings) and the scoping fix is live-verified; the underlying zero-RPM behaviour is diagnosed but not yet fixed.
+
+- **The headline defect: a GPU-fan cooling failure hard-locked *every* hardware capability service-wide.** Switching auto-modes (e.g. Cooling→Silent) could leave `_rollbackBlocked = true`, which blocks all mutating IPC — GPU clock, GPU power, case fans, everything — and has **no runtime clear** (only a service restart resets it; confirmed by reading every `_rollbackBlocked` write site). A single fan hiccup bricked the whole control surface until an elevated restart.
+- **Scoped the lock's blast radius (the important fix, live-verified).** A GPU fan's duty is always clamped to a safe bound before any write reaches hardware (the adapter, the graph engine, and the runtime's own step limiter all enforce it) and it is never clock/power/voltage, so an unresolved *fan* reset is a bookkeeping gap, not a physical danger. Four distinct lock sites now scope a fan-only failure to the cooling subsystem instead of the global lock: the cooling-graph replace transaction (`ReplaceActiveCoolingGraphTransactionAsync`), the continuous-tick recovery (`RecoverCoolingGraphFailureAsync`), startup/shutdown recovery (`OnlyGpuFanRecoveryFailed`), and the arm/disarm transaction (`OnlyGpuFanFamilyFailed`). Any clock or power failure still hard-locks — those domains lack the fan's structural safety bound. **Live proof:** with the fan reset failing, `gpu-power-arm` and `gpu-clock-arm` both still succeeded (`armed: true`), capabilities read `gpupower.limit:0`/`gpuclock.core:0`/`gpuclock.memory:0` = Experimental while `gpufan.duty:0` = ReadOnly, and service `writesEnabled` stayed true throughout. Before the fix, the first fan failure would have failed both subsequent arms with `RECOVERY_REQUIRED`.
+- **Also fixed on the way (all tested, deployed):** (1) a graph-replacement's first tick skipped its own slew limit because `LastApplied` started empty, demanding an instant duty jump the fan couldn't make — now seeds the retained-output rate-limit state from the previous graph (`SeedRetainedOutputRateLimits`); (2) the fan's restore-to-default is retried with a cooldown+backoff and the verify settle-poll was made *less dense* (fewer NVAPI calls over a longer wall-clock window), because the rapid settle-poll burst itself was destabilising the driver session and making the safety-critical restore hit `NVAPI_INVALID_USER_PRIVILEGE`.
+- **Root cause of the fan failure itself — identified, NOT yet fixed: RTX 3090 zero-RPM idle.** At idle temps (~35 °C) the card's firmware keeps the fan physically stopped (passive/zero-RPM mode). Commanding a steady low duty (Silent's 30% floor) reads back **exactly 0%**, not a mid-ramp value — the steady setpoint can't overcome the stopped fan's static friction to leave zero-RPM, so the transactional read-back verification fails. Cooling mode's higher duty (53-56%) *did* spin the fan earlier the same session, which is the tell. The proper fix is a kickstart pulse (command a brief high duty to break static friction, then settle to target) rather than treating 0%-from-stopped as a hard failure — a bigger, separate change. Until then, Silent/low-duty GPU-fan modes will fail-to-apply at idle (now safely, cooling-scoped, without locking everything).
+- **A misdiagnosis worth recording:** an apparent "Silent mode computes Cooling's curve math" bug was chased for a while and turned out to be the write-lock silently swallowing cooling ticks (the lock's early-return still advances the status `updatedAt` while `outputValues` freezes) — the duty looked stuck at Cooling's value because no new tick could apply. The stored graphs were always correct (verified via a new `cooling-graphs` CLI diagnostic). Measure the lock state before theorising about curve math.
+
+### GPU fan restore: proven driver constraint, NOT an in-process bug — RESOLVED 2026-07-22 (recyclable fan-session helper)
+
+> **RESOLUTION (0.7.0, commit 6d4af3b).** The design note at the end of this section was built and verified live. The NVAPI fan session now runs in a dedicated child (`PCHelper.AdapterHost --gpu-fan-session`) behind `RemoteGpuFanCoolerTransport`; a refused restore escalates to killing that child, whose exit reclaims the fan. The live surprise: isolating the session in a low-traffic, fan-only process **also made the in-session restore succeed on its own** — the refusals were the rapid-call driver-session fragility of sharing the session with clock-offset reads and settle-poll bursts, not a hard per-process ownership wall. So the recycle is now a proven-safe fallback, not the common path. The investigation below is kept for the record; read the 2026-07-22 snapshot for the implemented shape and the live evidence.
+
+
+The RTX 3090 on this driver ties GPU fan ownership to the **owning process**, not the NVAPI
+session. Manual control can be taken but cannot be given back from inside the service. Every
+in-process release path was tried live and refused — do not re-derive this:
+
+| Attempt | Result |
+| --- | --- |
+| `RestoreCoolerSettingsToDefault()` | `NVAPI_INVALID_USER_PRIVILEGE` |
+| `RestoreCoolerSettingsToDefault(coolerId)` | `NVAPI_INVALID_USER_PRIVILEGE` |
+| `SetCoolerSettings(policy=None)` | `NVAPI_INVALID_USER_PRIVILEGE` |
+| `SetCoolerSettings(policy=None, level=30)` | `NVAPI_INVALID_USER_PRIVILEGE` |
+| `SetClientFanCoolersControl(Auto)` | `NVAPI_INVALID_USER_PRIVILEGE` |
+| `NVIDIA.Unload()` + `Initialize()` + rebind | ran; cooler still `Manual` |
+
+`SetCoolerSettings(Manual, level)` succeeds from that same session throughout, so the status
+is misleading: it is not a privilege deficiency and not the Ampere API-generation split
+(the client fan-cooler interface *reads* fine and its *write* is refused just the same).
+Restarting the service restores the automatic curve every time — process exit is the only
+mechanism observed to work.
+
+**Therefore the fix is architectural:** GPU-fan NVAPI ownership belongs in a child process,
+where restoring means terminating that child and letting the driver reclaim. Do not spend
+further effort on the in-session restore chain; that search is exhausted.
+
+> **RESOLVED 2026-07-20 — DO NOT BUILD THE CHILD-PROCESS DESIGN.** The decisive test finally ran
+> under valid conditions (round 5): clean `Automatic` baseline verified by the script's own guard,
+> probe running as **LocalSystem in session 0** via `/RU SYSTEM`, bare exit. It took ownership at
+> 70%, exited (PID 17312 confirmed gone), and the fan stayed **`Manual` at 70**. A child process
+> exiting does **not** return GPU fan ownership to the driver, even when it is LocalSystem in
+> session 0 exactly as the service is. The architecture proposed in this section does not work.
+> Total cost of learning this: one reboot and about an hour. The rounds below are kept because the
+> failure modes are instructive, not because their conclusions stand.
+
+**The load-bearing premise was tested on 2026-07-20 and is FALSE (see the resolution above).** Every
+row of the table above was observed on *service* exit, because the service is the only process that
+has ever owned the fan (`PCHelperRuntime.cs` constructs `NvApiGpuFanCoolerTransport` in-process). The
+design assumed that generalises to a child. It does not.
+
+Measured with `PCHelper.AdapterHost.exe --probe-gpu-fan-ownership 70`, run from an elevated
+PowerShell against a clean `Automatic` baseline, with the service running and holding its own
+NVAPI session:
+
+| Step | Observed |
+| --- | --- |
+| Baseline after service restart | `policy=Automatic` |
+| Child (PID 28436) takes manual ownership, exits without restoring | `policy=Manual` |
+| After child exit, child process gone | `policy=Manual, commandedDuty=70` — **our value, still applied** |
+| Service reset attempt, 16:20:46, event 2009 | every restore path refused, same `INVALID_USER_PRIVILEGE` chain |
+
+A further service restart afterwards did **not** restore it either: the fan stayed `Manual` at 70%
+across a full stop/start of the service. So the 'restart the service and it comes back' behaviour
+recorded further up does not hold when the ownership was taken by something other than the service.
+
+**The confound — this test does not falsify the design.** The probe ran from an elevated PowerShell,
+i.e. as an Administrator in the *interactive user's session* (session 2). The service runs as
+LocalSystem in **session 0**, and a production fan child would be spawned by the service and inherit
+that. Confirmed live: `PCHelper.Service` SessionId 0, `PCHelper.App` SessionId 2. The probe therefore
+tested a session-2 admin child, not the session-0 LocalSystem child the design actually calls for.
+What it establishes is narrower than it first appears: *ownership taken by a session-2 admin process
+is not released when that process exits, nor by a subsequent service restart.*
+
+**Round 2 (2026-07-20, same day): the probe re-run as LocalSystem in session 0 via a `/RU SYSTEM`
+scheduled task.** It executed (PID 20688, exit 0, output captured to `artifacts/fan-probe.json`)
+and commanded 85%. After it exited the fan read `Manual` at **85** — its own value, so execution is
+proven and **a session-0 LocalSystem child's bare exit does not release ownership either.** This
+weakens hypothesis 1 below considerably. Two caveats keep it short of conclusive: the baseline was
+already contaminated (`policyBefore=Manual, 70`, owned by the dead session-2 probe), and the probe
+ran *without* `NVIDIA.Unload()` — see the Unload-then-exit note below, which is the more likely
+confound.
+
+**Round 3: `--dispose-before-exit` (Unload-then-exit) as LocalSystem, session 0.** Ran (PID 9888,
+exit 0), commanded 60%, called `NVIDIA.Unload()`, exited. Fan afterwards: `Manual` at **60** — its
+own value. **Unload-then-exit does not release either**, so the hypothesis in the next paragraph is
+also dead.
+
+**Round 4 was also void** — run without the reboot (uptime confirmed 8h53m, `policyBefore=Manual,60`),
+so it repeated the same confound a third time. `artifacts/run-fan-probe.cmd` now reads the baseline
+itself and **refuses to run unless the fan is `Automatic`**, writing the refusal to
+`artifacts/fan-probe.json`. A run from a stuck baseline is worse than no run: it consumes a round,
+looks like data, and answers nothing.
+
+**READ THIS BEFORE RUNNING ANOTHER PROBE — rounds 2, 3 and 4 are INCONCLUSIVE, not negative.** All ran
+against a fan already stuck `Manual` from the dead session-2 probe. `SetCoolerSettings(Manual, level)`
+demonstrably changes the *level*, but there is no evidence it transfers *ownership* — so if ownership
+remained registered to the dead session-2 process, neither probe ever owned the fan and neither exit
+could possibly have released it. Every "does not release" result after the first contamination is
+explained equally well by "ownership never moved". The stated decision rule was that `Automatic` would
+be decisive and `Manual` would not; `Manual` came back both times, so by that rule nothing was proven.
+**A clean `Automatic` baseline is a precondition for any further ownership experiment, and it currently
+requires a logoff or reboot.** Do not run more probe rounds from a stuck state — they cannot answer the
+question no matter what they return.
+
+**The probe's deliberate skip of `Dispose` is itself suspect (tested in round 3, refuted).** The probe skipped disposal to be
+faithful to a killed child, so it exited with the NVAPI session live. But `Dispose` calls
+`NVIDIA.Unload()`, and the service's *graceful* shutdown does call it. The elimination table records
+Unload as insufficient **on its own** — that was Unload *without* process exit. Unload **followed
+by** process exit was never tested, and it is exactly what a clean service shutdown does: the only
+configuration under which release has ever been observed. `--dispose-before-exit` was added to the
+probe to test precisely this. Do not conclude the design is dead until that has been run.
+
+**Three live hypotheses; do not pick one without testing.**
+1. *Session/token-bound.* Ownership is tied to the logon session or token. A LocalSystem session-0
+   child would then behave like the service, and the design still works. Predicts logging off and
+   back on releases the current stuck state.
+2. *Last-NVAPI-client-exits.* The driver reclaims only when no NVAPI client remains. **Weakened by
+   direct test:** `PCHelper.App` (session 2) was verified to hold `nvapi64.dll` + `nvml.dll`, was
+   killed, and the fan stayed `Manual` at 70%. Note also that `NVDisplay.Container` always runs, so
+   "no NVAPI client remains" is never satisfiable on a live system — making this hypothesis close to
+   untestable as literally stated. Any surviving variant has to be scoped (per-session, or
+   non-driver clients only).
+3. *Owner-process-exit, service-specific for an unidentified reason.* Weakest, but not excluded.
+
+> ## RESOLVED 2026-07-20: the restore table was measuring the wrong variable. Restore works.
+>
+> `--probe-gpu-fan-owner-restore 70`, run as **LocalSystem in session 0** from a clean `Automatic`
+> baseline (PID 7252, exit 0):
+>
+> | Field | Value |
+> | --- | --- |
+> | `takeOwnershipOutcome` | **accepted** |
+> | `policyWhileOwned` | `Manual`, 70 — the process genuinely held the fan |
+> | `ownerRestoreOutcome` | **ACCEPTED** |
+> | `policyAfterRestore` | **`Automatic`** |
+>
+> Independently confirmed afterwards: `gpu-fan-state` read `policy=Automatic`, `cooler 1=Auto,
+> cooler 2=Auto`. The stuck fan was cleared without a reboot.
+>
+> **The elimination table's headline claim is refuted.** "Manual control can be taken but cannot be
+> given back from inside the service" is false. `RestoreCoolerSettingsToDefault` — the first of the
+> six refusals in that table — is routinely *accepted*. The distinguishing variable is never
+> privilege and never the Ampere API-generation split.
+>
+> ## ⚠ THE "STALE HANDLE" ROOT CAUSE BELOW IS WRONG. Superseded — read the correction after the table.
+>
+> Established by controlled comparison, 2026-07-20, with identity held constant (LocalSystem, session 0
+> on both sides):
+>
+> | Actor | Handle age | Owns the fan? | Restore |
+> | --- | --- | --- | --- |
+> | Service (`gpu-fan-disarm` after a Cooling-curve apply, Manual 66%) | cached at startup, ~1 h | **yes** | **REFUSED** — all six paths `NVAPI_INVALID_USER_PRIVILEGE` (event 2009) |
+> | `--probe-gpu-fan-owner-restore` | seconds | yes | ACCEPTED |
+> | `--probe-gpu-fan-restore-only` | seconds | **no** | **ACCEPTED** — fan `Manual 64` → `Automatic` |
+>
+> The third row is decisive: a fresh handle restored a fan it **never owned**, while the service's
+> startup-cached handle could not restore one it **did** own. **Ownership is irrelevant. Handle
+> freshness is the variable.** An intermediate conclusion of "ownership" was drawn earlier from the
+> owner-restore probe and is WRONG — that probe held a fresh handle *and* ownership, so it separated
+> neither. Do not repeat that inference.
+>
+> **`NVAPI_INVALID_USER_PRIVILEGE` on a stale handle is a misleading status.** It reports a privilege
+> problem that does not exist. That single misleading code is what sent two sessions hunting an
+> architectural fix. When NVAPI returns it, re-enumerate before believing it.
+>
+> **Consequences:** the child-process architecture is not merely unworkable, it is *unnecessary*. Do
+> not build it. That conclusion still stands — it rests on the probe results, not on the discredited
+> stale-handle theory.
+>
+> ## CORRECTION — stale handle is NOT the cause. Fix built, deployed, and FAILED.
+>
+> `RefreshGpuHandle()` (re-enumerate `PhysicalGPU` before restore) was implemented, published,
+> deployed as `0.5.5-alpha-20260720-175131`, and re-tested against the identical fixture (arm →
+> Cooling → `Manual 66%` → `gpu-fan-disarm`). **Byte-identical failure:** `RECOVERY_REQUIRED`, event
+> 2009, all six paths `INVALID_USER_PRIVILEGE`. The service's handle was three minutes old at the
+> time, so age was never the variable.
+>
+> **Also excluded by direct test — concurrency with the cooling tick.** After the failed disarm the
+> duty sat stable at 65% across six samples over 12 s (no active writer), and a second `gpu-fan-disarm`
+> from the same quiesced service was refused again with a fresh 2009. So the restore is not losing a
+> race against the graph engine.
+>
+> **The evidence now says the variable is the PROCESS, not any state within it.** A freshly-started
+> process restores the fan reliably — owning it or not. The service process cannot, regardless of
+> handle age, ownership, or concurrent writes, and persists in that state.
+>
+> **Leading hypothesis (UNTESTED — do not treat as established, the last confident root cause here was
+> wrong):** `RestoreAutomaticAsync` runs each strategy exactly once, and its last strategy
+> `ReleaseNvApiSessionToReclaimFan` does `NVIDIA.Unload()` + `Initialize()` + rebind and then merely
+> *checks* whether the cooler came back — it never re-attempts the restore calls against the new
+> session. The `--probe-gpu-fan-unload-ownership` run did exactly that missing step (Dispose → fresh
+> `TryCreate` → restore) and was ACCEPTED. So the service may be one retry short: re-initialise the
+> session, then run the restore strategies again.
+>
+> **`RefreshGpuHandle()` was REVERTED**, not left in place. It was unproven code carrying a comment
+> that asserted the disproven root cause; leaving it would have read as a fix. A note at its former
+> site records why, so it is not re-added without new evidence. The deployed payload
+> `0.5.5-alpha-20260720-175131` still contains it and is therefore *ahead* of source on that one
+> change — harmless (best-effort, restore-path only), but redeploy before treating source and
+> runtime as identical.
+>
+> ## Exclusion table — everything ruled out by direct measurement, 2026-07-20
+>
+> The constant across all of it: **a freshly-started process restores the fan reliably; the service
+> process never can.** Reproduction is deterministic (arm → Cooling → `Manual 66%` → `gpu-fan-disarm`
+> → `RECOVERY_REQUIRED` + event 2009, all six paths `INVALID_USER_PRIVILEGE`).
+>
+> | # | Hypothesis | How it was excluded |
+> | --- | --- | --- |
+> | 1 | Bare process exit releases the fan | Round-5 probe, clean baseline, LocalSystem session 0 — fan stayed `Manual` |
+> | 2 | `NVIDIA.Unload()` strips ownership | Unload → rebind → restore ACCEPTED |
+> | 3 | IPC impersonation runs restore as a non-elevated caller | `RunAsClient` is scoped to identity evaluation and reverts |
+> | 4 | Reclaim needs the last NVAPI client to exit | Killed `PCHelper.App` (verified NVAPI client); no change |
+> | 5 | Ownership is required to restore | `restore-only` probe restored a fan it never owned |
+> | 6 | Stale cached `PhysicalGPU` handle | `RefreshGpuHandle()` built, **deployed**, re-tested — identical failure; handle was 3 min old |
+> | 7 | Race with the cooling-graph tick | Duty stable across 6 samples/12 s; second disarm refused again |
+> | 8 | The service's other NVAPI clients poison it | Bisect 1: +NVML, +clock-offset(writes), +power-limit, +LHM capture — all 5 stages ACCEPTED |
+> | 9 | NVAPI cooler control is thread-affine | Bisect 2 stage B: write on a dedicated thread, restore on main — ACCEPTED |
+> | 10 | Repeated writes poison the session | Bisect 2 stage C: 20 writes then restore — ACCEPTED |
+> | 11 | Ownership decays with elapsed time | Bisect 2 stage D: write, idle 60 s, restore — ACCEPTED |
+> | 12 | Service token has restricted privileges | Registry: no `RequiredPrivileges`, no `ServiceSidType`, full LocalSystem |
+> | 13 | Sustained NVAPI read pressure destabilises the session | Bisect 3: continuous LHM telemetry loop **and** tight read loop — both ACCEPTED |
+>
+> **Conclusion: external modelling is exhausted.** Thirteen hypotheses, every one measured rather than
+> argued, and none reproduces the refusal outside the service. Do not add a fourteenth probe — the
+> remaining difference is something about the service process that cannot be inferred from outside it.
+>
+> **The next step is instrumentation, not another theory.** Add diagnostics *inside* the service at the
+> restore call site and capture what the probe cannot see: the NVAPI status of each strategy alongside
+> the live thread id, the process/thread token and its privilege set as actually held at that instant,
+> the `PhysicalGPU` handle identity, and whether any other NVAPI call is in flight. That requires a
+> deploy per iteration, so it should be built as a single rich diagnostic rather than a series of
+> guesses — the deploy loop is what produced both of today's wrong root causes.
+>
+> **Two wrong root causes were published today** ("ownership", then "handle freshness"). Both came from
+> reading a single probe that varied several things at once. Every fast, single-variable experiment was
+> sound. Vary one thing per run.
+>
+> **Bisection round 1 result (2026-07-20): NEGATIVE — the NVAPI client set is not the poison.**
+> `--probe-gpu-fan-bisect` as SYSTEM (PID 19976) added, cumulatively, NVML → NVAPI clock-offset with
+> writes enabled → NVAPI power limit → LibreHardwareMonitor capture, taking ownership and restoring
+> at each stage. **All five stages ACCEPTED**, fan `Automatic` after every one. So rebuilding the
+> service's NVAPI environment does not reproduce the refusal.
+>
+> **Round 2 is built and ready: `--probe-gpu-fan-bisect2`.** The remaining structural difference is
+> threading. Every probe that has ever succeeded did its write and its restore **on one thread**; the
+> service writes duty from the cooling graph engine's timer thread and calls restore from the IPC
+> handler thread. If NVAPI binds cooler control to the writing thread, that explains every
+> observation — including why `--probe-gpu-fan-restore-only`, which never writes at all, always
+> succeeds. Stages: (A) same-thread control, must pass; (B) write on a dedicated thread that exits,
+> restore on the main thread; (C) 20 repeated writes then restore; (D) write, idle 60 s, restore.
+> First refusal names the mechanism. Runs ~2 minutes; allow 150 s. Same warning as round 1 — a
+> positive result leaves the fan `Manual` at 70%, safe and over-cooled, cleared by
+> `--probe-gpu-fan-restore-only`.
+>
+> **Superseded, kept for the record: `--probe-gpu-fan-bisect`.** It rebuilds the service's NVAPI
+> environment one component at a time in a single process, because each elevated run is expensive.
+> Stages, cumulative, each taking ownership cleanly then attempting restore: (0) fan transport alone,
+> the control, which must pass or the run is void; (1) + NVML; (2) + NVAPI clock-offset with writes
+> enabled; (3) + NVAPI power limit; (4) + LibreHardwareMonitor capture. The first stage whose restore
+> is REFUSED names the poison and the probe stops there. A positive result deliberately leaves the fan
+> `Manual` at 70% (safe, over-cooled) because the poisoned process cannot restore it — that is the
+> finding; clear it with `--probe-gpu-fan-restore-only` from a fresh process.
+>
+> **Why this shape.** Two wrong root causes today both came from the slow loop (publish → deploy →
+> click → disarm, ~10 min), which is slow enough to encourage reasoning over measuring. Every fast
+> experiment was sound. Reproduce outside the service, then iterate.
+>
+> **Cheapest way to test it is NOT another deploy.** Build a probe that mimics the service process
+> more closely — the service also hosts LibreHardwareMonitor, which uses NVAPI itself, plus separate
+> power and clock transports, so the process holds several NVAPI consumers. Reproduce the refusal
+> outside the service first, then iterate without deploy cycles. Two deploys have now been spent on
+> theories that a fast local reproduction would have falsified in minutes.
+
+**REFUTED 2026-07-20 — `NVIDIA.Unload()` does NOT strip fan ownership.** `--probe-gpu-fan-unload-ownership 70`
+as SYSTEM (PID 16864): took ownership, called `Dispose()` (which unloads), rebound a fresh transport,
+and `RestoreAutomaticAsync` on the **new** session was **ACCEPTED**; fan ended `Automatic`. So the
+suspicion below is wrong and `ReleaseNvApiSessionToReclaimFan` is not the saboteur. Kept for the record
+because it was the most plausible mechanism and needed excluding.
+
+**Also excluded: IPC impersonation.** `NamedPipeRequestServer.EvaluateClient` impersonates only inside a
+scoped `server.RunAsClient(...)` to read the client identity, and reverts; command handlers run under the
+service token. A restore is therefore not executing under a non-elevated caller's token.
+
+**`gpu-fan-arm` / `gpu-fan-disarm` do NOT reproduce the failure — arming is not owning.** Tried
+2026-07-20: arm → `armed:true` but `policy` stayed `Automatic`; disarm → success, message "GPU fan
+read-back confirmed the driver automatic policy". The service never held the fan, so disarm hit
+`RestoreAutomaticAsync`'s early-return guard (cooler not `Manual`, nothing to undo) and reported
+success **without exercising a real restore at all**. Arming only enables writes; the service takes
+ownership when a cooling graph actually commands a duty. Note the side observation: a disarm on an
+already-automatic cooler reports success without testing anything, so a green disarm is not evidence
+that restore works.
+
+**To reproduce, the duty must come from the App** (Performance page cooling-mode buttons — prefer
+*Cooling*, whose 53-56% actually spins the fan, over *Silent*, whose low duty collides with the RTX
+3090 zero-RPM idle behaviour). No CLI path can command a GPU fan duty: `direct-prepare` is
+write-blocked by `--confirm-no-write` and `operation` is read-only.
+
+**What still distinguishes the service from a working probe (untested, next):** the probe creates its
+transport, owns and restores the fan within a few seconds, in a fresh process. The service creates
+`NvApiGpuFanCoolerTransport` **once at startup** (`PCHelperRuntime.cs:123`) and caches the `PhysicalGPU`
+handle for the whole process lifetime. A stale cached handle is a strong candidate — NVAPI is known to
+report misleading statuses for invalid handles, and `INVALID_USER_PRIVILEGE` from a *long-lived* handle
+while a *fresh* handle succeeds fits every observation so far. Test by re-enumerating the GPU immediately
+before a restore, or by ageing a transport and comparing.
+
+**Superseded suspicion (kept for the record).** `RestoreAutomaticAsync`'s
+last-resort strategy, `ReleaseNvApiSessionToReclaimFan`, calls `NVIDIA.Unload()` + `Initialize()`.
+That unload is **process-global** — its own comment says "the handle every NVAPI transport caches goes
+stale". After it runs the process holds a *new* NVAPI session, which is not the fan's owner. So the
+last-resort restore strategy plausibly **destroys the very ownership that makes restore work**, and
+once it has run, every subsequent restore in that process is refused — permanently, until restart.
+That matches the observed "restore worked once, then never again" behaviour exactly. If confirmed,
+the fix is to remove or hard-gate that strategy: it is not a fallback, it is the thing that breaks
+the working path. Note also that `NvApiGpuFanCoolerTransport.Dispose()` calls `NVIDIA.Unload()` too,
+so *any* transport disposal in-process may strip fan ownership from the others.
+
+**Next experiment, and it may also un-stick a stuck fan without a reboot:** `--probe-gpu-fan-owner-restore
+[duty]` (written 2026-07-20, wired into `artifacts/run-fan-probe.cmd`) takes manual ownership and then
+calls `RestoreAutomaticAsync` *in the same process*, reporting whether the restore is accepted. It does
+not need an `Automatic` baseline — it takes ownership itself — and its verdict is guarded on that write
+actually succeeding, reporting `VOID` otherwise. **Must be run elevated / as SYSTEM.**
+
+**Confirmed 2026-07-20: NVAPI GPU-fan writes require elevation.** Run from an unelevated process, even
+`SetCoolerSettings(Manual, level)` — the write path the elimination table records as reliably available —
+is refused with `NVAPI_INVALID_USER_PRIVILEGE`. So `INVALID_USER_PRIVILEGE` genuinely does mean
+insufficient privilege in the unelevated case, and the table's observation that it is *misleading*
+applies specifically to the elevated/service context, where the manual write succeeds while restore does
+not. Do not attempt fan writes from an unelevated helper; and when reading a refusal, first establish
+which of the two situations produced it.
+
+Practical notes for whoever runs these: creating a `/RU SYSTEM` task from an unelevated context fails
+with `ERROR: Access is denied`, so the elevated shell is required; and `artifacts/run-fan-probe.cmd`
+self-guards on an `Automatic` baseline, so it is safe to invoke at any time.
+
+**Recovery note, learned the hard way.** Once a session-2 process has taken manual ownership and
+exited, the fan is stuck: neither a service restart nor killing every non-driver NVAPI client in that
+session releases it. Do not assume the documented 'restart the service' recovery applies — it only
+works when the *service itself* was the owner. Plan on a logoff or reboot to clear a stuck manual
+state, and prefer running ownership experiments as SYSTEM for that reason. The probe clamps duty to a
+50% floor precisely so that a stuck state is over-cooled rather than under-cooled.
+
+**Separate finding from the same run — read-back after a fan write is not immediately valid.**
+The child commanded 70% and `ReadStateAsync` *immediately* after the write returned 51% — the
+pre-write auto-curve value — settling to 70% only later. Both `CommandedDutyPercent` and
+`MeasuredDutyPercent` come from the same `cooler.CurrentLevel` field (`GpuFanControl.cs`), so a
+a caller that reads straight after a write can read the *previous* value and wrongly conclude the
+write failed. Distinct mechanism from the RTX 3090 zero-RPM idle behaviour recorded above.
+
+**Correction — this is NOT a live defect in the adapter.** On checking, `NvidiaGpuFanAdapter`
+already compensates: `VerifyAsync` and `VerifyRollbackStateAsync` both go through
+`ReadSettledStateAsync`, which re-polls until the level is within tolerance instead of trusting the
+first read. The staleness is a property of the raw `IGpuFanCoolerTransport` read, and it matters
+for anything reading the transport *directly* — the ownership probes did, which is why their
+`commandedDutyAfter` fields report the pre-write value and must not be read as the write failing.
+Do not "fix" the adapter for this; it is already handled.
+
+**"Model it on the existing adapter-host process" needs a caveat — read this before building.**
+Every existing adapter-host child (`--set-kraken-pump`, `--set-aura-rgb`, `--set-smbus-rgb`,
+…) is a **one-shot**: it writes a register that survives process exit, then exits. GPU fan
+ownership is the exact inverse — it is released *by* exit. A one-shot fan child would take
+manual control and immediately drop it. The fan child must live exactly as long as manual
+control is wanted: **its lifetime is the ownership window, and `RestoreAutomaticAsync` is
+implemented as killing it.** That is a shape no existing host has; reuse the adapter host's
+launch/token/JSON conventions, not its one-shot lifetime.
+
+Already solved, do not rebuild: `ChildProcessJob` (used by `AdapterHostControllerDiscoveryProcess`)
+wraps children in a kill-on-close job object, so orphan and crash containment is done. The
+insertion seam is `IGpuFanCoolerTransport` (6 members, `GpuFanControl.cs`) — a child-backed
+implementation slots in behind it with no change to the adapter's safety logic.
+
+Related fixes already in place: the restore chain tries each path and reports every NVAPI
+status (the bare exception type is identical for all NVAPI faults and says nothing); the
+`gpu-fan-state` CLI reads live policy/duty through the service's privileged session — prefer
+it over loading NvAPIWrapper by reflection from outside, which answers from an unprivileged
+session and also trips Defender's behavioural detection; and per-family reset failures are
+logged (event 2009), which is what finally surfaced the table above.
+
+## Verification snapshot: 2026-07-22 (0.7.0 release — UI review sweep and the recyclable NVAPI GPU-fan session)
+
+Version bumped to a clean `0.7.0` (VersionPrefix 0.7.0, empty VersionSuffix; commit ad959e8). Full solution builds zero warnings/errors; 109 fan/GPU integration tests green. All work is on `codex/competitive-leadership`, published via `publish.ps1` and deployed to LocalAlpha (`0.7.0-alpha-20260722-110220`), verified live on the reference RTX 3090 / 5800X / X570-E.
+
+- **Recyclable NVAPI GPU-fan session (commit 6d4af3b) — the resolution of the "GPU fan restore" section above.** The NVAPI fan session was moved out of the service into a dedicated child: `PCHelper.AdapterHost --gpu-fan-session` holds `NvApiGpuFanCoolerTransport` and serves read/manual-write/restore/arm over the existing token-authenticated pipe via one op-dispatched `GpuFanSession` IPC command (`GpuFanSessionRequest`/`GpuFanSessionResult` in `GpuFanSessionProtocol.cs`). Service-side, `RemoteGpuFanCoolerTransport : IGpuFanCoolerTransport` forwards to it, so `NvidiaGpuFanAdapter`, the cooling graph, and arm/disarm are unchanged; it is wired as the primary fan transport in `PCHelperRuntime` (NVML stays fallback). Its `RestoreAutomaticAsync` restores in-session first and, only if the driver refuses, kills the helper — process exit releases the NVAPI session, the driver reclaims the fan, a fresh helper respawns and re-arms, and the reclaim is confirmed by a short read-back poll. Fails safe: any helper death reverts the fan to firmware auto rather than stranding it manual (the opposite of the in-service transport). Reuses `ChildProcessJob` for kill-on-close containment and `AdapterHostProxy.ResolveAdapterHostPath()`.
+  - **Live evidence:** with the transport active (`gpu-fan-state` reports `clientFanCoolerControl: "not an NVAPI transport"`, confirming the service no longer holds the session; a second AdapterHost process runs the fan helper), the GPU fan was driven to Manual 65% via the Performance slider (read-back verified), then a disarm restored it to **Automatic** with the service process (PID unchanged) never restarting. Event log showed **no restore refusals** — the in-session restore now succeeds, because the isolated fan-only session avoids the rapid-call fragility. Reclaim-on-process-exit itself was already proven earlier this session (the fan reclaimed to Automatic on every service restart).
+  - **Follow-on for GPU power/clock:** the same accept-committed-limit workaround (commit de08583) still covers power. If power/clock restore ever needs a live reclaim, the identical helper pattern applies — move that NVAPI session out-of-process too.
+- **UI review sweep (all nine subviews).** Fixes: (1) acronym humanizer — a shared `DisplayText.Humanize` replaced 8 copy-pasted `SplitWords` helpers that title-cased acronyms, so Devices now reads CPU/GPU/BIOS (was Cpu/Gpu/Bios) and the Performance tuning status reads "Auto OC" (commit 40af149); (2) Lighting page rebalanced from one short card + one giant card into two even columns — the colour/apply-all/ambient/results moved to the left card, per-device applies stay right (commit bff10c3); (3) the colour-sync summary no longer appends the "confirm by sight" caveat when 0 routes applied (commit 4bb4318).
+- **Operational note:** mixing a direct CLI `gpu-fan-disarm` with the header "Hardware control" toggle can leave the header showing armed while the fan family is disarmed (the slider then refuses with `PROFILE_REJECTED … remains read-only until … armed`). Re-arm with `gpu-fan-arm --confirm-experimental --confirm-device nvidia:gpu-0` (or toggle the header) to resync. Not a defect — normal header-driven use keeps arm state consistent.
 
 ## Change discipline
 

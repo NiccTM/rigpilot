@@ -371,6 +371,98 @@ public partial class MainWindow : Window
         }
     }
 
+    private void PickOpenRgbColour_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        // In-app HSV picker themed to match RigPilot, seeded with the current
+        // #RRGGBB. Replaces the native ColorDialog, which renders in the system
+        // light theme and clashes with the app's dark surfaces.
+        if (ColourPickerWindow.TryPick(this, viewModel.OpenRgbColour, out string chosenHex))
+        {
+            viewModel.OpenRgbColour = chosenHex;
+        }
+    }
+
+    // Drives the sidebar's outer ScrollViewer from the wheel. The nested
+    // navigation ListBox marks MouseWheel handled even when it cannot scroll,
+    // so without this the sidebar only scrolls by dragging the bar. Handling the
+    // tunnelling PreviewMouseWheel here runs before the ListBox sees the event.
+    private void SidebarScroll_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        if (sender is System.Windows.Controls.ScrollViewer scrollViewer)
+        {
+            scrollViewer.ScrollToVerticalOffset(scrollViewer.VerticalOffset - e.Delta);
+            e.Handled = true;
+        }
+    }
+
+    // --- Interactive fan-curve editor -----------------------------------------
+    // The canvas maps mouse position to (temperature, duty) and calls the view
+    // model, which rewrites the same text-points model the studio already saves.
+    private int _draggingCurvePoint = -1;
+
+    private void CoolingCurveCanvas_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel || sender is not System.Windows.IInputElement element)
+        {
+            return;
+        }
+
+        System.Windows.Point point = e.GetPosition(element);
+        int hit = viewModel.HitTestCurveHandle(point.X, point.Y);
+        if (hit >= 0)
+        {
+            _draggingCurvePoint = hit;
+            ((System.Windows.UIElement)sender).CaptureMouse();
+        }
+        else
+        {
+            viewModel.AddCurvePointAt(point.X, point.Y);
+        }
+
+        e.Handled = true;
+    }
+
+    private void CoolingCurveCanvas_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_draggingCurvePoint < 0 || DataContext is not MainViewModel viewModel || sender is not System.Windows.IInputElement element)
+        {
+            return;
+        }
+
+        System.Windows.Point point = e.GetPosition(element);
+        viewModel.MoveCurvePoint(_draggingCurvePoint, point.X, point.Y);
+    }
+
+    private void CoolingCurveCanvas_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_draggingCurvePoint >= 0)
+        {
+            _draggingCurvePoint = -1;
+            ((System.Windows.UIElement)sender).ReleaseMouseCapture();
+        }
+    }
+
+    private void CoolingCurveCanvas_MouseRightButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel || sender is not System.Windows.IInputElement element)
+        {
+            return;
+        }
+
+        System.Windows.Point point = e.GetPosition(element);
+        int hit = viewModel.HitTestCurveHandle(point.X, point.Y);
+        if (hit >= 0)
+        {
+            viewModel.RemoveCurvePoint(hit);
+            e.Handled = true;
+        }
+    }
+
     private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if ((Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)

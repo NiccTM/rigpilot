@@ -15,6 +15,28 @@ using static Vortice.DXGI.DXGI;
 
 namespace PCHelper.WorkloadHost;
 
+/// <summary>
+/// Fence-ring arithmetic for the in-flight dispatch queue. Kept separate from the
+/// Direct3D plumbing so the invariant that actually matters — that a wait always
+/// targets the OLDEST in-flight batch, never the newest — is testable without a GPU.
+/// </summary>
+internal static class WorkloadQueue
+{
+    /// <summary>Ring slot the batch about to be submitted records its fence into.</summary>
+    internal static int SubmitSlot(long submittedBatches, int queueDepth) =>
+        (int)(submittedBatches % queueDepth);
+
+    /// <summary>
+    /// Ring slot to block on, or null while the ring is still filling. Waiting on the
+    /// batch just submitted drains the queue to idle before every CPU sleep, which is
+    /// precisely the defect that held the reference 3090 at ~37% against a 70% floor.
+    /// </summary>
+    internal static int? WaitSlot(long submittedBatches, int queueDepth) =>
+        submittedBatches >= queueDepth
+            ? (int)((submittedBatches - queueDepth) % queueDepth)
+            : null;
+}
+
 internal static class Program
 {
     public static async Task<int> Main(string[] args)
@@ -184,7 +206,29 @@ internal static class Program
         private readonly ID3D11UnorderedAccessView _view;
         private readonly ID3D11ComputeShader _coreShader;
         private readonly ID3D11ComputeShader _memoryShader;
-        private readonly ID3D11Query _completionQuery;
+        // The workload has to saturate the GPU, not merely touch it: the screening
+        // monitor rejects any sample below its measured target-device load floor,
+        // so an under-driven workload silently invalidates the whole run. The
+        // reference 3090 sat at ~37% against a 70% floor.
+        //
+        // The cause is the CPU-side wait. Completion is polled with a 1 ms delay,
+        // but Windows timer granularity makes that sleep 1-15 ms, and the original
+        // loop drained the queue to idle before every sleep — so the GPU stopped
+        // for the whole overshoot. Two changes are BOTH required, measured on the
+        // reference rig:
+        //
+        //   deep queue + small dispatch  37.3%   (queue drains during the sleep)
+        //   shallow queue + big dispatch 38.1%   (idle gap after every dispatch)
+        //   deep queue + big dispatch     100%
+        //
+        // Keeping batches in flight means the sleep overlaps GPU execution rather
+        // than following it; sizing each dispatch (see the loop count in
+        // Workload.hlsl) means the queued work outlasts the sleep. Either alone
+        // leaves the device idle for most of every cycle.
+        private const int QueueDepth = 3;
+        private const int DispatchesPerBatch = 4;
+        private readonly ID3D11Query[] _completionQueries;
+        private long _submittedBatches;
         private readonly uint _memoryGroupsX;
         private readonly uint _memoryGroupsY;
         private readonly object _stateGate = new();
@@ -255,7 +299,11 @@ internal static class Program
             ReadOnlyMemory<byte> memoryBytecode = Compiler.CompileFromFile(shaderPath, "MemoryMain", "cs_5_0");
             _coreShader = _device.CreateComputeShader(coreBytecode.Span);
             _memoryShader = _device.CreateComputeShader(memoryBytecode.Span);
-            _completionQuery = _device.CreateQuery(new QueryDescription(QueryType.Event, QueryFlags.None));
+            _completionQueries = new ID3D11Query[QueueDepth];
+            for (int index = 0; index < QueueDepth; index++)
+            {
+                _completionQueries[index] = _device.CreateQuery(new QueryDescription(QueryType.Event, QueryFlags.None));
+            }
             _memoryGroupsX = (uint)Math.Min(65535, Math.Ceiling(elementCount / 256d));
             _memoryGroupsY = (uint)Math.Ceiling(elementCount / (65535d * 256d));
         }
@@ -292,25 +340,33 @@ internal static class Program
                         continue;
                     }
 
-                    switch (mode)
+                    for (int batch = 0; batch < DispatchesPerBatch; batch++)
                     {
-                        case AutoOcWorkloadMode.Core:
-                            Dispatch(_coreShader, 4096, 1);
-                            break;
-                        case AutoOcWorkloadMode.Memory:
-                            Dispatch(_memoryShader, _memoryGroupsX, _memoryGroupsY);
-                            break;
-                        case AutoOcWorkloadMode.Combined:
-                            Dispatch(_coreShader, 4096, 1);
-                            Dispatch(_memoryShader, _memoryGroupsX, _memoryGroupsY);
-                            break;
+                        switch (mode)
+                        {
+                            case AutoOcWorkloadMode.Core:
+                                Dispatch(_coreShader, 4096, 1);
+                                break;
+                            case AutoOcWorkloadMode.Memory:
+                                Dispatch(_memoryShader, _memoryGroupsX, _memoryGroupsY);
+                                break;
+                            case AutoOcWorkloadMode.Combined:
+                                Dispatch(_coreShader, 4096, 1);
+                                Dispatch(_memoryShader, _memoryGroupsX, _memoryGroupsY);
+                                break;
+                        }
                     }
 
-                    _context.End(_completionQuery);
+                    _context.End(_completionQueries[WorkloadQueue.SubmitSlot(_submittedBatches, QueueDepth)]);
                     _context.Flush();
-                    await WaitForGpuCompletionAsync(cancellationToken).ConfigureAwait(false);
+                    _submittedBatches++;
+
+                    if (WorkloadQueue.WaitSlot(_submittedBatches, QueueDepth) is int oldest)
+                    {
+                        await WaitForGpuCompletionAsync(_completionQueries[oldest], cancellationToken).ConfigureAwait(false);
+                    }
+
                     lock (_stateGate) _heartbeat = DateTimeOffset.UtcNow;
-                    await Task.Delay(1, cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -335,14 +391,15 @@ internal static class Program
             Interlocked.Increment(ref _dispatchCount);
         }
 
-        private async Task WaitForGpuCompletionAsync(CancellationToken cancellationToken)
+        private async Task WaitForGpuCompletionAsync(ID3D11Query query, CancellationToken cancellationToken)
         {
-            DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
-            while (!_context.IsDataAvailable(_completionQuery, AsyncGetDataFlags.None))
+            // The budget covers a full in-flight ring, not a single dispatch.
+            DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+            while (!_context.IsDataAvailable(query, AsyncGetDataFlags.None))
             {
                 if (DateTimeOffset.UtcNow >= deadline)
                 {
-                    throw new TimeoutException("The Direct3D workload did not complete within 5 seconds.");
+                    throw new TimeoutException("The Direct3D workload did not complete within 15 seconds.");
                 }
 
                 await Task.Delay(1, cancellationToken).ConfigureAwait(false);
@@ -383,7 +440,10 @@ internal static class Program
             _context.CSSetShader(null);
             _context.ClearState();
             _context.Flush();
-            _completionQuery.Dispose();
+            foreach (ID3D11Query query in _completionQueries)
+            {
+                query.Dispose();
+            }
             _memoryShader.Dispose();
             _coreShader.Dispose();
             _view.Dispose();

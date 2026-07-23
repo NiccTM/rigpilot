@@ -38,12 +38,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly AutomationRuleStateMachine _automationMachine = new();
     private readonly List<DeviceDisplay> _allDevices = [];
     private readonly Dictionary<string, ProfileV2> _suiteProfilesById = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AutoOcProfileValidationV1> _autoOcValidationsByProfileId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CoolingGraphV1> _coolingGraphsById = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FanCalibrationV2> _fanCalibrationsByCapability = new(StringComparer.Ordinal);
     private readonly List<OpenRgbController> _openRgbControllers = [];
     private readonly SemaphoreSlim _rgbMutationGate = new(1, 1);
     private readonly AsyncCommand _refreshCommand;
     private readonly AsyncCommand _applyProfileCommand;
+    private readonly AsyncCommand _previewProfileCommand;
     private readonly AsyncCommand _resetVerifiedCommand;
     private readonly AsyncCommand _closeBlockersCommand;
     private bool _closeBlockersAcknowledged;
@@ -130,6 +132,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private ServiceRuntimeCompatibilityV1 _serviceCompatibility = ServiceRuntimeCompatibility.Unavailable(
         RuntimeVersion.Get(typeof(MainViewModel).Assembly),
         "Waiting for the RigPilot service handshake.");
+    private HashSet<string> _serviceFeatures = new(StringComparer.OrdinalIgnoreCase);
     private HardwareOperationStatus? _operation;
     private DateTimeOffset _lastLocalProbe = DateTimeOffset.MinValue;
     private DateTimeOffset _lastServiceControlPlaneRefresh = DateTimeOffset.MinValue;
@@ -153,6 +156,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _noticeText = string.Empty;
     private string _noticeTone = "Info";
     private bool _hasNotice;
+    // True while the visible notice reports a service-recovery condition, so it can
+    // be retired automatically once the service clears that condition instead of
+    // lingering until the user dismisses it by hand.
+    private bool _recoveryNoticeActive;
     private OperationTargetDisplay? _selectedCalibrationTarget;
     private OperationTargetDisplay? _selectedTuneTarget;
     private bool _advancedWritesAcknowledged;
@@ -181,6 +188,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _newRulePriorityText = "100";
     private string _automationStatus = "No automation rules are active.";
     private string _profileActivationStatus = "No profile bundle has been applied in this session.";
+    private string _profileDryRunStatus = "Select Dry run on a profile to inspect prerequisites, conflicts, omitted optional actions, and rollback behavior without writing hardware.";
     private string _gameBundleActivationStatus = "No game bundle has been applied in this session.";
     private string? _manualProfileId;
     private string? _pendingAutomationHotkey;
@@ -330,7 +338,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         _toggleHardwareControlCommand = new AsyncCommand(
             ToggleHardwareControlAsync,
             _ => CanUseServiceWrites && !IsHardwareControlChanging,
-            ReportError);
+            ReportError,
+            _ => ShowNotice(
+                IsHardwareControlChanging
+                    ? "The service is still applying and reading back the previous hardware-control request."
+                    : GetServiceWriteBlockReason(),
+                "Warning"));
         _refreshCommand = new AsyncCommand(_ => RefreshWithFeedbackAsync(), onError: ReportError);
         _applyGpuControlCommand = new AsyncCommand(
             parameter => ApplyGpuControlAsync((GpuControlSlider)parameter!),
@@ -374,7 +387,36 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 && (!card.IsExperimental || (AdvancedWritesAcknowledged && ProfileDeviceAcknowledged))
                 && (!card.RequiresManualAcknowledgement
                     || (AdvancedWritesAcknowledged && ProfileDeviceAcknowledged && ManualVoltageAcknowledged)),
-            ReportError);
+            ReportError,
+            parameter =>
+            {
+                string reason = !CanUseServiceWrites
+                    ? GetServiceWriteBlockReason()
+                    : parameter is not ProfileCardDisplay card
+                        ? "Select a profile before applying it."
+                        : card.IsActive
+                            ? $"{card.Name} is already active."
+                            : card.IsExperimental && !(AdvancedWritesAcknowledged && ProfileDeviceAcknowledged)
+                                ? "Experimental profiles require both the advanced-write acknowledgement and exact-device confirmation."
+                                : card.RequiresManualAcknowledgement
+                                    && !(AdvancedWritesAcknowledged && ProfileDeviceAcknowledged && ManualVoltageAcknowledged)
+                                        ? "This profile requires the advanced-write, exact-device, and manual-voltage acknowledgements."
+                                        : "The profile cannot be applied in the current state.";
+                ShowNotice(reason, "Warning");
+            });
+        _previewProfileCommand = new AsyncCommand(
+            parameter => PreviewProfileCardAsync((ProfileCardDisplay)parameter!),
+            parameter => IsServiceOnline
+                && _serviceFeatures.Contains(ServiceRuntimeFeatures.ProfileDryRunV1)
+                && parameter is ProfileCardDisplay,
+            ReportError,
+            _ => ShowNotice(
+                !IsServiceOnline
+                    ? "Profile dry run requires the RigPilot service. Local-probe mode cannot resolve service-owned capability and rollback state."
+                    : !_serviceFeatures.Contains(ServiceRuntimeFeatures.ProfileDryRunV1)
+                        ? "The installed service does not advertise profile dry-run support. Update the app and service together."
+                        : "Select a profile before running its read-only dry run.",
+                "Warning"));
         _closeBlockersCommand = new AsyncCommand(
             _ => CloseBlockersCoreAsync(),
             _ => IsServiceOnline && RunningConflictCount > 0 && CloseBlockersAcknowledged,
@@ -382,7 +424,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         _resetVerifiedCommand = new AsyncCommand(
             _ => ResetVerifiedControlsCoreAsync(),
             _ => CanUseServiceWrites && ResettableVerifiedControlCount > 0,
-            ReportError);
+            ReportError,
+            _ => ShowNotice(
+                !CanUseServiceWrites
+                    ? GetServiceWriteBlockReason()
+                    : "No Verified control currently exposes an independently read-back-verified default reset.",
+                "Warning"));
         _startCalibrationCommand = new AsyncCommand(
             _ => StartCalibrationCoreAsync(),
             _ => CanStartCalibration,
@@ -393,7 +440,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                     : CalibrationEligibilityReason,
                 "Warning"));
         _startTuneCommand = new AsyncCommand(
-            _ => StartTuneCoreAsync(),
+            _ => StartSelectedTuneAsync(),
             _ => CanStartTune,
             ReportError,
             _ => ShowNotice(
@@ -681,7 +728,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
         _refreshTimer = new System.Threading.Timer(
             _ => System.Windows.Application.Current?.Dispatcher.BeginInvoke(
-                async () => await RefreshAsync(full: false, userInitiated: false)),
+                async () =>
+                {
+                    // Footprint sampling is local and independent of the service
+                    // fetch, so it keeps updating even if a refresh round fails.
+                    UpdateFootprint();
+                    await RefreshAsync(full: false, userInitiated: false);
+                }),
             null,
             Timeout.Infinite,
             Timeout.Infinite);
@@ -807,6 +860,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand RefreshCommand => _refreshCommand;
 
     public ICommand ApplyProfileCommand => _applyProfileCommand;
+
+    public ICommand PreviewProfileCommand => _previewProfileCommand;
 
     public ICommand ResetVerifiedCommand => _resetVerifiedCommand;
 
@@ -1719,6 +1774,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         private set => Set(ref _profileActivationStatus, value);
     }
 
+    public string ProfileDryRunStatus
+    {
+        get => _profileDryRunStatus;
+        private set => Set(ref _profileDryRunStatus, value);
+    }
+
     public DynamicLightingDevice? SelectedDynamicLightingDevice
     {
         get => _selectedDynamicLightingDevice;
@@ -2283,12 +2344,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged(nameof(CanUseServiceWrites));
             OnPropertyChanged(nameof(IsRecoveryRequired));
             OnPropertyChanged(nameof(WriteStateLabel));
+            OnPropertyChanged(nameof(WriteStateTone));
             _toggleHardwareControlCommand.RaiseCanExecuteChanged();
             _applyGpuControlCommand.RaiseCanExecuteChanged();
             _startGpuAutoOcCommand.RaiseCanExecuteChanged();
             _enableGpuFanAutoModeCommand.RaiseCanExecuteChanged();
             _enableCaseFansAutoModeCommand.RaiseCanExecuteChanged();
             _applyProfileCommand.RaiseCanExecuteChanged();
+            _previewProfileCommand.RaiseCanExecuteChanged();
             _resetVerifiedCommand.RaiseCanExecuteChanged();
             _closeBlockersCommand.RaiseCanExecuteChanged();
             _startCalibrationCommand.RaiseCanExecuteChanged();
@@ -3386,6 +3449,23 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public bool HasRunningConflicts => RunningConflictCount > 0;
 
+    /// <summary>
+    /// True when a running conflict competes for at least one of the given control families.
+    /// Used so a per-card "Blocked" indicator reflects only conflicts that affect that card's
+    /// controls — an AIO/lighting-only app (e.g. NZXT CAM) must not mark the GPU tuning card
+    /// blocked. Family strings match <see cref="ConflictDetector"/> (GpuTuning, GpuFan,
+    /// MotherboardFan, Aio, Lighting, UsbFan, ...).
+    /// </summary>
+    private bool HasRunningConflictAffecting(params string[] families) =>
+        _snapshot?.Conflicts.Any(conflict => conflict.IsRunning
+            && conflict.ResourceFamilies.Any(family => families.Contains(family, StringComparer.OrdinalIgnoreCase))) ?? false;
+
+    /// <summary>Running conflicts competing for GPU tuning or the GPU fan (not AIO/lighting-only apps).</summary>
+    public bool HasRunningGpuConflicts => HasRunningConflictAffecting("GpuTuning", "GpuFan");
+
+    /// <summary>Running conflicts competing for motherboard, GPU, or AIO fan control.</summary>
+    public bool HasRunningFanConflicts => HasRunningConflictAffecting("MotherboardFan", "GpuFan", "Aio");
+
     public string CloseBlockersLabel => RunningConflictCount switch
     {
         0 => "No blocking apps running",
@@ -3414,6 +3494,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         .Where(conflict => conflict.IsRunning)
         .Select(conflict => conflict.DisplayName)
         .Distinct(StringComparer.OrdinalIgnoreCase) ?? []);
+
+    /// <summary>Distinct running conflicts that compete for a given control family set — for the
+    /// per-page conflict banners, so the GPU banner never names an AIO/lighting-only app.</summary>
+    private string RunningConflictSummaryFor(params string[] families) => string.Join(", ", _snapshot?.Conflicts
+        .Where(conflict => conflict.IsRunning
+            && conflict.ResourceFamilies.Any(family => families.Contains(family, StringComparer.OrdinalIgnoreCase)))
+        .Select(conflict => conflict.DisplayName)
+        .Distinct(StringComparer.OrdinalIgnoreCase) ?? []);
+
+    /// <summary>Running GPU-tuning/GPU-fan conflicts, for the GPU-page conflict banner.</summary>
+    public string RunningGpuConflictSummary => RunningConflictSummaryFor("GpuTuning", "GpuFan");
+
+    /// <summary>Running fan conflicts (motherboard/GPU/AIO), for the fan-page conflict banner.</summary>
+    public string RunningFanConflictSummary => RunningConflictSummaryFor("MotherboardFan", "GpuFan", "Aio");
 
     public string CloseConflictingAppsLabel => RunningConflictCount switch
     {
@@ -3677,6 +3771,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         : !CanUseServiceWrites
             ? "Service update required"
             : CanWrite ? "Service write path ready" : "Hardware writes locked";
+
+    /// <summary>
+    /// Badge tone for <see cref="WriteStateLabel"/>. It tracks the write-path
+    /// state the badge actually names, not the broader <c>SafetyTone</c>: a ready
+    /// write path must not render amber just because Experimental controls were
+    /// detected (that posture is carried by the summary text below the badge).
+    /// </summary>
+    public string WriteStateTone => !IsServiceOnline
+        ? "Warning"
+        : IsRecoveryRequired
+            ? "Critical"
+        : !CanUseServiceWrites
+            ? "Warning"
+            : CanWrite ? "Safe" : "Warning";
 
     public string ServiceVersion => _serviceCompatibility.ServiceVersion ?? _status?.Version ?? "Unavailable";
 
@@ -3943,11 +4051,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             $"Safety: {SafetySummary}");
     }
 
-    public void ShowNotice(string message, string tone = "Info")
+    public void ShowNotice(string message, string tone = "Info", bool clearsWhenRecovered = false)
     {
         NoticeText = message;
         NoticeTone = tone;
         HasNotice = true;
+        // Any new notice supersedes a prior recovery notice; only a notice that
+        // opts in stays tied to the service-recovery state.
+        _recoveryNoticeActive = clearsWhenRecovered;
     }
 
     public void Dispose()
@@ -4013,6 +4124,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 || userInitiated
                 || !IsServiceOnline
                 || _status is null
+                // A flagged recovery is often a transient escalation the service clears on
+                // its own retry (e.g. the GPU-fan NVAPI restore settling). Re-read status on
+                // every 1s tick while it is set so the banner reflects the live state within a
+                // second, instead of lingering up to a full control-plane interval after the
+                // service has already recovered.
+                || _status.RecoveryRequired
+                // Poll on every tick while a recovery notice is up too, so it is
+                // retired within a second of the service clearing the condition.
+                || _recoveryNoticeActive
                 || refreshTime - _lastServiceControlPlaneRefresh >= ServiceControlPlaneRefreshInterval;
             if (refreshControlPlane)
             {
@@ -4032,6 +4152,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 {
                     _hardwareControlArmedThisConnection = false;
                     SetHardwareControlState(false);
+                }
+                else if (_recoveryNoticeActive)
+                {
+                    // The service has cleared the recovery condition the notice
+                    // reported (it self-recovers, e.g. after the GPU-fan NVAPI
+                    // restore settles), so retire the now-stale banner rather than
+                    // leaving it up until the user dismisses it.
+                    DismissNotice();
                 }
                 NotifyServiceWriteStateChanged();
                 // CanUseServiceWrites intentionally includes the live connection
@@ -4161,6 +4289,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         }
         catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException or InvalidDataException)
         {
+            _serviceFeatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             SetServiceCompatibility(ServiceRuntimeCompatibility.Unavailable(
                 clientVersion,
                 $"The service handshake could not complete: {DescribeServiceFailure(exception)}"));
@@ -4169,6 +4298,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
         if (!response.Success)
         {
+            _serviceFeatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             string detail = string.IsNullOrWhiteSpace(response.Error)
                 ? response.ErrorCode ?? "unknown service error"
                 : $"{response.ErrorCode}: {response.Error}";
@@ -4181,10 +4311,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         HandshakeResponseV2? current = IpcJson.FromElement<HandshakeResponseV2>(response.Payload);
         if (current is { SelectedProtocolVersion: > 0 })
         {
+            _serviceFeatures = current.Features.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _previewProfileCommand.RaiseCanExecuteChanged();
             SetServiceCompatibility(ServiceRuntimeCompatibility.Evaluate(clientVersion, current));
             return;
         }
 
+        _serviceFeatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _previewProfileCommand.RaiseCanExecuteChanged();
         HandshakeResponse? legacy = IpcJson.FromElement<HandshakeResponse>(response.Payload);
         SetServiceCompatibility(ServiceRuntimeCompatibility.EvaluateLegacy(clientVersion, legacy));
     }
@@ -4208,6 +4342,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(ConnectionTone));
         OnPropertyChanged(nameof(CanWrite));
         OnPropertyChanged(nameof(WriteStateLabel));
+        OnPropertyChanged(nameof(WriteStateTone));
         OnPropertyChanged(nameof(ServiceVersion));
         OnPropertyChanged(nameof(AppVersion));
         RebuildExperimentalControlCenter();
@@ -4224,6 +4359,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(IsRecoveryRequired));
         OnPropertyChanged(nameof(CanWrite));
         OnPropertyChanged(nameof(WriteStateLabel));
+        OnPropertyChanged(nameof(WriteStateTone));
         OnPropertyChanged(nameof(ConnectionTone));
         _toggleHardwareControlCommand.RaiseCanExecuteChanged();
         RaiseHardwareControlCanExecuteChanged();
@@ -4363,9 +4499,28 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task RefreshProfilesAsync(CancellationToken cancellationToken)
     {
-        IpcResponse legacyResponse = await _client.SendAsync(
+        Task<IpcResponse> legacyTask = _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(IpcCommand.GetProfiles),
             cancellationToken);
+        Task<IpcResponse> suiteTask = _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetProfilesV2),
+            cancellationToken);
+        Task<IpcResponse> graphTask = _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetCoolingGraphs),
+            cancellationToken);
+        Task<IpcResponse>? validationTask = _serviceFeatures.Contains(ServiceRuntimeFeatures.AutoOcValidationV1)
+            ? _client.SendAsync(
+                NamedPipeRequestClient.CreateRequest(IpcCommand.GetAutoOcProfileValidations),
+                cancellationToken)
+            : null;
+        List<Task<IpcResponse>> requests = [legacyTask, suiteTask, graphTask];
+        if (validationTask is not null)
+        {
+            requests.Add(validationTask);
+        }
+        await Task.WhenAll(requests);
+
+        IpcResponse legacyResponse = await legacyTask;
         EnsureSuccess(legacyResponse);
         IReadOnlyList<ProfileV1> legacyProfiles = IpcJson.FromElement<IReadOnlyList<ProfileV1>>(legacyResponse.Payload) ?? [];
 
@@ -4373,21 +4528,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         // A legacy service must leave the dashboard usable rather than forcing
         // it into local-probe mode simply because it cannot enumerate V2 data.
         IReadOnlyList<ProfileV2> suiteProfiles = [];
-        IpcResponse suiteResponse = await _client.SendAsync(
-            NamedPipeRequestClient.CreateRequest(IpcCommand.GetProfilesV2),
-            cancellationToken);
+        IpcResponse suiteResponse = await suiteTask;
         if (suiteResponse.Success)
         {
             suiteProfiles = IpcJson.FromElement<IReadOnlyList<ProfileV2>>(suiteResponse.Payload) ?? [];
         }
 
         IReadOnlyList<CoolingGraphV1> coolingGraphs = [];
-        IpcResponse graphResponse = await _client.SendAsync(
-            NamedPipeRequestClient.CreateRequest(IpcCommand.GetCoolingGraphs),
-            cancellationToken);
+        IpcResponse graphResponse = await graphTask;
         if (graphResponse.Success)
         {
             coolingGraphs = IpcJson.FromElement<IReadOnlyList<CoolingGraphV1>>(graphResponse.Payload) ?? [];
+        }
+        IReadOnlyList<AutoOcProfileValidationV1> autoOcValidations = [];
+        if (validationTask is not null)
+        {
+            IpcResponse validationResponse = await validationTask;
+            if (validationResponse.Success)
+            {
+                autoOcValidations = IpcJson.FromElement<IReadOnlyList<AutoOcProfileValidationV1>>(validationResponse.Payload) ?? [];
+            }
         }
 
         string? selectedRuleId = NewRuleProfile?.Id;
@@ -4396,6 +4556,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         foreach (ProfileV2 profile in suiteProfiles.Where(profile => profile.SchemaVersion == ProfileV2.CurrentSchemaVersion))
         {
             _suiteProfilesById[profile.Id] = profile;
+        }
+        _autoOcValidationsByProfileId.Clear();
+        foreach (AutoOcProfileValidationV1 validation in autoOcValidations.Where(item =>
+                     item.SchemaVersion == AutoOcProfileValidationV1.CurrentSchemaVersion))
+        {
+            _autoOcValidationsByProfileId[validation.ProfileId] = validation;
         }
         _coolingGraphsById.Clear();
         foreach (CoolingGraphV1 graph in coolingGraphs.Where(graph => graph.SchemaVersion == CoolingGraphV1.CurrentSchemaVersion))
@@ -5013,7 +5179,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         Replace(ProfileCards, Profiles.Select(profile =>
         {
             _suiteProfilesById.TryGetValue(profile.Id, out ProfileV2? suiteProfile);
-            return ProfileCardDisplay.From(profile, profile.Id == _status?.ActiveProfileId, suiteProfile);
+            _autoOcValidationsByProfileId.TryGetValue(profile.Id, out AutoOcProfileValidationV1? validation);
+            return ProfileCardDisplay.From(profile, profile.Id == _status?.ActiveProfileId, suiteProfile, validation);
         }), card => card.Profile.Id, StringComparer.Ordinal);
 
         Replace(ImportantSensors, SelectImportantSensors(_snapshot).Select(sensor => new SensorDisplay(
@@ -5069,6 +5236,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             diagnostics.OrderBy(DiagnosticDisplay.Rank).ThenBy(item => item.Title, StringComparer.OrdinalIgnoreCase),
             diagnostic => diagnostic.Title,
             StringComparer.Ordinal);
+        RebuildHardwareOwnership();
         Replace(AdapterHealth, _snapshot.AdapterHealth
             .OrderBy(health => health.Healthy ? 1 : 0)
             .ThenBy(health => health.AdapterId, StringComparer.OrdinalIgnoreCase)
@@ -5499,9 +5667,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(WarningCount));
         OnPropertyChanged(nameof(RunningConflictCount));
         OnPropertyChanged(nameof(HasRunningConflicts));
+        OnPropertyChanged(nameof(HasRunningGpuConflicts));
+        OnPropertyChanged(nameof(HasRunningFanConflicts));
         OnPropertyChanged(nameof(CloseBlockersLabel));
         OnPropertyChanged(nameof(CloseConflictingAppsLabel));
         OnPropertyChanged(nameof(RunningConflictSummary));
+        OnPropertyChanged(nameof(RunningGpuConflictSummary));
+        OnPropertyChanged(nameof(RunningFanConflictSummary));
         _closeBlockersCommand.RaiseCanExecuteChanged();
         _closeConflictingAppsCommand?.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasImportantSensors));
@@ -5521,6 +5693,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(TuneAvailabilityTone));
         OnPropertyChanged(nameof(CanWrite));
         OnPropertyChanged(nameof(WriteStateLabel));
+        OnPropertyChanged(nameof(WriteStateTone));
         OnPropertyChanged(nameof(ServiceVersion));
         OnPropertyChanged(nameof(StateRevisionText));
         OnPropertyChanged(nameof(ServiceUptimeText));
@@ -5575,6 +5748,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(CustomCoolingCurveEligibilityReason));
         OnPropertyChanged(nameof(CustomCoolingCurvePreview));
         OnPropertyChanged(nameof(CustomCoolingCurvePreviewGeometry));
+        OnPropertyChanged(nameof(CustomCoolingCurveHandles));
         OnPropertyChanged(nameof(CustomCoolingCurveAxisLabel));
         _saveCustomCoolingCurveCommand.RaiseCanExecuteChanged();
     }
@@ -5743,8 +5917,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         && left.Action == right.Action
         && string.Equals(left.EmergencyProfileId, right.EmergencyProfileId, StringComparison.Ordinal);
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 
     private static string SensorGlyph(string unit) => NormaliseUnit(unit) switch
     {
@@ -5842,14 +6015,34 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     /// Live read-only readings for the Simple Cooling page: spinning fans and
     /// pumps (RPM), their commanded duties (%), and liquid/coolant temperatures.
     /// </summary>
-    private static IEnumerable<SensorSample> SelectCoolingSensors(HardwareSnapshot snapshot)
+    // Fan sensor ids that have been observed spinning this session. A fan in
+    // zero-RPM idle mode (the GPU fans stop when the card is cool) still reports 0,
+    // so without this a filter of Value > 0 would drop it from the list and it
+    // would flicker back the moment it spun up. Once seen spinning, a fan stays
+    // listed at its live value — 0 while idle — which is stable and honest.
+    private readonly HashSet<string> _seenSpinningFanIds = new(StringComparer.Ordinal);
+
+    private IEnumerable<SensorSample> SelectCoolingSensors(HardwareSnapshot snapshot)
     {
         List<SensorSample> candidates = GoodSensors(snapshot);
 
+        foreach (SensorSample sample in candidates)
+        {
+            if (NormaliseUnit(sample.Unit) == "RPM" && sample.Value > 0)
+            {
+                _seenSpinningFanIds.Add(sample.SensorId);
+            }
+        }
+
+        // Every fan that is spinning now, plus every fan that has spun before and
+        // is currently idling at 0 — so a zero-RPM fan holds its place instead of
+        // vanishing. Headers that have never spun (empty motherboard connectors)
+        // are still hidden. The generous cap fits every real fan on a big rig.
         IEnumerable<SensorSample> speeds = candidates
-            .Where(sensor => NormaliseUnit(sensor.Unit) == "RPM" && sensor.Value > 0)
+            .Where(sensor => NormaliseUnit(sensor.Unit) == "RPM"
+                && (sensor.Value > 0 || _seenSpinningFanIds.Contains(sensor.SensorId)))
             .OrderBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase)
-            .Take(8);
+            .Take(16);
         IEnumerable<SensorSample> duties = candidates
             .Where(sensor => NormaliseUnit(sensor.Unit) == "%"
                 && (sensor.Name.Contains("fan", StringComparison.OrdinalIgnoreCase)
@@ -6022,6 +6215,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         HasNotice = false;
         NoticeText = string.Empty;
+        _recoveryNoticeActive = false;
     }
 
     private bool Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

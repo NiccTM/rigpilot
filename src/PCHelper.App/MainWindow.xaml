@@ -117,18 +117,23 @@
     <DataTemplate x:Key="SensorRowTemplate">
       <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
         <Grid>
+          <!-- The value column is a fixed width, not Auto: an Auto column resizes
+               to each reading's text, and because the Name/Device columns are
+               proportional they would shift left and right every time a value's
+               width changed. A fixed right-aligned column plus the monospace data
+               font keeps the names in a stable column and the digits from jittering. -->
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="30" />
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="1.1*" />
-            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="96" />
           </Grid.ColumnDefinitions>
           <Border Width="25" Height="25" CornerRadius="6" Background="{StaticResource SurfaceRaisedBrush}">
             <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="12" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
           </Border>
-          <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="7,0,10,0" />
-          <TextBlock Grid.Column="2" Text="{Binding Device}" Style="{StaticResource MutedStyle}" VerticalAlignment="Center" Margin="0,0,12,0" />
-          <TextBlock Grid.Column="3" Text="{Binding DisplayValue}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="7,0,10,0" TextTrimming="CharacterEllipsis" />
+          <TextBlock Grid.Column="2" Text="{Binding Device}" Style="{StaticResource MutedStyle}" VerticalAlignment="Center" Margin="0,0,12,0" TextTrimming="CharacterEllipsis" />
+          <TextBlock Grid.Column="3" Text="{Binding DisplayValue}" FontFamily="{StaticResource DataFont}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center">
             <TextBlock.Style>
               <Style TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
@@ -240,7 +245,13 @@
                      Margin="4,10,4,0" />
         </StackPanel>
 
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <!-- PreviewMouseWheel is handled on the ScrollViewer itself: the nested
+             navigation ListBox otherwise swallows the wheel event (its own
+             ScrollViewer marks it handled even with nothing to scroll), so the
+             sidebar would only scroll by dragging the bar. Tunnelling here lets
+             the wheel drive this outer viewer directly. -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      PreviewMouseWheel="SidebarScroll_PreviewMouseWheel">
           <StackPanel>
             <TextBlock Text="CONTROL" Style="{StaticResource EyebrowStyle}" Margin="11,0,0,5" />
             <ListBox x:Name="Navigation"
@@ -589,7 +600,10 @@
               </Border>
             </Grid>
 
-            <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="390">
+            <!-- Top margin restores the section gap the overview banners drop:
+                 they override CardStyle's 14px bottom margin with 0, so without
+                 this the banner and these cards would nearly touch. -->
+            <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="390" Margin="0,14,0,0">
               <Border Style="{StaticResource CardStyle}" Padding="20">
                 <StackPanel>
                   <Grid Margin="0,0,0,8">
@@ -637,15 +651,19 @@
                             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
                             <Setter Property="BorderThickness" Value="1" />
                             <Style.Triggers>
-                              <DataTrigger Binding="{Binding SafetyTone}" Value="Safe">
+                              <!-- Tone tracks the write-path state the badge names
+                                   (WriteStateTone), not the broader SafetyTone, so a
+                                   ready write path is never shown amber merely because
+                                   Experimental controls are present. -->
+                              <DataTrigger Binding="{Binding WriteStateTone}" Value="Safe">
                                 <Setter Property="Background" Value="{StaticResource SafeSoftBrush}" />
                                 <Setter Property="BorderBrush" Value="{StaticResource SafeBrush}" />
                               </DataTrigger>
-                              <DataTrigger Binding="{Binding SafetyTone}" Value="Warning">
+                              <DataTrigger Binding="{Binding WriteStateTone}" Value="Warning">
                                 <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
                                 <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}" />
                               </DataTrigger>
-                              <DataTrigger Binding="{Binding SafetyTone}" Value="Critical">
+                              <DataTrigger Binding="{Binding WriteStateTone}" Value="Critical">
                                 <Setter Property="Background" Value="{StaticResource CriticalSoftBrush}" />
                                 <Setter Property="BorderBrush" Value="{StaticResource CriticalBrush}" />
                               </DataTrigger>
@@ -835,6 +853,9 @@
                 <TextBlock Text="LAST BUNDLE ACTIVATION" Style="{StaticResource EyebrowStyle}" />
                 <TextBlock Text="{Binding ProfileActivationStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0"
                            automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Profiles.ActivationStatus" />
+                <TextBlock Text="DRY-RUN EVIDENCE" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,0" />
+                <TextBlock Text="{Binding ProfileDryRunStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0"
+                           automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Profiles.DryRunStatus" />
               </StackPanel>
             </Border>
 
@@ -873,12 +894,22 @@
                           <TextBlock Text="{Binding ActionSummary}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" />
                         </Border>
                       </StackPanel>
-                      <Button Grid.Row="2"
-                              Command="{Binding DataContext.ApplyProfileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                              CommandParameter="{Binding}"
-                              Style="{StaticResource ProfileActionButtonStyle}"
-                              HorizontalAlignment="Stretch"
-                              automation:AutomationProperties.Name="Apply profile" />
+                      <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Button Content="Dry run"
+                                Command="{Binding DataContext.PreviewProfileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding}"
+                                Style="{StaticResource GhostButtonStyle}"
+                                Margin="0,0,5,0"
+                                automation:AutomationProperties.Name="Dry run profile" />
+                        <Button Grid.Column="1"
+                                Command="{Binding DataContext.ApplyProfileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding}"
+                                Style="{StaticResource ProfileActionButtonStyle}"
+                                Margin="5,0,0,0"
+                                HorizontalAlignment="Stretch"
+                                automation:AutomationProperties.Name="Apply profile" />
+                      </Grid>
                     </Grid>
                   </Border>
                 </DataTemplate>
@@ -969,11 +1000,11 @@
         <!-- Cooling -->
         <ScrollViewer x:Name="CoolingPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="0,0,10,18">
-            <Border Style="{StaticResource CardStyle}" Padding="18">
+            <Border Style="{StaticResource CardStyle}" Background="{StaticResource AccentSoftBrush}" BorderBrush="#31557F" Padding="18">
               <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="42" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                <Border Width="34" Height="34" CornerRadius="9" Background="{StaticResource WarningSoftBrush}">
-                  <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource WarningBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <Border Width="34" Height="34" CornerRadius="9" Background="#203D60">
+                  <TextBlock Text="&#xE945;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
                 <StackPanel Grid.Column="1" Margin="0,0,18,0">
                   <TextBlock Text="Safe cooling control" FontWeight="SemiBold" FontSize="15" />
@@ -1020,7 +1051,7 @@
               <Border.Style>
                 <Style TargetType="Border">
                   <Setter Property="Visibility" Value="Collapsed" />
-                  <Style.Triggers><DataTrigger Binding="{Binding HasRunningConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  <Style.Triggers><DataTrigger Binding="{Binding HasRunningFanConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
                 </Style>
               </Border.Style>
               <Grid>
@@ -1028,7 +1059,7 @@
                 <TextBlock Text="&#xE72E;" FontFamily="{StaticResource IconFont}" Foreground="{DynamicResource StateBlockedBrush}" VerticalAlignment="Center" Margin="{StaticResource Space2}" />
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="{StaticResource Space2}">
                   <TextBlock Text="Some fan controls are locked while other controller apps run" FontWeight="SemiBold" />
-                  <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks only the overlapping controls rather than fight over them — close those apps to free its fan controls." /></TextBlock>
+                  <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningFanConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks only the overlapping controls rather than fight over them — close those apps to free its fan controls." /></TextBlock>
                 </StackPanel>
                 <Button Grid.Column="2" Content="{Binding CloseConflictingAppsLabel}" Command="{Binding CloseConflictingAppsCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center" Margin="{StaticResource Space2}"
                         ToolTip="Closes the detected controllers so RigPilot's gated controls unlock. Equivalent to closing them in Task Manager; relaunching hands control back."
@@ -1132,7 +1163,7 @@
                       <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
                         <Setter Property="Background" Value="{DynamicResource StateVerifiedBrush}" />
                       </DataTrigger>
-                      <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                      <DataTrigger Binding="{Binding HasRunningFanConflicts}" Value="True">
                         <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
                       </DataTrigger>
                     </Style.Triggers>
@@ -1151,7 +1182,7 @@
                         <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
                           <Setter Property="Visibility" Value="Collapsed" />
                           <Style.Triggers>
-                            <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                            <DataTrigger Binding="{Binding HasRunningFanConflicts}" Value="True">
                               <Setter Property="Visibility" Value="Visible" />
                             </DataTrigger>
                           </Style.Triggers>
@@ -1514,14 +1545,40 @@
                           <TextBlock Grid.Column="1" Text="{Binding CustomCoolingCurveAxisLabel}" Style="{StaticResource SubtleStyle}" HorizontalAlignment="Right" />
                         </Grid>
                         <Viewbox Stretch="Fill" StretchDirection="DownOnly" Height="120" HorizontalAlignment="Left" Margin="0,8,0,0">
-                          <Canvas Width="320" Height="120">
-                            <Line X1="0" Y1="12" X2="320" Y2="12" Stroke="{StaticResource BorderBrush}" StrokeThickness="1" />
-                            <Line X1="0" Y1="60" X2="320" Y2="60" Stroke="{StaticResource BorderBrush}" StrokeThickness="1" StrokeDashArray="3,3" />
-                            <Line X1="0" Y1="108" X2="320" Y2="108" Stroke="{StaticResource BorderBrush}" StrokeThickness="1" />
-                            <Polyline Points="{Binding CustomCoolingCurvePreviewGeometry}" Stroke="{StaticResource AccentBrush}" StrokeThickness="2.5" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                          <!-- Interactive editor: the Canvas owns all mouse input (its
+                               children are hit-test-invisible), maps the point to
+                               temperature/duty, and rewrites the text-points model. -->
+                          <Canvas x:Name="CoolingCurveCanvas" Width="320" Height="120" Background="Transparent" Cursor="Cross"
+                                  MouseLeftButtonDown="CoolingCurveCanvas_MouseLeftButtonDown"
+                                  MouseMove="CoolingCurveCanvas_MouseMove"
+                                  MouseLeftButtonUp="CoolingCurveCanvas_MouseLeftButtonUp"
+                                  MouseRightButtonDown="CoolingCurveCanvas_MouseRightButtonDown"
+                                  automation:AutomationProperties.Name="Interactive fan curve editor"
+                                  automation:AutomationProperties.AutomationId="Cooling.CurveEditor">
+                            <Line X1="0" Y1="12" X2="320" Y2="12" Stroke="{StaticResource BorderBrush}" StrokeThickness="1" IsHitTestVisible="False" />
+                            <Line X1="0" Y1="60" X2="320" Y2="60" Stroke="{StaticResource BorderBrush}" StrokeThickness="1" StrokeDashArray="3,3" IsHitTestVisible="False" />
+                            <Line X1="0" Y1="108" X2="320" Y2="108" Stroke="{StaticResource BorderBrush}" StrokeThickness="1" IsHitTestVisible="False" />
+                            <Polyline Points="{Binding CustomCoolingCurvePreviewGeometry}" Stroke="{StaticResource AccentBrush}" StrokeThickness="2.5" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" IsHitTestVisible="False" />
+                            <ItemsControl ItemsSource="{Binding CustomCoolingCurveHandles}" IsHitTestVisible="False">
+                              <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
+                              </ItemsControl.ItemsPanel>
+                              <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                  <Setter Property="Canvas.Left" Value="{Binding Left}" />
+                                  <Setter Property="Canvas.Top" Value="{Binding Top}" />
+                                </Style>
+                              </ItemsControl.ItemContainerStyle>
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                  <Ellipse Width="14" Height="14" Fill="{StaticResource SurfaceRaisedBrush}" Stroke="{StaticResource AccentBrush}" StrokeThickness="2.5" />
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                           </Canvas>
                         </Viewbox>
-                        <TextBlock Text="{Binding CustomCoolingCurvePreview}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,7,0,0" />
+                        <TextBlock Text="Drag a point to adjust it, click an empty spot to add one, right-click a point to remove it. Two to eight points." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,7,0,0" />
+                        <TextBlock Text="{Binding CustomCoolingCurvePreview}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                       </StackPanel>
                     </Border>
                     <TextBlock Text="{Binding CustomCoolingCurveEligibilityReason}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,10,0,10" automation:AutomationProperties.LiveSetting="Polite" />
@@ -1631,7 +1688,7 @@
               <Border.Style>
                 <Style TargetType="Border">
                   <Setter Property="Visibility" Value="Collapsed" />
-                  <Style.Triggers><DataTrigger Binding="{Binding HasRunningConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  <Style.Triggers><DataTrigger Binding="{Binding HasRunningGpuConflicts}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
                 </Style>
               </Border.Style>
               <Grid>
@@ -1639,7 +1696,7 @@
                 <TextBlock Text="&#xE72E;" FontFamily="{StaticResource IconFont}" Foreground="{DynamicResource StateBlockedBrush}" VerticalAlignment="Center" Margin="{StaticResource Space2}" />
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="{StaticResource Space2}">
                   <TextBlock Text="Some GPU controls are locked while other controller apps run" FontWeight="SemiBold" />
-                  <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks only the overlapping controls rather than fight over them — close those apps to unlock GPU fan, power, and clock control and Auto OC." /></TextBlock>
+                  <TextBlock Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="Running now: " /><Run Text="{Binding RunningGpuConflictSummary, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=". RigPilot blocks only the overlapping controls rather than fight over them — close those apps to unlock GPU fan, power, and clock control and Auto OC." /></TextBlock>
                 </StackPanel>
                 <Button Grid.Column="2" Content="{Binding CloseConflictingAppsLabel}" Command="{Binding CloseConflictingAppsCommand}" Style="{StaticResource PrimaryButtonStyle}" VerticalAlignment="Center" Margin="{StaticResource Space2}"
                         ToolTip="Closes the detected controllers so RigPilot's gated controls unlock. Equivalent to closing them in Task Manager; relaunching hands control back."
@@ -1767,7 +1824,7 @@
                       <DataTrigger Binding="{Binding HardwareControlEnabled}" Value="True">
                         <Setter Property="Background" Value="{DynamicResource StateVerifiedBrush}" />
                       </DataTrigger>
-                      <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                      <DataTrigger Binding="{Binding HasRunningGpuConflicts}" Value="True">
                         <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
                       </DataTrigger>
                     </Style.Triggers>
@@ -1786,7 +1843,7 @@
                         <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
                           <Setter Property="Visibility" Value="Collapsed" />
                           <Style.Triggers>
-                            <DataTrigger Binding="{Binding HasRunningConflicts}" Value="True">
+                            <DataTrigger Binding="{Binding HasRunningGpuConflicts}" Value="True">
                               <Setter Property="Visibility" Value="Visible" />
                             </DataTrigger>
                           </Style.Triggers>
@@ -1863,6 +1920,10 @@
                           ToolTip="Temperature-biased GPU fan curve: ramps early and steeply, full speed at a lower temperature (78 °C)."
                           automation:AutomationProperties.Name="Enable cooling automatic GPU fan curve"
                           automation:AutomationProperties.AutomationId="Performance.GpuFanCooling" />
+                  <Button Content="Adaptive (pick for me)" Command="{Binding StartAdaptiveCoolingCommand}" CommandParameter="gpu" Style="{StaticResource HardwareModeButtonStyle}" Margin="0,0,8,8"
+                          ToolTip="Reads the current GPU temperature and picks Silent, Balanced, or Cooling, then keeps re-evaluating in the service — switching only after a sustained change, and escalating at once if the GPU gets hot or its sensor drops out."
+                          automation:AutomationProperties.Name="Enable adaptive automatic GPU fan curve chosen from live temperature"
+                          automation:AutomationProperties.AutomationId="Performance.GpuFanAdaptive" />
                 </WrapPanel>
                 <Grid Margin="0,2,0,0">
                   <TextBlock Text="{Binding OperationTitle}" FontWeight="SemiBold" />
@@ -1885,6 +1946,22 @@
                               ToolTip="Restores the vendor default power limit."
                               automation:AutomationProperties.Name="Restore stock power target" automation:AutomationProperties.AutomationId="Performance.UndervoltStock" />
                     </WrapPanel>
+                    <!-- Custom target: a continuous choice between the presets,
+                         still the documented power-limit path (never a VF curve). -->
+                    <Border Background="{StaticResource BorderBrush}" Height="1" Margin="0,12,0,12" />
+                    <TextBlock Text="CUSTOM TARGET (% OF STOCK POWER)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
+                    <Grid>
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                      <Slider Grid.Column="0" Minimum="50" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+                              Value="{Binding CustomUndervoltPercent, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center"
+                              automation:AutomationProperties.Name="Custom power target percent of stock" automation:AutomationProperties.AutomationId="Performance.UndervoltCustomPercent" />
+                      <TextBlock Grid.Column="1" Text="{Binding CustomUndervoltPercent, StringFormat={}{0:0}%}" FontFamily="{StaticResource DataFont}" FontWeight="SemiBold" VerticalAlignment="Center" MinWidth="48" TextAlignment="Right" Margin="12,0,12,0" />
+                      <Button Grid.Column="2" Content="Apply custom" Command="{Binding ApplyCustomUndervoltCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                              ToolTipService.ShowOnDisabled="True" ToolTip="Sets the GPU power limit to the chosen percentage of the vendor default, through the same read-back-verified documented path as the presets."
+                              automation:AutomationProperties.Name="Apply custom efficiency power target" automation:AutomationProperties.AutomationId="Performance.UndervoltCustomApply" />
+                    </Grid>
+                    <TextBlock Text="{Binding CustomUndervoltPreview}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,7,0,0"
+                               automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Performance.UndervoltCustomPreview" />
                   </StackPanel>
                 </Border>
               </StackPanel>
@@ -2077,44 +2154,8 @@
                   </TextBlock>
                   <TextBlock Text="{Binding LightingConflictReason}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,12" />
                   <Button Content="Test local SDK server" Command="{Binding ProbeOpenRgbCommand}" HorizontalAlignment="Left" ToolTipService.ShowOnDisabled="True" ToolTip="Enable the bridge and close competing lighting writers first." />
-                </StackPanel>
-              </Border>
-              <Border Style="{StaticResource CardStyle}" Padding="0">
-               <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <!-- Capability rail: amber because these native lighting writes
-                     are genuinely Experimental (most have no read-back — confirm
-                     visually); blue-grey while a competing lighting writer
-                     blocks the routes. The badge names the state in words. -->
-                <Border Width="3" CornerRadius="11,0,0,11" VerticalAlignment="Stretch">
-                  <Border.Style>
-                    <Style TargetType="Border">
-                      <Setter Property="Background" Value="{DynamicResource StateExperimentalBrush}" />
-                      <Style.Triggers>
-                        <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
-                          <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
-                        </DataTrigger>
-                      </Style.Triggers>
-                    </Style>
-                  </Border.Style>
-                </Border>
-                <StackPanel Grid.Column="1" Margin="22">
-                  <Grid>
-                    <TextBlock Text="Static lighting" Style="{StaticResource CardTitleStyle}" />
-                    <ContentControl HorizontalAlignment="Right" VerticalAlignment="Top">
-                      <ContentControl.Style>
-                        <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
-                          <Setter Property="Content" Value="Experimental" />
-                          <Style.Triggers>
-                            <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
-                              <Setter Property="Content" Value="Blocked" />
-                            </DataTrigger>
-                          </Style.Triggers>
-                        </Style>
-                      </ContentControl.Style>
-                    </ContentControl>
-                  </Grid>
-                  <TextBlock Text="The bridge negotiates protocol support, enumerates exact controllers, enters custom mode, then updates every reported LED." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,14" />
+                  <Separator Margin="0,14,0,4" />
+                  <TextBlock Text="COLOUR &amp; COLOURWAY" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,8" />
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                     <StackPanel Margin="0,0,6,0">
@@ -2137,18 +2178,37 @@
                           <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox Text="{Binding OpenRgbColour, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="OpenRGB colour hexadecimal value" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColour" />
-                        <Border Grid.Column="1" Width="28" Height="28" Margin="8,0,0,0" CornerRadius="6" VerticalAlignment="Center"
-                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                Background="{Binding OpenRgbColour, Converter={StaticResource HexColourToBrush}}"
-                                ToolTip="Preview of the colour used by the Static colourway"
-                                automation:AutomationProperties.Name="Colour preview swatch" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColourPreview" />
+                        <Button Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center" Cursor="Hand" Click="PickOpenRgbColour_Click"
+                                ToolTip="Click to pick the colour used by the Static colourway"
+                                automation:AutomationProperties.Name="Pick the Static colourway colour" automation:AutomationProperties.AutomationId="Lighting.OpenRgbColourPreview">
+                          <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                              <Border Width="28" Height="28" CornerRadius="6"
+                                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                      Background="{Binding OpenRgbColour, Converter={StaticResource HexColourToBrush}}">
+                                <Border.Style>
+                                  <Style TargetType="Border">
+                                    <Style.Triggers>
+                                      <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                      </Trigger>
+                                    </Style.Triggers>
+                                  </Style>
+                                </Border.Style>
+                              </Border>
+                            </ControlTemplate>
+                          </Button.Template>
+                        </Button>
                       </Grid>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="BRIGHTNESS (%)" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" /><TextBox Text="{Binding OpenRgbBrightnessText, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="OpenRGB brightness percentage" automation:AutomationProperties.AutomationId="Lighting.OpenRgbBrightness" /></StackPanel>
                   </Grid>
                   <WrapPanel Margin="0,14,0,0">
-                    <Button Content="Apply colourway" Command="{Binding ApplyOpenRgbCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" />
-                    <Button Content="Turn lighting off" Command="{Binding TurnOffOpenRgbCommand}" Margin="0,0,8,8" />
+                    <Button Content="Apply to all lighting" Command="{Binding SyncAllRgbCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8"
+                            ToolTip="Applies the colour or colourway to every ready endpoint: full gradient on the OpenRGB bridge, and the colourway's representative colour on Dynamic Lighting and native devices. Per-endpoint results appear below."
+                            automation:AutomationProperties.Name="Apply the colour or colourway to every ready RGB route" automation:AutomationProperties.AutomationId="Lighting.ApplyAllRgb" />
+                    <Button Content="Turn all lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Margin="0,0,8,8"
+                            automation:AutomationProperties.Name="Turn every ready RGB route off" automation:AutomationProperties.AutomationId="Lighting.ApplyAllRgbOff" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
                   <TextBlock Text="AMBIENT &amp; MUSIC LIGHTING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
@@ -2164,16 +2224,9 @@
                             automation:AutomationProperties.Name="Stop ambient lighting" automation:AutomationProperties.AutomationId="Lighting.StopAmbient" />
                   </WrapPanel>
                   <Separator Margin="0,4" />
-                  <TextBlock Text="SYNC EVERYTHING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                  <TextBlock Text="PER-DEVICE RESULTS" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding RgbSyncStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8"
                              automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.SyncStatus" />
-                  <WrapPanel>
-                    <Button Content="Sync colour to all devices" Command="{Binding SyncAllRgbCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
-                            ToolTip="Uses each ready route once: selective local OpenRGB first, Windows Dynamic Lighting next, then contained exact-device native fallbacks for uncovered families."
-                            automation:AutomationProperties.Name="Sync the chosen colour to every ready RGB route" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgb" />
-                    <Button Content="All lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
-                            automation:AutomationProperties.Name="Turn every ready RGB route off" automation:AutomationProperties.AutomationId="Lighting.SyncAllRgbOff" />
-                  </WrapPanel>
                   <ItemsControl ItemsSource="{Binding LastRgbApplyOutcomes}" Margin="0,2,0,2">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate>
@@ -2199,8 +2252,47 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
-                  <Separator Margin="0,4" />
-                  <TextBlock Text="KRAKEN COOLER" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
+                </StackPanel>
+              </Border>
+              <Border Style="{StaticResource CardStyle}" Padding="0">
+               <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <!-- Capability rail: green because static lighting is a
+                     supported, working feature that carries no hardware risk —
+                     its only limit is no colour read-back, so it is confirmed by
+                     sight (see the per-device results). Blue-grey while a
+                     competing lighting writer blocks the routes. The badge names
+                     the state in words. -->
+                <Border Width="3" CornerRadius="11,0,0,11" VerticalAlignment="Stretch">
+                  <Border.Style>
+                    <Style TargetType="Border">
+                      <Setter Property="Background" Value="{DynamicResource StateVerifiedBrush}" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
+                          <Setter Property="Background" Value="{DynamicResource StateBlockedBrush}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="22">
+                  <Grid>
+                    <TextBlock Text="Static lighting" Style="{StaticResource CardTitleStyle}" />
+                    <ContentControl HorizontalAlignment="Right" VerticalAlignment="Top">
+                      <ContentControl.Style>
+                        <Style TargetType="ContentControl" BasedOn="{StaticResource StatusBadgeStyle}">
+                          <Setter Property="Content" Value="Supported" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasBroadLightingConflict}" Value="True">
+                              <Setter Property="Content" Value="Blocked" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </ContentControl.Style>
+                    </ContentControl>
+                  </Grid>
+                  <TextBlock Text="Each device writes the colour chosen on the left through RigPilot's own contained adapters — no vendor app required. Most have no colour read-back, so confirm by sight." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,14" />
+                  <TextBlock Text="KRAKEN COOLER" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
                   <TextBlock Text="{Binding KrakenLightingStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.KrakenLightingStatus" />
                   <WrapPanel>
                     <Button Content="Apply to Kraken" Command="{Binding ApplyKrakenLightingCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8"
@@ -3023,6 +3115,77 @@
               <Border Style="{StaticResource CardStyle}" Padding="17"><StackPanel><TextBlock Text="RECOVERY" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding SafeModeLabel}" FontSize="16" FontWeight="SemiBold" Margin="0,10,0,3" /><TextBlock Text="Safe mode and rollback state" Style="{StaticResource SubtleStyle}" /></StackPanel></Border>
             </local:AdaptiveUniformGrid>
 
+            <!-- Hardware ownership cockpit: the single "who owns my hardware right
+                 now" answer that CAM/iCUE/Armoury silently fight over. Green =
+                 RigPilot owns it; amber names the app that currently holds it.
+                 Reclaim uses the acknowledged Close blockers flow below. -->
+            <Border Style="{StaticResource CardStyle}" automation:AutomationProperties.AutomationId="Diagnostics.Ownership">
+              <StackPanel>
+                <TextBlock Text="Hardware ownership" Style="{StaticResource CardTitleStyle}" />
+                <TextBlock Text="{Binding OwnershipSummary}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,4"
+                           automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Diagnostics.OwnershipSummary" />
+                <ItemsControl ItemsSource="{Binding HardwareOwnership}" automation:AutomationProperties.Name="Hardware ownership by domain">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,11">
+                        <Grid>
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                          <Border Width="27" Height="27" CornerRadius="7" Background="{StaticResource SurfaceRaisedBrush}" VerticalAlignment="Top">
+                            <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="13" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                          </Border>
+                          <StackPanel Grid.Column="1" Margin="11,0,12,0" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Domain}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding Detail}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                          </StackPanel>
+                          <Border Grid.Column="2" CornerRadius="12" BorderThickness="1" Padding="10,4" VerticalAlignment="Center">
+                            <Border.Style>
+                              <Style TargetType="Border">
+                                <Setter Property="Background" Value="{StaticResource SafeSoftBrush}" />
+                                <Setter Property="BorderBrush" Value="{StaticResource SafeBrush}" />
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding Contended}" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}" />
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </Border.Style>
+                            <StackPanel Orientation="Horizontal">
+                              <TextBlock Text="&#xE73E;" FontFamily="{StaticResource IconFont}" FontSize="11" VerticalAlignment="Center" Margin="0,1,6,0">
+                                <TextBlock.Style>
+                                  <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                                    <Style.Triggers>
+                                      <DataTrigger Binding="{Binding Contended}" Value="True">
+                                        <Setter Property="Text" Value="&#xE7BA;" />
+                                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                      </DataTrigger>
+                                    </Style.Triggers>
+                                  </Style>
+                                </TextBlock.Style>
+                              </TextBlock>
+                              <TextBlock Text="{Binding Owner}" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                  <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                                    <Style.Triggers>
+                                      <DataTrigger Binding="{Binding Contended}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                      </DataTrigger>
+                                    </Style.Triggers>
+                                  </Style>
+                                </TextBlock.Style>
+                              </TextBlock>
+                            </StackPanel>
+                          </Border>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
             <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="390">
               <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
@@ -3125,6 +3288,96 @@
                 </StackPanel>
               </Border>
             </local:AdaptiveUniformGrid>
+
+            <!-- Footprint: the honest answer to the bloat that drives users off
+                 iCUE/CAM — exactly what RigPilot costs to run, live, with nothing
+                 to hide behind a cloud account. -->
+            <Border Style="{StaticResource CardStyle}" automation:AutomationProperties.AutomationId="Diagnostics.Footprint">
+              <StackPanel>
+                <Grid>
+                  <StackPanel>
+                    <TextBlock Text="RigPilot footprint" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="Exactly what the suite costs to run — local processes only, measured live." Style="{StaticResource MutedStyle}" Margin="0,4,0,0" />
+                  </StackPanel>
+                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
+                    <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
+                  </Border>
+                </Grid>
+                <TextBlock Text="{Binding FootprintSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,13,0,0"
+                           automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Diagnostics.FootprintSummary" />
+                <Grid Margin="0,12,0,2">
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="96" /><ColumnDefinition Width="72" /></Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="1" Text="RAM" Style="{StaticResource EyebrowStyle}" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Column="2" Text="CPU" Style="{StaticResource EyebrowStyle}" HorizontalAlignment="Right" />
+                </Grid>
+                <ItemsControl ItemsSource="{Binding Footprint}" automation:AutomationProperties.Name="RigPilot process footprint">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
+                        <Grid>
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="96" /><ColumnDefinition Width="72" /></Grid.ColumnDefinitions>
+                          <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Role}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding Name}" Style="{StaticResource SubtleStyle}" Margin="0,2,0,0" />
+                          </StackPanel>
+                          <TextBlock Grid.Column="1" Text="{Binding RamText}" FontFamily="{StaticResource DataFont}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="2" Text="{Binding CpuText}" FontFamily="{StaticResource DataFont}" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
+            <!-- Sensor logging: surfaces the headless durable logger the service
+                 already runs (SQLite, from boot, no login) — the capability HWiNFO
+                 users ask for and RigPilot never advertised. Live badge tracks the
+                 service; retention text mirrors EnforceRetentionAsync. -->
+            <Border Style="{StaticResource CardStyle}" automation:AutomationProperties.AutomationId="Diagnostics.SensorLogging">
+              <StackPanel>
+                <Grid>
+                  <StackPanel>
+                    <TextBlock Text="Sensor logging" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="Durable, headless, and entirely local — no account, no upload." Style="{StaticResource MutedStyle}" Margin="0,4,0,0" />
+                  </StackPanel>
+                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" CornerRadius="12" BorderThickness="1" Padding="10,4">
+                    <Border.Style>
+                      <Style TargetType="Border">
+                        <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
+                        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding IsServiceOnline}" Value="True">
+                            <Setter Property="Background" Value="{StaticResource SafeSoftBrush}" />
+                            <Setter Property="BorderBrush" Value="{StaticResource SafeBrush}" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
+                    <TextBlock FontSize="12" FontWeight="SemiBold">
+                      <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                          <Setter Property="Text" Value="Paused" />
+                          <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsServiceOnline}" Value="True">
+                              <Setter Property="Text" Value="Logging" />
+                              <Setter Property="Foreground" Value="{StaticResource SafeBrush}" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </TextBlock.Style>
+                    </TextBlock>
+                  </Border>
+                </Grid>
+                <TextBlock Text="Every persisted sensor is recorded continuously by the RigPilot Windows service — from system start, with no user signed in and nothing uploaded. Alerts (health rules below) are evaluated the same way." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,13,0,0" />
+                <local:AdaptiveUniformGrid MaximumColumns="3" MinimumColumns="1" MinimumItemWidth="200" Margin="0,14,0,2">
+                  <Border Style="{StaticResource InsetCardStyle}" Margin="0,0,10,10"><StackPanel><TextBlock Text="FULL-RATE HISTORY" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="24 hours" FontSize="18" FontWeight="SemiBold" Margin="0,6,0,0" /><TextBlock Text="Every sample, as captured" Style="{StaticResource SubtleStyle}" Margin="0,2,0,0" /></StackPanel></Border>
+                  <Border Style="{StaticResource InsetCardStyle}" Margin="0,0,10,10"><StackPanel><TextBlock Text="AGGREGATED HISTORY" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="30 days" FontSize="18" FontWeight="SemiBold" Margin="0,6,0,0" /><TextBlock Text="Minute-by-minute, then pruned automatically" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" /></StackPanel></Border>
+                  <Border Style="{StaticResource InsetCardStyle}" Margin="0,0,10,10"><StackPanel><TextBlock Text="STORAGE" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="Local SQLite" FontSize="18" FontWeight="SemiBold" Margin="0,6,0,0" /><TextBlock Text="In ProgramData on this PC only" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" /></StackPanel></Border>
+                </local:AdaptiveUniformGrid>
+              </StackPanel>
+            </Border>
 
             <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="390">
               <Border Style="{StaticResource CardStyle}">
@@ -3242,7 +3495,7 @@
       </Border>
 
       <!-- Busy overlay prevents duplicate mutations and makes long hardware work explicit. -->
-      <Border Grid.RowSpan="4" Background="#D90C1017" Panel.ZIndex="100" automation:AutomationProperties.LiveSetting="Assertive" automation:AutomationProperties.Name="RigPilot is working">
+      <Border Grid.RowSpan="4" Background="{DynamicResource ModalScrimBrush}" Panel.ZIndex="100" automation:AutomationProperties.LiveSetting="Assertive" automation:AutomationProperties.Name="RigPilot is working">
         <Border.Style>
           <Style TargetType="Border">
             <Setter Property="Visibility" Value="Collapsed" />
@@ -3258,26 +3511,102 @@
         </Border>
       </Border>
 
-      <!-- One-time first-run tour. Hidden by default; only the real app startup
-           shows it (the deterministic snapshot host never does). It explains the
-           safety model — it grants and changes nothing. -->
-      <Border Grid.RowSpan="4" Background="#D90C1017" Panel.ZIndex="110" automation:AutomationProperties.AutomationId="Onboarding.Overlay" automation:AutomationProperties.Name="RigPilot first-run tour">
+      <!-- One-time guided setup. Scanning and baseline capture are read-only.
+           The selected mode is applied only through the normal verified profile
+           transaction, and the default-reset proof is a separate read-back. -->
+      <Border Grid.RowSpan="4" Background="{DynamicResource ModalScrimBrush}" Panel.ZIndex="110" automation:AutomationProperties.AutomationId="Onboarding.Overlay" automation:AutomationProperties.Name="RigPilot guided setup">
         <Border.Style>
           <Style TargetType="Border">
             <Setter Property="Visibility" Value="Collapsed" />
             <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingVisible}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
           </Style>
         </Border.Style>
-        <Border Style="{StaticResource CardStyle}" Width="520" Padding="28" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0">
-          <StackPanel>
-            <TextBlock Text="{Binding OnboardingStepLabel}" Style="{StaticResource EyebrowStyle}" automation:AutomationProperties.AutomationId="Onboarding.StepLabel" />
-            <TextBlock Text="{Binding OnboardingTitle}" FontSize="22" FontWeight="Bold" Margin="0,6,0,10" automation:AutomationProperties.AutomationId="Onboarding.Title" />
-            <TextBlock Text="{Binding OnboardingBody}" TextWrapping="Wrap" LineHeight="21" automation:AutomationProperties.AutomationId="Onboarding.Body" />
-            <Grid Margin="0,22,0,0">
-              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-              <Button Content="{loc:Loc Onboarding_Skip}" Command="{Binding OnboardingSkipCommand}" Style="{StaticResource GhostButtonStyle}" automation:AutomationProperties.Name="Skip first-run tour" automation:AutomationProperties.AutomationId="Onboarding.Skip" />
-              <Button Grid.Column="2" Content="{loc:Loc Onboarding_Back}" Command="{Binding OnboardingBackCommand}" Margin="0,0,8,0" automation:AutomationProperties.Name="Previous tour step" automation:AutomationProperties.AutomationId="Onboarding.Back" />
-              <Button Grid.Column="3" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding OnboardingNextCommand}" automation:AutomationProperties.Name="Next tour step" automation:AutomationProperties.AutomationId="Onboarding.Next">
+        <Border Style="{StaticResource CardStyle}" Width="660" MaxHeight="680" Padding="{StaticResource Space6}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+              <TextBlock Text="{Binding OnboardingStepLabel}" Style="{StaticResource EyebrowStyle}" automation:AutomationProperties.AutomationId="Onboarding.StepLabel" />
+              <TextBlock Text="{Binding OnboardingTitle}" FontSize="22" FontWeight="Bold" Margin="0,8,0,12" automation:AutomationProperties.AutomationId="Onboarding.Title" />
+              <TextBlock Text="{Binding OnboardingBody}" TextWrapping="Wrap" LineHeight="21" automation:AutomationProperties.AutomationId="Onboarding.Body" />
+
+              <Border Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                      CornerRadius="{StaticResource RadiusInset}" Padding="{StaticResource Space4}" Margin="{StaticResource StackGap}">
+                <TextBlock Text="{Binding OnboardingDetailText}" TextWrapping="Wrap" LineHeight="20"
+                           automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Onboarding.Detail" />
+              </Border>
+
+              <StackPanel Margin="{StaticResource StackGap}">
+                <StackPanel.Style>
+                  <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingScanStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </StackPanel.Style>
+                <Button Content="{loc:Loc Onboarding_Scan}" Command="{Binding OnboardingScanCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                        HorizontalAlignment="Left" automation:AutomationProperties.Name="Scan hardware and competing owners" automation:AutomationProperties.AutomationId="Onboarding.Scan" />
+              </StackPanel>
+
+              <WrapPanel Margin="{StaticResource StackGap}">
+                <WrapPanel.Style>
+                  <Style TargetType="WrapPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingModeStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </WrapPanel.Style>
+                <Button Content="Quiet" Command="{Binding SelectOnboardingModeCommand}" CommandParameter="Quiet" Style="{StaticResource HardwareModeButtonStyle}"
+                        Tag="{Binding IsOnboardingQuietSelected}" Margin="0,0,8,8" automation:AutomationProperties.AutomationId="Onboarding.Mode.Quiet" />
+                <Button Content="Efficiency" Command="{Binding SelectOnboardingModeCommand}" CommandParameter="Efficiency" Style="{StaticResource HardwareModeButtonStyle}"
+                        Tag="{Binding IsOnboardingEfficiencySelected}" Margin="0,0,8,8" automation:AutomationProperties.AutomationId="Onboarding.Mode.Efficiency" />
+                <Button Content="Performance" Command="{Binding SelectOnboardingModeCommand}" CommandParameter="Performance" Style="{StaticResource HardwareModeButtonStyle}"
+                        Tag="{Binding IsOnboardingPerformanceSelected}" Margin="0,0,8,8" automation:AutomationProperties.AutomationId="Onboarding.Mode.Performance" />
+              </WrapPanel>
+
+              <StackPanel Margin="{StaticResource StackGap}">
+                <StackPanel.Style>
+                  <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingBaselineStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </StackPanel.Style>
+                <Button Content="{loc:Loc Onboarding_CaptureBaseline}" Command="{Binding CaptureOnboardingBaselineCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                        HorizontalAlignment="Left" automation:AutomationProperties.Name="Capture read-only baseline" automation:AutomationProperties.AutomationId="Onboarding.Baseline" />
+              </StackPanel>
+
+              <StackPanel Margin="{StaticResource StackGap}">
+                <StackPanel.Style>
+                  <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingApplyStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </StackPanel.Style>
+                <Button Content="{loc:Loc Onboarding_ApplyMode}" Command="{Binding ApplyOnboardingModeCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                        HorizontalAlignment="Left" automation:AutomationProperties.Name="Apply selected verified mode" automation:AutomationProperties.AutomationId="Onboarding.Apply" />
+              </StackPanel>
+
+              <StackPanel Margin="{StaticResource StackGap}">
+                <StackPanel.Style>
+                  <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingResultStep}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </StackPanel.Style>
+                <Button Content="{loc:Loc Onboarding_RestoreDefault}" Command="{Binding RestoreOnboardingDefaultsCommand}" Style="{StaticResource HardwareActionButtonStyle}"
+                        HorizontalAlignment="Left" automation:AutomationProperties.Name="Restore and verify Windows Balanced default" automation:AutomationProperties.AutomationId="Onboarding.RestoreDefault" />
+              </StackPanel>
+
+              <ProgressBar IsIndeterminate="True" Height="4" Foreground="{StaticResource AccentBrush}" Background="{StaticResource BorderBrush}" Margin="{StaticResource StackGap}">
+                <ProgressBar.Style>
+                  <Style TargetType="ProgressBar">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers><DataTrigger Binding="{Binding IsOnboardingWorking}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                  </Style>
+                </ProgressBar.Style>
+              </ProgressBar>
+
+              <Grid Margin="0,24,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <Button Content="{loc:Loc Onboarding_Skip}" Command="{Binding OnboardingSkipCommand}" Style="{StaticResource GhostButtonStyle}" automation:AutomationProperties.Name="Skip guided setup" automation:AutomationProperties.AutomationId="Onboarding.Skip" />
+                <Button Grid.Column="2" Content="{loc:Loc Onboarding_Back}" Command="{Binding OnboardingBackCommand}" Margin="0,0,8,0" automation:AutomationProperties.Name="Previous setup step" automation:AutomationProperties.AutomationId="Onboarding.Back" />
+                <Button Grid.Column="3" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding OnboardingNextCommand}" automation:AutomationProperties.Name="Next setup step" automation:AutomationProperties.AutomationId="Onboarding.Next">
                 <Button.Content>
                   <TextBlock>
                     <TextBlock.Style>
@@ -3293,8 +3622,9 @@
                   </TextBlock>
                 </Button.Content>
               </Button>
-            </Grid>
-          </StackPanel>
+              </Grid>
+            </StackPanel>
+          </ScrollViewer>
         </Border>
       </Border>
     </Grid>

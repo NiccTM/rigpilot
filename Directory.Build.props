@@ -13,8 +13,8 @@
     <Copyright>Copyright (c) RigPilot contributors</Copyright>
     <RepositoryUrl>https://github.com/NiccTM/rigpilot</RepositoryUrl>
     <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
-    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.5.5</VersionPrefix>
-    <VersionSuffix Condition="'$(VersionSuffix)' == ''">alpha</VersionSuffix>
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.7.0</VersionPrefix>
+    <VersionSuffix Condition="'$(VersionSuffix)' == ''"></VersionSuffix>
     <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">$(VersionPrefix).0</AssemblyVersion>
     <FileVersion Condition="'$(FileVersion)' == ''">$(VersionPrefix).0</FileVersion>
   </PropertyGroup>

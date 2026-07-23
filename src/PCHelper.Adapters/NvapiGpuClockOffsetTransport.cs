@@ -103,6 +103,32 @@ public sealed class NvapiGpuClockOffsetTransport : IGpuClockOffsetTransport, IDi
     public Task SetOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken)
     {
         EnsureWriteArmed();
+        return WriteOffsetAsync(domain, offsetKiloHertz, "apply", cancellationToken);
+    }
+
+    /// <summary>
+    /// Restores a captured offset without requiring an armed transport. Every
+    /// other guard — transport enabled, not disposed, editable P0 entry, driver
+    /// delta range — still applies; only the arm gate is bypassed, because a
+    /// restore returns hardware toward its prior state and refusing one leaves
+    /// the machine stranded in whatever state tuning last applied.
+    /// </summary>
+    public Task RestoreOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken)
+    {
+        if (!_enableWrites || _disposed)
+        {
+            throw new GpuClockSafetyException("The GPU clock-offset transport is not write-enabled.");
+        }
+
+        return WriteOffsetAsync(domain, offsetKiloHertz, "restore", cancellationToken);
+    }
+
+    private Task WriteOffsetAsync(
+        GpuClockOffsetDomain domain,
+        int offsetKiloHertz,
+        string origin,
+        CancellationToken cancellationToken)
+    {
         IPerformanceStates20ClockEntry entry = FindP0Entry(domain)
             ?? throw new GpuClockSafetyException($"The NVIDIA driver exposes no editable P0 {domain} clock entry.");
         if (!entry.IsEditable)
@@ -116,6 +142,25 @@ public sealed class NvapiGpuClockOffsetTransport : IGpuClockOffsetTransport, IDi
                 $"Offset {offsetKiloHertz} kHz is outside the driver delta range [{current.DeltaRange.Minimum}, {current.DeltaRange.Maximum}] kHz.");
         }
 
+        // A write that asks for the delta already in force changes nothing, and
+        // the driver refuses it: on the reference rig Auto OC failed every run at
+        // its first candidate with NVAPI_INVALID_USER_PRIVILEGE for a Core write
+        // of 0 kHz while the card was already at 0, and the same 0 kHz value went
+        // through moments earlier as part of arming. Rollback-to-stock hit it too,
+        // for the same reason — it restores 0 when the control is already 0.
+        // Skipping is sound rather than merely convenient: the requested state is
+        // the state the hardware is in, and every caller proves that by read-back
+        // afterwards rather than trusting this return.
+        //
+        // This is a targeted mitigation, not an explanation of why the driver
+        // rejects a no-op with a privilege status. It is validated by behaviour,
+        // so if a run still fails here the assumption is wrong and the message
+        // above will say so.
+        if (IsNoOpWrite(current.DeltaValue, offsetKiloHertz))
+        {
+            return Task.CompletedTask;
+        }
+
         // Submit exactly one clock entry for P0 — no voltage entries, no
         // overvolting settings, no other pstates. The V1 payload cannot even
         // carry an overvolting section.
@@ -127,13 +172,63 @@ public sealed class NvapiGpuClockOffsetTransport : IGpuClockOffsetTransport, IDi
             [clock],
             []);
         PerformanceStates20InfoV1 payload = new([state], 1, 0);
-        GPUApi.SetPerformanceStates20(_gpu.Handle, payload);
+        try
+        {
+            lock (_gate)
+            {
+                GPUApi.SetPerformanceStates20(_gpu.Handle, payload);
+            }
+        }
+        catch (Exception exception)
+        {
+            // A bare driver status ("NVAPI_INVALID_USER_PRIVILEGE") names neither
+            // the domain nor the value, so an Auto OC failure cannot be told apart
+            // from a manual one, and the adapter trace that would carry the detail
+            // is a bounded buffer that per-second sensor polling flushes within
+            // seconds. Carry the whole request in the message that reaches the
+            // durable operation record.
+            // Which entry point issued the write, and the arm state it ran under.
+            // Manual writes of +15, +30 and +100 MHz succeed while a +91 MHz
+            // candidate inside an Auto OC run is refused, so the discriminator
+            // between those two situations is the thing still unaccounted for.
+            bool armed;
+            lock (_gate)
+            {
+                armed = _armed;
+            }
+
+            throw new GpuClockWriteException(
+                $"NVAPI refused a {domain} clock {origin} of {offsetKiloHertz} kHz "
+                + $"({ToMegaHertzText(offsetKiloHertz)}) from {current.DeltaValue} kHz, armed={armed}, "
+                + $"driver delta range [{current.DeltaRange.Minimum}, {current.DeltaRange.Maximum}] kHz: "
+                + $"{exception.Message}",
+                exception);
+        }
+
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// True when the driver already holds the requested delta, so submitting it
+    /// would ask the hardware to move to where it already is.
+    /// </summary>
+    internal static bool IsNoOpWrite(int currentDeltaKiloHertz, int requestedKiloHertz) =>
+        currentDeltaKiloHertz == requestedKiloHertz;
+
+    private static string ToMegaHertzText(int offsetKiloHertz) =>
+        $"{offsetKiloHertz / 1000d:0.###} MHz";
+
     private IPerformanceStates20ClockEntry? FindP0Entry(GpuClockOffsetDomain domain)
     {
-        IPerformanceStates20Info info = GPUApi.GetPerformanceStates20(_gpu.Handle);
+        // One GPU handle is shared by the core and memory adapters, the periodic
+        // capability probe, and the tuning engine, and NVAPI was being entered
+        // from all of them without serialisation.
+        IPerformanceStates20Info info;
+        lock (_gate)
+        {
+            info = GPUApi.GetPerformanceStates20(_gpu.Handle);
+        }
+
         PublicClockDomain publicDomain = ToPublicDomain(domain);
         if (!info.Clocks.TryGetValue(PerformanceStateId.P0_3DPerformance, out IPerformanceStates20ClockEntry[]? entries))
         {

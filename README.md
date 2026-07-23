@@ -8,7 +8,7 @@ RigPilot is an open-source Windows control centre for desktop PCs. It provides a
 
 > **Brand continuity:** RigPilot is the public name. Existing `PCHelper` service, pipe, CLI, and `%ProgramData%\PCHelper` identifiers remain unchanged so existing installations, state, and permissions upgrade safely.
 
-The current source line is `0.5.5-alpha`. It includes service-owned transactional profiles, composite Auto OC, continuous cooling protection, exact-route RGB control, recovery journals, and crash-contained adapter hosts. It is not a hardware-qualified release. A bounded adapter may expose an `Experimental` path only when it can prepare, apply, read back when the device supports it, roll back, and return to firmware/default control; the user must acknowledge global and exact-device risk before an operation can start. An unsigned `0.5.5-preview.1` is deliberately build-locked to monitoring so it can be published without exposing service mutations.
+The current source line is `0.6.0-beta.1`. It includes service-owned transactional profiles, composite Auto OC, continuous cooling protection, exact-route RGB control, recovery journals, and crash-contained adapter hosts. It is not a hardware-qualified release. A bounded adapter may expose an `Experimental` path only when it can prepare, apply, read back when the device supports it, roll back, and return to firmware/default control; the user must acknowledge global and exact-device risk before an operation can start. An unsigned `0.6.0-preview.1` is deliberately build-locked to monitoring so it can be published without exposing service mutations.
 
 ## Current capabilities
 
@@ -106,7 +106,7 @@ $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\MSB
 Create a production Game Bar candidate only with a valid code-signing certificate. This produces and verifies a signed MSIX but does not install it:
 
 ```powershell
-.\scripts\build-gamebar.ps1 -Version 0.5.5-alpha -SigningCertificateThumbprint <certificate-thumbprint>
+.\scripts\build-gamebar.ps1 -Version 0.6.0-beta.1 -SigningCertificateThumbprint <certificate-thumbprint>
 ```
 
 Run a read-only local probe:
@@ -124,7 +124,7 @@ Check release gates without producing, installing, or modifying an update packag
 Verify that a published app, service, hosts, and CLI are one release line before WiX packages them:
 
 ```powershell
-.\scripts\Test-RuntimePayload.ps1 -PayloadRoot .\artifacts\publish -ExpectedProductVersion 0.5.5-alpha
+.\scripts\Test-RuntimePayload.ps1 -PayloadRoot .\artifacts\publish -ExpectedProductVersion 0.6.0-beta.1
 & $dotnet run --project src/PCHelper.Cli -- runtime-preflight --json
 ```
 

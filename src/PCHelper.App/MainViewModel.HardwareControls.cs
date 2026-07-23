@@ -159,7 +159,13 @@ public sealed partial class MainViewModel
             if (!ShouldCommitHardwareControlState(response.Success, result, enable))
             {
                 _hardwareControlArmedThisConnection = false;
-                ShowNotice(result.Message, result.RecoveryRequired ? "Danger" : "Warning");
+                // "Error" (not the unstyled "Danger") so a real recovery state reads
+                // red; clearsWhenRecovered lets the banner retire itself once the
+                // service reports the family restored.
+                ShowNotice(
+                    result.Message,
+                    result.RecoveryRequired ? "Error" : "Warning",
+                    clearsWhenRecovered: result.RecoveryRequired);
                 OnPropertyChanged(nameof(HardwareControlEnabled));
                 return false;
             }
@@ -169,7 +175,7 @@ public sealed partial class MainViewModel
             PersistHardwareControlPreference(enable);
             _hardwareControlArmedThisConnection = enable;
             ShowNotice(enable
-                ? $"Hardware control enabled after {result.Families.Count} GPU family/families passed read-back."
+                ? $"Hardware control enabled after {result.Families.Count} GPU {(result.Families.Count == 1 ? "family" : "families")} passed read-back."
                 : "Hardware control disabled after vendor/default state was restored and read back.",
                 "Success");
             if (_refreshing)
@@ -345,6 +351,10 @@ public sealed partial class MainViewModel
                 FanControlSliders.Add(fan);
             }
         }
+
+        // The custom-undervolt preview is derived from the live power-limit
+        // slider's range, so refresh it whenever the sliders are rebuilt.
+        OnPropertyChanged(nameof(CustomUndervoltPreview));
     }
 
     public ICommand EnableGpuFanAutoModeCommand => _enableGpuFanAutoModeCommand;
@@ -569,19 +579,49 @@ public sealed partial class MainViewModel
             return;
         }
 
+        CapabilityDescriptor? power = _snapshot.Capabilities.FirstOrDefault(capability =>
+            capability.Id.StartsWith("gpupower.limit:", StringComparison.Ordinal)
+            && capability.Range?.Default is not null
+            && capability.State is CapabilityAccessState.Experimental or CapabilityAccessState.Verified
+            && string.Equals(capability.DeviceId, core.DeviceId, StringComparison.Ordinal));
+        bool useV3 = _serviceFeatures.Contains(ServiceRuntimeFeatures.AutoOcV3);
+
         FullAutoOcStatus = "Starting the isolated Direct3D workload host…";
         await using WorkloadHostSession workload = await WorkloadHostSession.StartAsync(core.DeviceId, _lifetime.Token);
+        IpcCommand command = useV3 ? IpcCommand.StartAutoOcV3 : IpcCommand.StartAutoOc;
+        object payload = useV3
+            ? new StartAutoOcV3Request(
+                StartAutoOcV3Request.CurrentSchemaVersion,
+                core.DeviceId,
+                core.Id,
+                memory.Id,
+                power?.Id,
+                workload.Descriptor,
+                new AutoOcObjectiveConstraintsV3(
+                    SelectedTuneObjective,
+                    MaximumBaselineVariationPercent: 3,
+                    MinimumEfficiencyPerformancePercent: 98,
+                    MinimumQuietPerformancePercent: 95,
+                    TemperatureCeilingCelsius: 83,
+                    PowerCeilingWatts: null,
+                    BaselineSampleDuration: TimeSpan.FromSeconds(10),
+                    CandidateScreeningDuration: TimeSpan.FromSeconds(30),
+                    FinalScreeningDuration: TimeSpan.FromMinutes(20),
+                    RequestPresentMonValidation: false),
+                ConfirmExperimental: true,
+                ConfirmDevice: true)
+            : new StartAutoOcV2Request(
+                StartAutoOcV2Request.CurrentSchemaVersion,
+                core.DeviceId,
+                core.Id,
+                memory.Id,
+                workload.Descriptor,
+                ConfirmExperimental: true,
+                ConfirmDevice: true);
         IpcResponse response = await _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(
-                IpcCommand.StartAutoOc,
-                new StartAutoOcV2Request(
-                    StartAutoOcV2Request.CurrentSchemaVersion,
-                    core.DeviceId,
-                    core.Id,
-                    memory.Id,
-                    workload.Descriptor,
-                    ConfirmExperimental: true,
-                    ConfirmDevice: true),
+                command,
+                payload,
                 _status?.StateRevision,
                 Guid.NewGuid().ToString("N")),
             _lifetime.Token);
@@ -590,8 +630,18 @@ public sealed partial class MainViewModel
             ?? throw new InvalidDataException("Service returned an empty Full Auto OC operation.");
         NotifyOperationProperties();
         HardwareOperationState? outcome = await WaitForOperationAsync(_operation.Id, "core + memory");
+        AutoOcResultV3? resultV3 = _operation?.AutoOcResultV3;
         AutoOcResultV2? result = _operation?.AutoOcResult;
-        bool usable = outcome == HardwareOperationState.Completed
+        bool usableV3 = outcome == HardwareOperationState.Completed
+            && resultV3 is
+            {
+                ValidationState: AutoOcValidationState.Provisional,
+                AllRequestedFamiliesVerified: true,
+                RestorationProof.PriorStateRestored: true,
+                RestorationProof.HardwareStateKnown: true,
+                GeneratedProfile: not null
+            };
+        bool usableV2 = outcome == HardwareOperationState.Completed
             && result is
             {
                 AllRequestedFamiliesVerified: true,
@@ -599,10 +649,14 @@ public sealed partial class MainViewModel
                 HardwareStateKnown: true,
                 GeneratedProfile: not null
             };
-        FullAutoOcStatus = usable
-            ? $"Full Auto OC screened core {result!.CoreOffsetMegahertz:0} MHz and memory {result.MemoryOffsetMegahertz:0} MHz. Prior hardware state was restored; apply the saved profile explicitly from Profiles."
-            : result?.Message ?? $"Full Auto OC ended {outcome?.ToString() ?? "without a final result"}.";
-        ShowNotice(FullAutoOcStatus, usable ? "Success" : "Warning");
+        FullAutoOcStatus = usableV3
+            ? $"{SelectedTuneObjective} Auto OC V3 selected core {resultV3!.CoreOffsetMegahertz:0} MHz, memory {resultV3.MemoryOffsetMegahertz:0} MHz"
+                + (resultV3.PowerLimitWatts is double watts ? $", and {watts:0} W" : string.Empty)
+                + $" after three baseline samples ({resultV3.BaselineVariationPercent:0.##}% variation) and a 20-minute final screen. Prior hardware state was restored; the saved profile is provisional."
+            : usableV2
+                ? $"Full Auto OC screened core {result!.CoreOffsetMegahertz:0} MHz and memory {result.MemoryOffsetMegahertz:0} MHz. Prior hardware state was restored; apply the saved profile explicitly from Profiles."
+                : resultV3?.Message ?? result?.Message ?? $"Full Auto OC ended {outcome?.ToString() ?? "without a final result"}.";
+        ShowNotice(FullAutoOcStatus, usableV3 || usableV2 ? "Success" : "Warning");
         await RefreshAsync(full: true, userInitiated: false);
     }
 
@@ -814,6 +868,80 @@ public sealed partial class MainViewModel
         UndervoltStatus = $"{UndervoltPresets.Describe(preset)} applied: power limit {watts:0} {power.Unit}, read-back verified. Run the frame-rate benchmark on Games & tools to confirm your games hold their FPS.";
     }
 
+    private double _customUndervoltPercent = 80;
+
+    /// <summary>Custom efficiency target as a percentage of the GPU's stock power.</summary>
+    public double CustomUndervoltPercent
+    {
+        get => _customUndervoltPercent;
+        set
+        {
+            if (Set(ref _customUndervoltPercent, Math.Clamp(Math.Round(value), 50, 100)))
+            {
+                OnPropertyChanged(nameof(CustomUndervoltPreview));
+            }
+        }
+    }
+
+    /// <summary>Live watts the current custom percentage resolves to on this GPU.</summary>
+    public string CustomUndervoltPreview
+    {
+        get
+        {
+            GpuControlSlider? power = GpuControlSliders.FirstOrDefault(slider =>
+                slider.CapabilityId.StartsWith("gpupower.limit:", StringComparison.Ordinal));
+            if (power is null)
+            {
+                return "Turn on Hardware control to resolve the target in watts.";
+            }
+
+            double? target = UndervoltPresets.ComputeCustomTargetWatts(power.Minimum, power.Maximum, power.Default, CustomUndervoltPercent);
+            return target is double watts
+                ? $"≈ {watts:0} {power.Unit} ({CustomUndervoltPercent:0}% of stock). Lower heat and fan noise; most games stay near stock FPS."
+                : "This GPU's reported power range does not support a custom target.";
+        }
+    }
+
+    private AsyncCommand? _applyCustomUndervoltCommand;
+
+    public ICommand ApplyCustomUndervoltCommand => _applyCustomUndervoltCommand ??= new AsyncCommand(
+        _ => ApplyCustomUndervoltAsync(),
+        _ => CanRunHardwareAction(),
+        ReportError,
+        _ => ShowHardwareActionBlocked());
+
+    public async Task ApplyCustomUndervoltAsync()
+    {
+        GpuControlSlider? power = GpuControlSliders.FirstOrDefault(slider =>
+            slider.CapabilityId.StartsWith("gpupower.limit:", StringComparison.Ordinal));
+        if (power is null)
+        {
+            ShowNotice("The GPU power-limit control is not available. Turn on Hardware control and check the Devices page.", "Warning");
+            return;
+        }
+
+        double? target = UndervoltPresets.ComputeCustomTargetWatts(power.Minimum, power.Maximum, power.Default, CustomUndervoltPercent);
+        if (target is not double watts)
+        {
+            ShowNotice("A custom power target is not available for this GPU's reported power range.", "Warning");
+            return;
+        }
+
+        await ApplyGpuControlAsync(new GpuControlSlider
+        {
+            CapabilityId = power.CapabilityId,
+            AdapterId = power.AdapterId,
+            DeviceId = power.DeviceId,
+            Name = power.Name,
+            Minimum = power.Minimum,
+            Maximum = power.Maximum,
+            Default = power.Default,
+            Unit = power.Unit,
+            Value = watts,
+        });
+        UndervoltStatus = $"Custom power target applied: {watts:0} {power.Unit} ({CustomUndervoltPercent:0}% of stock), read-back verified. Run the frame-rate benchmark on Games & tools to confirm your games hold their FPS.";
+    }
+
     // --- NZXT Kraken pump control ---------------------------------------------
 
     private double _krakenPumpDutyTarget = 100;
@@ -890,7 +1018,8 @@ public sealed partial class MainViewModel
     /// The Hardware-control switch supplies the acknowledgements.
     /// </summary>
     public async Task StartGpuAutoOcAsync() =>
-        _ = await StartGpuClockAutoOcAsync("gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz);
+        _ = await StartGpuClockAutoOcAsync(
+            "gpuclock.core:", "GPU core clock", AutoOcCoreSafetyMarginMhz, AutoOcWorkloadMode.Core);
 
     /// <summary>
     /// One-click GPU memory auto-OC: the same refined climb/edge-find/back-off
@@ -898,9 +1027,80 @@ public sealed partial class MainViewModel
     /// often the larger real-world gain on this class of card. Same safety gates.
     /// </summary>
     public async Task StartGpuMemoryAutoOcAsync() =>
-        _ = await StartGpuClockAutoOcAsync("gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz);
+        _ = await StartGpuClockAutoOcAsync(
+            "gpuclock.memory:", "GPU memory clock", AutoOcMemorySafetyMarginMhz, AutoOcWorkloadMode.Memory);
 
-    private async Task<string?> StartGpuClockAutoOcAsync(string capabilityPrefix, string label, double safetyMarginMhz)
+    /// <summary>
+    /// The generic "Start tuning" button targets whatever control the operator
+    /// selected. A GPU clock control needs the same isolated workload the
+    /// one-click buttons supply, or the service refuses it; anything else
+    /// (cooling calibration) keeps the unloaded search that suits it.
+    /// </summary>
+    private async Task StartSelectedTuneAsync()
+    {
+        CapabilityDescriptor? descriptor = SelectedTuneTarget?.Descriptor;
+        AutoOcWorkloadMode? mode = descriptor?.Id switch
+        {
+            string id when id.StartsWith("gpuclock.core:", StringComparison.Ordinal) => AutoOcWorkloadMode.Core,
+            string id when id.StartsWith("gpuclock.memory:", StringComparison.Ordinal) => AutoOcWorkloadMode.Memory,
+            _ => null
+        };
+        if (descriptor is null || mode is null)
+        {
+            await StartTuneCoreAsync();
+            return;
+        }
+
+        await using WorkloadHostSession workload = await WorkloadHostSession.StartAsync(
+            descriptor.DeviceId, _lifetime.Token);
+        await StartTuneCoreAsync(
+            workloadHost: workload.Descriptor,
+            workloadMode: mode);
+        if (_operation?.Id is string operationId)
+        {
+            HardwareOperationState? outcome = await WaitForOperationAsync(operationId, descriptor.Name);
+            ShowTuneOutcomeNotice(outcome, descriptor.Name);
+        }
+    }
+
+    /// <summary>
+    /// Replaces the optimistic "Auto-tuning started…" notice with the run's
+    /// terminal outcome. Without this the banner kept claiming a tune was in
+    /// progress after the operation had already failed — on this rig within
+    /// seconds, from the LocalSystem driver refusal.
+    /// </summary>
+    private void ShowTuneOutcomeNotice(HardwareOperationState? outcome, string label)
+    {
+        HardwareOperationStatus? operation = _operation;
+        string detail = string.IsNullOrWhiteSpace(operation?.Error)
+            ? operation?.Message ?? "no final status was recorded"
+            : $"{operation?.Message} {operation?.Error}".Trim();
+        bool producedProfile = operation?.TuneResult?.GeneratedProfile is not null;
+        (string text, string tone) = outcome switch
+        {
+            HardwareOperationState.Completed when producedProfile =>
+                ($"{label} auto-tuning finished: {detail}", "Success"),
+            HardwareOperationState.Completed =>
+                ($"{label} auto-tuning completed without a shippable result: {detail}", "Warning"),
+            HardwareOperationState.Failed =>
+                ($"{label} auto-tuning failed: {detail}", "Warning"),
+            HardwareOperationState.Aborted =>
+                ($"{label} auto-tuning was aborted: {detail}", "Warning"),
+            HardwareOperationState.RecoveryRequired =>
+                ($"{label} auto-tuning requires hardware recovery: {detail}", "Error"),
+            null =>
+                ($"{label} auto-tuning was superseded by another operation before it finished.", "Warning"),
+            _ =>
+                ($"{label} auto-tuning ended {outcome}: {detail}", "Warning")
+        };
+        ShowNotice(text, tone);
+    }
+
+    private async Task<string?> StartGpuClockAutoOcAsync(
+        string capabilityPrefix,
+        string label,
+        double safetyMarginMhz,
+        AutoOcWorkloadMode workloadMode)
     {
         if (!HardwareControlEnabled)
         {
@@ -929,8 +1129,28 @@ public sealed partial class MainViewModel
         TuneTemperatureCeilingText = "83";
         AdvancedWritesAcknowledged = true;
         TuneDeviceAcknowledged = true;
-        await StartTuneCoreAsync(AutoOcRefinementCandidates, safetyMarginMhz, AutoOcThermalHeadroomCelsius);
-        return _operation?.Id;
+
+        // The search is only meaningful under load, and the host lives in this
+        // signed-in session — so it must outlive the request and be awaited to
+        // completion here. Disposing it early would pull the load out from under
+        // the service mid-screen and reject every remaining candidate.
+        ShowNotice($"Starting the isolated Direct3D workload host for {label} tuning…", "Warning");
+        await using WorkloadHostSession workload = await WorkloadHostSession.StartAsync(
+            target.Descriptor.DeviceId, _lifetime.Token);
+        await StartTuneCoreAsync(
+            AutoOcRefinementCandidates,
+            safetyMarginMhz,
+            AutoOcThermalHeadroomCelsius,
+            workload.Descriptor,
+            workloadMode);
+        string? operationId = _operation?.Id;
+        if (operationId is not null)
+        {
+            HardwareOperationState? outcome = await WaitForOperationAsync(operationId, label);
+            ShowTuneOutcomeNotice(outcome, label);
+        }
+
+        return operationId;
     }
 
     private async Task EnsureHardwareControlArmedAsync()

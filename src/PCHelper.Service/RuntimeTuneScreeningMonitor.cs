@@ -33,6 +33,12 @@ internal sealed class RuntimeTuneScreeningMonitor(
         List<double> powers = [];
         List<double> clocks = [];
         List<double> loads = [];
+        List<double> fanRpms = [];
+        double smallestThermalMargin = double.PositiveInfinity;
+        long? firstDispatchCount = null;
+        long? lastDispatchCount = null;
+        DateTimeOffset? firstDispatchAt = null;
+        DateTimeOffset? lastDispatchAt = null;
         do
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -52,6 +58,11 @@ internal sealed class RuntimeTuneScreeningMonitor(
                         powers,
                         clocks);
                 }
+
+                firstDispatchCount ??= host.DispatchCount;
+                firstDispatchAt ??= _timeProvider.GetUtcNow();
+                lastDispatchCount = host.DispatchCount;
+                lastDispatchAt = _timeProvider.GetUtcNow();
             }
 
             HardwareSnapshot snapshot = _snapshotProvider();
@@ -78,25 +89,39 @@ internal sealed class RuntimeTuneScreeningMonitor(
                     && double.IsFinite(value)
                     && now - sample.Timestamp <= TimeSpan.FromSeconds(3))
                 .ToArray();
-            double[] currentTemperatures = good
+            SensorSample[] currentTemperatureSamples = good
                 .Where(sample => IsTemperature(sample.Unit)
                     && (sensorBinding is null || sensorBinding.TemperatureSensorIds.Contains(sample.SensorId, StringComparer.Ordinal)))
-                .Select(sample => sample.Value!.Value)
-                .Where(value => value is > -20 and < 150)
+                .Where(sample => sample.Value!.Value is > -20 and < 150)
                 .ToArray();
-            if (currentTemperatures.Length == 0)
+            if (currentTemperatureSamples.Length == 0)
             {
                 return Reject("No fresh temperature source was available during screening.", temperatures, powers, clocks);
             }
 
-            temperatures.AddRange(currentTemperatures);
-            if (currentTemperatures.Max() >= plan.TemperatureCeilingCelsius)
+            temperatures.AddRange(currentTemperatureSamples.Select(sample => sample.Value!.Value));
+
+            // Each sensor is judged against the ceiling for its own class. The bound
+            // set includes hot spot and memory junction, which run hotter than the
+            // core by design — comparing their readings to a core ceiling rejects
+            // every sample the moment the workload actually loads the card.
+            foreach (SensorSample sample in currentTemperatureSamples)
             {
-                return Reject(
-                    $"Temperature ceiling exceeded: {currentTemperatures.Max():0.0} °C observed, {plan.TemperatureCeilingCelsius:0.0} °C allowed.",
-                    temperatures,
-                    powers,
-                    clocks);
+                double ceiling = GpuThermalCeilings.CeilingForSensor(sample.Name, plan.TemperatureCeilingCelsius);
+                if (sample.Value!.Value >= ceiling)
+                {
+                    return Reject(
+                        $"Temperature ceiling exceeded on {sample.Name}: {sample.Value!.Value:0.0} °C observed, {ceiling:0.0} °C allowed.",
+                        temperatures,
+                        powers,
+                        clocks);
+                }
+
+                // How close the closest sensor came to ITS OWN limit. The caller
+                // stops climbing on this rather than on the hottest reading, so a
+                // memory junction that legitimately runs hot no longer halts the
+                // search on the first candidate.
+                smallestThermalMargin = Math.Min(smallestThermalMargin, ceiling - sample.Value!.Value);
             }
 
             SensorSample[] related = RelatedSensors(snapshot, capability, good, sensorBinding);
@@ -106,6 +131,10 @@ internal sealed class RuntimeTuneScreeningMonitor(
             clocks.AddRange(related.Where(sample => string.Equals(sample.Unit, "MHz", StringComparison.OrdinalIgnoreCase))
                 .Select(sample => sample.Value!.Value)
                 .Where(value => value > 0));
+            fanRpms.AddRange(good.Where(sample => string.Equals(sample.Unit, "RPM", StringComparison.OrdinalIgnoreCase)
+                    && (sensorBinding is null || sensorBinding.BoundDeviceIds.Contains(sample.DeviceId, StringComparer.Ordinal)))
+                .Select(sample => sample.Value!.Value)
+                .Where(value => value >= 0));
             loads.AddRange(related.Where(sample => string.Equals(sample.Unit, "%", StringComparison.OrdinalIgnoreCase)
                     && (sensorBinding is not null
                         ? string.Equals(sample.SensorId, sensorBinding.UtilizationSensorId, StringComparison.Ordinal)
@@ -151,24 +180,61 @@ internal sealed class RuntimeTuneScreeningMonitor(
                 clocks);
         }
 
-        if (capability.Domain is ControlDomain.Cpu or ControlDomain.Gpu
-            && _baselineClockMegahertz is double baselineClock
-            && clocks.Count > 0
-            && clocks.Average() < baselineClock * 0.97)
+        // Clock regression. The stored baseline is captured when the monitor is
+        // constructed — before this mode's workload starts, while the GPU is still
+        // in whatever state the previous stage left it. Comparing across two
+        // different operating states is not a stability signal: on the reference
+        // rig the memory stage was rejected for "9752 MHz -> 5842 MHz" purely
+        // because the baseline was read in one workload state and the samples in
+        // another. When a workload mode is driven, compare this run against
+        // itself, which is what actually detects a clock collapsing mid-screen.
+        if (capability.Domain is ControlDomain.Cpu or ControlDomain.Gpu)
         {
-            return Reject(
-                $"Clock regression exceeded 3%: baseline {baselineClock:0} MHz, observed {clocks.Average():0} MHz.",
-                temperatures,
-                powers,
-                clocks);
+            if (requiredWorkloadMode is not null)
+            {
+                const int minimumSamplesForTrend = 6;
+                if (clocks.Count >= minimumSamplesForTrend)
+                {
+                    int span = clocks.Count / 3;
+                    double opening = clocks.Take(span).Average();
+                    double closing = clocks.Skip(clocks.Count - span).Average();
+                    if (opening > 0 && closing < opening * 0.97)
+                    {
+                        return Reject(
+                            $"Clock regressed more than 3% during screening: opened at {opening:0} MHz, closed at {closing:0} MHz.",
+                            temperatures,
+                            powers,
+                            clocks);
+                    }
+                }
+            }
+            else if (_baselineClockMegahertz is double baselineClock
+                && clocks.Count > 0
+                && clocks.Average() < baselineClock * 0.97)
+            {
+                return Reject(
+                    $"Clock regression exceeded 3%: baseline {baselineClock:0} MHz, observed {clocks.Average():0} MHz.",
+                    temperatures,
+                    powers,
+                    clocks);
+            }
         }
 
+        double? throughputScore = firstDispatchCount is long first
+            && lastDispatchCount is long last
+            && lastDispatchAt - firstDispatchAt is TimeSpan dispatchDuration
+            && dispatchDuration > TimeSpan.Zero
+                ? Math.Max(0, last - first) / dispatchDuration.TotalSeconds
+                : null;
         return new TuneScreeningResult(
             true,
             "No thermal, power, WHEA, display-reset, or control-ownership rejection was observed.",
             temperatures.Count == 0 ? null : temperatures.Max(),
             powers.Count == 0 ? null : powers.Average(),
-            clocks.Count == 0 ? null : clocks.Average());
+            clocks.Count == 0 ? null : clocks.Average(),
+            throughputScore,
+            fanRpms.Count == 0 ? null : fanRpms.Average(),
+            double.IsFinite(smallestThermalMargin) ? smallestThermalMargin : null);
     }
 
     private static SensorSample[] RelatedSensors(

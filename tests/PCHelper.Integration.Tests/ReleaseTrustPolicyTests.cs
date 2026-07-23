@@ -48,5 +48,8 @@ public sealed class ReleaseTrustPolicyTests
                 Assert.Null(rejection);
             }
         }
+
+        Assert.True(IpcCommandPolicy.IsReadOnly(IpcCommand.PreviewProfileV2));
+        Assert.Null(policy.GetMutationRejection(IpcCommand.PreviewProfileV2));
     }
 }

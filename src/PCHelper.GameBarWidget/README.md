@@ -1,7 +1,7 @@
 # RigPilot Game Bar companion
 
 This UWP/MSIX project is the optional, read-only Xbox Game Bar companion for
-RigPilot `0.5.5-alpha`.
+RigPilot `0.6.0-beta.1`.
 
 - It communicates only with `pchelper.useragent.v2`; it has no service-pipe,
   adapter-host, driver, or hardware-control path.

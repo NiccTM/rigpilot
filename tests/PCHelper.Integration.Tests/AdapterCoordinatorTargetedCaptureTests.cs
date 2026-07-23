@@ -41,6 +41,12 @@ public sealed class AdapterCoordinatorTargetedCaptureTests
     {
         private GpuFanChannelState _state = new(GpuFanControlPolicy.Automatic, null, 30);
 
+        public bool CanWrite => true;
+
+        public void SetArmed(bool armed) { }
+
+        public void Dispose() { }
+
         public Task<GpuFanBounds?> ReadBoundsAsync(string channelId, CancellationToken cancellationToken) =>
             Task.FromResult(bounds);
 

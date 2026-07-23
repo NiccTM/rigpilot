@@ -144,6 +144,16 @@ public sealed class GpuClockOffsetTransactionTests
             CurrentKiloHertz = offsetKiloHertz;
             return Task.CompletedTask;
         }
+
+        public Task RestoreOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken)
+        {
+            RestoreCommands.Add(offsetKiloHertz);
+            OffsetCommands.Add(offsetKiloHertz);
+            CurrentKiloHertz = offsetKiloHertz;
+            return Task.CompletedTask;
+        }
+
+        public List<int> RestoreCommands { get; } = [];
     }
 
     private sealed class MemoryJournal : IProfileTransactionJournal

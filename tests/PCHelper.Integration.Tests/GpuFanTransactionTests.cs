@@ -108,6 +108,12 @@ public sealed class GpuFanTransactionTests
 
         public bool RestoredAutomatic { get; private set; }
 
+        public bool CanWrite => true;
+
+        public void SetArmed(bool armed) { }
+
+        public void Dispose() { }
+
         /// <summary>When set, read-back always reports this measured duty regardless of the command.</summary>
         public int? StickyMeasuredDuty { get; init; }
 

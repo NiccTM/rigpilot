@@ -24,7 +24,7 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
         "NVIDIA Management Library telemetry",
-        "0.5.5-alpha",
+        "0.6.0-beta.1",
         "NVIDIA NVML runtime supplied by the installed display driver",
         "NVIDIA display driver",
         AdapterExecutionContext.SystemService,
@@ -66,6 +66,7 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                     {
                         ["uuid"] = device.Uuid,
+                        ["vbiosVersion"] = device.VbiosVersion,
                         ["driverVersion"] = api.DriverVersion
                     }));
                 capabilities.Add(new CapabilityDescriptor(
@@ -400,6 +401,7 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
         private readonly NvmlGetHandleDelegate _getHandle;
         private readonly NvmlGetStringDelegate _getName;
         private readonly NvmlGetStringDelegate _getUuid;
+        private readonly NvmlGetStringDelegate? _getVbiosVersion;
         private readonly NvmlGetDriverVersionDelegate _getDriverVersion;
         private readonly NvmlGetTemperatureDelegate _getTemperature;
         private readonly NvmlGetUnsignedDelegate _getFanSpeed;
@@ -425,6 +427,7 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
             NvmlGetHandleDelegate getHandle,
             NvmlGetStringDelegate getName,
             NvmlGetStringDelegate getUuid,
+            NvmlGetStringDelegate? getVbiosVersion,
             NvmlGetDriverVersionDelegate getDriverVersion,
             NvmlGetTemperatureDelegate getTemperature,
             NvmlGetUnsignedDelegate getFanSpeed,
@@ -448,6 +451,7 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
             _getHandle = getHandle;
             _getName = getName;
             _getUuid = getUuid;
+            _getVbiosVersion = getVbiosVersion;
             _getDriverVersion = getDriverVersion;
             _getTemperature = getTemperature;
             _getFanSpeed = getFanSpeed;
@@ -506,6 +510,7 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
                         Export<NvmlGetHandleDelegate>(library, "nvmlDeviceGetHandleByIndex_v2"),
                         Export<NvmlGetStringDelegate>(library, "nvmlDeviceGetName"),
                         Export<NvmlGetStringDelegate>(library, "nvmlDeviceGetUUID"),
+                        TryExport<NvmlGetStringDelegate>(library, "nvmlDeviceGetVbiosVersion"),
                         Export<NvmlGetDriverVersionDelegate>(library, "nvmlSystemGetDriverVersion"),
                         Export<NvmlGetTemperatureDelegate>(library, "nvmlDeviceGetTemperature"),
                         Export<NvmlGetUnsignedDelegate>(library, "nvmlDeviceGetFanSpeed"),
@@ -564,9 +569,10 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
                 EnsureSuccess(_getHandle(index, out IntPtr handle), "nvmlDeviceGetHandleByIndex_v2");
                 string name = ReadString(_getName, handle, 96, "nvmlDeviceGetName");
                 string uuid = ReadString(_getUuid, handle, 96, "nvmlDeviceGetUUID");
+                string vbiosVersion = TryReadString(_getVbiosVersion, handle, 96, "nvmlDeviceGetVbiosVersion") ?? string.Empty;
                 if (!string.IsNullOrWhiteSpace(uuid))
                 {
-                    devices.Add(new NvmlDevice(handle, name, uuid));
+                    devices.Add(new NvmlDevice(handle, name, uuid, vbiosVersion));
                 }
             }
             return devices;
@@ -697,6 +703,27 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
             finally
             {
                 Marshal.FreeHGlobal(memory);
+            }
+        }
+
+        private static string? TryReadString(
+            NvmlGetStringDelegate? read,
+            IntPtr device,
+            int length,
+            string operation)
+        {
+            if (read is null)
+            {
+                return null;
+            }
+            try
+            {
+                string value = ReadString(read, device, length, operation);
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
             }
         }
 
@@ -845,5 +872,5 @@ public sealed class NvmlTelemetryAdapter : IHardwareAdapter, IAdapterTopologyCac
         private delegate int NvmlGetClockDelegate(IntPtr device, uint clockType, out uint value);
     }
 
-    private sealed record NvmlDevice(IntPtr Handle, string Name, string Uuid);
+    private sealed record NvmlDevice(IntPtr Handle, string Name, string Uuid, string VbiosVersion);
 }

@@ -103,6 +103,12 @@ public sealed class GpuPowerLimitTransactionTests
 
         public List<uint> LimitCommands { get; } = [];
 
+        public bool CanWrite => true;
+
+        public void SetArmed(bool armed) { }
+
+        public void Dispose() { }
+
         /// <summary>When set, read-back always reports this limit regardless of the command.</summary>
         public uint? StickyReadBackMilliwatts { get; init; }
 
