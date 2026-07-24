@@ -22,6 +22,7 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
 {
     private readonly GpuSessionHost _host;
     private readonly object _gate = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<GpuClockOffsetDomain, GpuClockOffsetBounds> _cachedBounds = new();
     private bool _armed;
     private bool _disposed;
 
@@ -59,11 +60,21 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
 
         try
         {
-            _ = SendAsync(
-                new GpuClockSessionRequest(GpuClockSessionOps.SetArmed, GpuClockOffsetDomain.Core, 0, armed),
-                CancellationToken.None)
-                .GetAwaiter()
-                .GetResult();
+            if (armed)
+            {
+                _ = SendAsync(
+                    new GpuClockSessionRequest(GpuClockSessionOps.SetArmed, GpuClockOffsetDomain.Core, 0, true),
+                    CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            else
+            {
+                // Disarmed is the resting state; drop the child rather than leaving an
+                // idle NVAPI session running. Offsets persist in the driver, so
+                // releasing changes no hardware state.
+                _host.ReleaseAsync().GetAwaiter().GetResult();
+            }
         }
         catch
         {
@@ -82,6 +93,9 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
         {
             if (await transport.ReadBoundsAsync(GpuClockOffsetDomain.Core, cancellationToken).ConfigureAwait(false) is { IsValid: true })
             {
+                // Bounds cached and the resting state is disarmed: drop the child so an
+                // idle service holds no NVAPI session. The next write respawns it.
+                await transport._host.ReleaseAsync().ConfigureAwait(false);
                 return transport;
             }
         }
@@ -96,9 +110,21 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
 
     public async Task<GpuClockOffsetBounds?> ReadBoundsAsync(GpuClockOffsetDomain domain, CancellationToken cancellationToken)
     {
+        // Static driver delta range per domain, and a routine capability probe reads
+        // nothing else, so caching keeps the child released while disarmed.
+        if (_cachedBounds.TryGetValue(domain, out GpuClockOffsetBounds cached))
+        {
+            return cached;
+        }
+
         GpuClockSessionResult result = await SendAsync(
             new GpuClockSessionRequest(GpuClockSessionOps.ReadBounds, domain, 0, false),
             cancellationToken).ConfigureAwait(false);
+        if (result.Bounds is { IsValid: true } discovered)
+        {
+            _cachedBounds[domain] = discovered;
+        }
+
         return result.Bounds;
     }
 

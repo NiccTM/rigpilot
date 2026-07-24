@@ -28,6 +28,7 @@ internal sealed class RemoteGpuFanCoolerTransport : IGpuFanCoolerTransport
 {
     private readonly GpuSessionHost _host;
     private readonly object _gate = new();
+    private volatile GpuFanBounds? _cachedBounds;
     private bool _armed;
     private bool _disposed;
 
@@ -70,6 +71,10 @@ internal sealed class RemoteGpuFanCoolerTransport : IGpuFanCoolerTransport
         {
             if (await transport.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true })
             {
+                // Bounds are now cached, and the resting state is disarmed, so drop the
+                // child again: an idle service should hold no NVAPI session and no
+                // extra process. The next write respawns it.
+                await transport._host.ReleaseAsync().ConfigureAwait(false);
                 return transport;
             }
         }
@@ -96,9 +101,20 @@ internal sealed class RemoteGpuFanCoolerTransport : IGpuFanCoolerTransport
             // arm/disarm). Block on the forward; the service has no synchronization
             // context so this cannot deadlock. On failure the state is still stored
             // and re-applied whenever the helper is next (re)started.
-            _ = SendAsync(new GpuFanSessionRequest(GpuFanSessionOps.SetArmed, "0", 0, armed), CancellationToken.None)
-                .GetAwaiter()
-                .GetResult();
+            if (armed)
+            {
+                _ = SendAsync(new GpuFanSessionRequest(GpuFanSessionOps.SetArmed, "0", 0, true), CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            else
+            {
+                // Disarmed is the resting state: drop the child rather than leaving an
+                // idle NVAPI session running. For the fan this also hands the cooler
+                // back to firmware, which is exactly the disarm contract — and the
+                // caller has already issued its restore before reaching here.
+                _host.ReleaseAsync().GetAwaiter().GetResult();
+            }
         }
         catch
         {
@@ -108,9 +124,22 @@ internal sealed class RemoteGpuFanCoolerTransport : IGpuFanCoolerTransport
 
     public async Task<GpuFanBounds?> ReadBoundsAsync(string channelId, CancellationToken cancellationToken)
     {
+        // Exact-device bounds are static, and a routine capability probe reads nothing
+        // else. Caching them is what lets the session child stay released while the
+        // family is disarmed instead of being respawned on every probe.
+        if (_cachedBounds is { IsValid: true } cached)
+        {
+            return cached;
+        }
+
         GpuFanSessionResult result = await SendAsync(
             new GpuFanSessionRequest(GpuFanSessionOps.ReadBounds, channelId, 0, false),
             cancellationToken).ConfigureAwait(false);
+        if (result.Bounds is { IsValid: true } discovered)
+        {
+            _cachedBounds = discovered;
+        }
+
         return result.Bounds;
     }
 

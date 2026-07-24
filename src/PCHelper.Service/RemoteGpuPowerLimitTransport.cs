@@ -20,6 +20,7 @@ internal sealed class RemoteGpuPowerLimitTransport : IGpuPowerLimitTransport
 {
     private readonly GpuSessionHost _host;
     private readonly object _gate = new();
+    private volatile GpuPowerLimitBounds? _cachedBounds;
     private bool _armed;
     private bool _disposed;
 
@@ -59,6 +60,9 @@ internal sealed class RemoteGpuPowerLimitTransport : IGpuPowerLimitTransport
         {
             if (await transport.ReadBoundsAsync("0", cancellationToken).ConfigureAwait(false) is { IsValid: true })
             {
+                // Bounds cached and the resting state is disarmed: drop the child so an
+                // idle service holds no NVAPI session. The next write respawns it.
+                await transport._host.ReleaseAsync().ConfigureAwait(false);
                 return transport;
             }
         }
@@ -80,9 +84,19 @@ internal sealed class RemoteGpuPowerLimitTransport : IGpuPowerLimitTransport
 
         try
         {
-            _ = SendAsync(new GpuPowerSessionRequest(GpuPowerSessionOps.SetArmed, "0", 0, armed), CancellationToken.None)
-                .GetAwaiter()
-                .GetResult();
+            if (armed)
+            {
+                _ = SendAsync(new GpuPowerSessionRequest(GpuPowerSessionOps.SetArmed, "0", 0, true), CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            else
+            {
+                // Disarmed is the resting state; drop the child rather than leaving an
+                // idle NVAPI session running. Power limits persist in the driver, so
+                // releasing changes no hardware state.
+                _host.ReleaseAsync().GetAwaiter().GetResult();
+            }
         }
         catch
         {
@@ -92,9 +106,21 @@ internal sealed class RemoteGpuPowerLimitTransport : IGpuPowerLimitTransport
 
     public async Task<GpuPowerLimitBounds?> ReadBoundsAsync(string channelId, CancellationToken cancellationToken)
     {
+        // Static vendor constraints, and a routine capability probe reads nothing else,
+        // so caching keeps the child released while the family is disarmed.
+        if (_cachedBounds is { IsValid: true } cached)
+        {
+            return cached;
+        }
+
         GpuPowerSessionResult result = await SendAsync(
             new GpuPowerSessionRequest(GpuPowerSessionOps.ReadBounds, channelId, 0, false),
             cancellationToken).ConfigureAwait(false);
+        if (result.Bounds is { IsValid: true } discovered)
+        {
+            _cachedBounds = discovered;
+        }
+
         return result.Bounds;
     }
 

@@ -91,6 +91,31 @@ internal sealed class GpuSessionHost : IDisposable
             ?? throw new InvalidDataException($"{_label} helper returned an empty result.");
     }
 
+    /// <summary>
+    /// Kills the child without disposing the host; the next send transparently
+    /// respawns it. Used to drop the NVAPI session while the family is disarmed, so
+    /// an idle service carries neither the session nor the child's ~30 MB.
+    /// </summary>
+    public async Task ReleaseAsync()
+    {
+        Process? doomed;
+        await _startGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            doomed = _process;
+            _process = null;
+        }
+        finally
+        {
+            _startGate.Release();
+        }
+
+        if (doomed is not null)
+        {
+            await TerminateAsync(doomed).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>Kills the child and brings up a fresh session.</summary>
     public async Task RecycleAsync(CancellationToken cancellationToken)
     {
