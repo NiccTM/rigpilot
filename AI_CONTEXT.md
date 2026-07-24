@@ -570,7 +570,7 @@ Version 1.0 is blocked by any unresolved BSOD, stuck fan, failed reset, unauthor
 
 ## Verification snapshot: 2026-07-16 (repo public; PresentMon, file sensors, Battle.net, nav localization)
 
-- **The repository is public: https://github.com/NiccTM/rigpilot** (user-directed, SignPath-track prerequisite). A pre-publication scan of all tracked files found no personal names, e-mail addresses, hostnames, secrets, or serials; the qualification ledger carries hardware-family identity only, by design. The full beta line (beta2→beta7) was committed and merged as PR #11.
+- **The repository is public: [NiccTM/rigpilot](https://github.com/NiccTM/rigpilot)** (user-directed, SignPath-track prerequisite). A pre-publication scan of all tracked files found no personal names, e-mail addresses, hostnames, secrets, or serials; the qualification ledger carries hardware-family identity only, by design. The full beta line (beta2→beta7) was committed and merged as PR #11.
 - **Intel PresentMon per-frame benchmark (user-session, optional external tool).** `PresentMonBenchmarkRecorder` implements the existing `IFrametimeBenchmarkRecorder` interface over the separately-installed MIT-licensed PresentMon console (never bundled or downloaded; discovery via `%ProgramFiles%\Intel\PresentMon`, PATH, or `PCHELPER_PRESENTMON_PATH`). One bounded passive ETW capture per session (PresentMon `--timed` plus a local watchdog), header-driven CSV parsing (1.x `msBetweenPresents` and 2.x `FrameTime`), and **true per-frame statistics** — the low figures are the mean rates of the slowest 1% / 0.1% of individual frames, complementing the honestly-labelled RTSS window-based benchmark. New user-agent IPC `StartPresentMonBenchmark` / `StopPresentMonBenchmark` / `GetPresentMonBenchmarkStatus` (service rejects them as wrong-execution-context), feature flag `presentmon-benchmark`, Games & tools card controls (`Games.StartPresentMonBenchmark` / `Games.StopPresentMonBenchmark` / `Games.PresentMonBenchmarkStatus`), THIRD_PARTY_NOTICES entry. 10 tests: per-frame math, both CSV header generations, malformed-row/pre-header refusals, dominant-process and explicit-pid selection, no-frames failure, missing-binary fail-safe without entering Running, invalid/concurrent rejection, and user-agent routing. No live PresentMon run yet (the tool is not installed); queued with the witnessed passes.
 - **File-backed sensor inputs (service, read-only, Fan Control parity).** `FileSensorAdapter` reads operator-declared numeric sensor files defined in `%ProgramData%\PCHelper\file-sensors.json` (re-read on timestamp change, no restart). Mandatory plausibility bounds and a staleness window gate every reading: stale → `Stale` with a null value (the cooling-graph stale path then commands maximum cooling), implausible/malformed → `Invalid`, missing/oversized/unreadable → `Unavailable`; the adapter **exposes zero capabilities** so nothing can ever be written through it. Registered in the service adapter list behind `TraceableHardwareAdapter`. 10 tests incl. no-capability invariant, stale/implausible/missing degradation, config hot-reload, invalid-definition warnings, and garbage-config fail-safe.
 - **Battle.net game scanning.** `GameStoreKind.BattleNet` + `ScanBattleNet`: detects installed games by their NGDP marker files (`.build.info` / `.flavor.info`) with an access-safe, depth- and count-bounded directory walk; skips the launcher's own directory; default dashboard roots added. GOG and Xbox scanning already existed. 2 new tests (marker detection incl. launcher/plain-folder exclusion; no-executable warning).
@@ -675,7 +675,7 @@ Version 1.0 is blocked by any unresolved BSOD, stuck fan, failed reset, unauthor
 
 - **iOS-style Slider template** (App.xaml): thin rounded track, accent-filled left side, round white thumb with soft drop shadow, 45% disabled opacity. Applies app-wide (GPU/fan/pump sliders).
 - **Native AURA lighting fully wired end-to-end**: `AuraUsbLightingWriter` (clean-room documented AURA addressable USB protocol, 65-byte 0xEC direct frames, VID 0x0B05/PID 0x18F3) → Adapter Host `--set-aura-rgb` → `ContainedAuraLighting` → IPC `SetAuraLighting` (Experimental + exact device `asus:aura-usb`) → Lighting-page "Apply to Aura board / off" buttons. **Live-verified earlier via the host child: WriteIssued on the real "AURA LED Controller".** No EEPROM/save; lighting registers only; contained.
-- **Razer Chroma — official documented REST SDK** (`ChromaRestClient`, http://localhost:54235/razer/chromasdk): the LEGAL native path for the Lian Li O11 Dynamic Razer Edition (enumerates as a Chroma ChromaLink device) plus any Razer keyboard/mouse/headset. POST app-info → session, PUT CHROMA_STATIC (BGR colour, brightness-scaled) to all six device categories, DELETE to release. User-session (localhost REST, like the OpenRGB bridge). "Apply to Razer Chroma" button on the Lighting page. Runs only while Razer Synapse + Chroma Connect is installed (absent on this PC today → clean failure message). 5 tests pin BGR packing, brightness scale, malformed-colour rejection, snake_case app-info payload, and the no-server path.
+- **Razer Chroma — official documented REST SDK** (`ChromaRestClient`, `http://localhost:54235/razer/chromasdk`): the LEGAL native path for the Lian Li O11 Dynamic Razer Edition (enumerates as a Chroma ChromaLink device) plus any Razer keyboard/mouse/headset. POST app-info → session, PUT CHROMA_STATIC (BGR colour, brightness-scaled) to all six device categories, DELETE to release. User-session (localhost REST, like the OpenRGB bridge). "Apply to Razer Chroma" button on the Lighting page. Runs only while Razer Synapse + Chroma Connect is installed (absent on this PC today → clean failure message). 5 tests pin BGR packing, brightness scale, malformed-colour rejection, snake_case app-info payload, and the no-server path.
 - **Zotac Spectra GPU RGB: deliberately NOT natively written.** It is undocumented I2C built into the GPU (Zotac ships only FireStorm); blind GPU-bus writes can hit VRM/EDID addresses. Under the documented-vendor-APIs-only rule it stays on the OpenRGB bridge / read-only. Recorded, not worked around.
 - Validation: 589 tests (314 core + 275 integration), 0 warnings, UI smoke green. beta24 published/validated; deploy user-declined (service still on the older Program Files image — the "service older than dashboard" write-lock in the UI is that mismatch, cleared by deploying beta24).
 
@@ -964,7 +964,6 @@ Driving the GPU-fan auto-mode buttons (Performance page: Silent / Balanced / Coo
 
 > **RESOLUTION (0.7.0, commit 6d4af3b).** The design note at the end of this section was built and verified live. The NVAPI fan session now runs in a dedicated child (`PCHelper.AdapterHost --gpu-fan-session`) behind `RemoteGpuFanCoolerTransport`; a refused restore escalates to killing that child, whose exit reclaims the fan. The live surprise: isolating the session in a low-traffic, fan-only process **also made the in-session restore succeed on its own** — the refusals were the rapid-call driver-session fragility of sharing the session with clock-offset reads and settle-poll bursts, not a hard per-process ownership wall. So the recycle is now a proven-safe fallback, not the common path. The investigation below is kept for the record; read the 2026-07-22 snapshot for the implemented shape and the live evidence.
 
-
 The RTX 3090 on this driver ties GPU fan ownership to the **owning process**, not the NVAPI
 session. Manual control can be taken but cannot be given back from inside the service. Every
 in-process release path was tried live and refused — do not re-derive this:
@@ -1065,6 +1064,7 @@ configuration under which release has ever been observed. `--dispose-before-exit
 probe to test precisely this. Do not conclude the design is dead until that has been run.
 
 **Three live hypotheses; do not pick one without testing.**
+
 1. *Session/token-bound.* Ownership is tied to the logon session or token. A LocalSystem session-0
    child would then behave like the service, and the design still works. Predicts logging off and
    back on releases the current stuck state.
@@ -1076,7 +1076,7 @@ probe to test precisely this. Do not conclude the design is dead until that has 
    non-driver clients only).
 3. *Owner-process-exit, service-specific for an unidentified reason.* Weakest, but not excluded.
 
-> ## RESOLVED 2026-07-20: the restore table was measuring the wrong variable. Restore works.
+> ## RESOLVED 2026-07-20: the restore table was measuring the wrong variable — restore works
 >
 > `--probe-gpu-fan-owner-restore 70`, run as **LocalSystem in session 0** from a clean `Automatic`
 > baseline (PID 7252, exit 0):
@@ -1096,7 +1096,7 @@ probe to test precisely this. Do not conclude the design is dead until that has 
 > six refusals in that table — is routinely *accepted*. The distinguishing variable is never
 > privilege and never the Ampere API-generation split.
 >
-> ## ⚠ THE "STALE HANDLE" ROOT CAUSE BELOW IS WRONG. Superseded — read the correction after the table.
+> ## ⚠ THE "STALE HANDLE" ROOT CAUSE BELOW IS WRONG — superseded, read the correction after the table
 >
 > Established by controlled comparison, 2026-07-20, with identity held constant (LocalSystem, session 0
 > on both sides):
@@ -1121,7 +1121,7 @@ probe to test precisely this. Do not conclude the design is dead until that has 
 > not build it. That conclusion still stands — it rests on the probe results, not on the discredited
 > stale-handle theory.
 >
-> ## CORRECTION — stale handle is NOT the cause. Fix built, deployed, and FAILED.
+> ## CORRECTION — stale handle is NOT the cause; fix built, deployed, and FAILED
 >
 > `RefreshGpuHandle()` (re-enumerate `PhysicalGPU` before restore) was implemented, published,
 > deployed as `0.5.5-alpha-20260720-175131`, and re-tested against the identical fixture (arm →
