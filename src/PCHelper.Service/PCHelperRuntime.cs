@@ -5818,17 +5818,26 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         ActionVerification verification,
         CancellationToken cancellationToken)
     {
-        if (capability.Range is not NumericRange range
-            || commandedDutyPercent >= range.Maximum - 1e-6
-            || verification.ObservedValue?.Numeric is not double observed
-            || observed > ZeroRpmIdleObservedCeilingPercent)
-        {
-            return false;
-        }
-
+        // Only reached when verification already failed, so the extra point lookup
+        // for the output's safety role is off the hot path.
         CoolingOutputAssignmentV1? assignment = await GetCoolingOutputAssignmentAsync(capability, cancellationToken).ConfigureAwait(false);
-        return assignment is not { IsSafetyCritical: true };
+        return IsAcceptableZeroRpmIdle(capability, commandedDutyPercent, verification, assignment);
     }
+
+    /// <summary>
+    /// The zero-RPM decision itself, kept pure so the pump/CPU-fan exclusion that
+    /// carries the safety guarantee is directly testable without a live store.
+    /// </summary>
+    internal static bool IsAcceptableZeroRpmIdle(
+        CapabilityDescriptor capability,
+        double commandedDutyPercent,
+        ActionVerification verification,
+        CoolingOutputAssignmentV1? assignment) =>
+        capability.Range is NumericRange range
+        && commandedDutyPercent < range.Maximum - 1e-6
+        && verification.ObservedValue?.Numeric is double observed
+        && observed <= ZeroRpmIdleObservedCeilingPercent
+        && assignment is not { IsSafetyCritical: true };
 
     private async Task RecoverCoolingGraphFailureAsync(
         ActiveCoolingGraphRuntime active,
