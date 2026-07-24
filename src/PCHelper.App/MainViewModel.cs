@@ -126,6 +126,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private AdapterCoordinator? _localCoordinator;
     private readonly DesktopOsdController _desktopOsd = new();
     private readonly Dictionary<string, Queue<SensorSample>> _liveSensorHistory = new(StringComparer.Ordinal);
+    // True until the window reports otherwise, so the snapshot host and a normal
+    // shown dashboard both build trends; a tray-hidden dashboard sets it false.
+    private bool _dashboardVisible = true;
+    private bool _monitoringRebuildDeferred;
     private readonly HashSet<string> _notifiedHealthAlertIds = new(StringComparer.Ordinal);
     private HardwareSnapshot? _snapshot;
     private ServiceStatus? _status;
@@ -3904,6 +3908,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         CurrentPageSubtitle = subtitle;
     }
 
+    /// <summary>
+    /// The window reports whether it is visible so the refresh loop can skip the
+    /// Overview-only trend rebuild while the dashboard sits hidden in the tray. On
+    /// becoming visible again the deferred rebuild is caught up exactly once, so the
+    /// trend the user sees is current rather than whatever it was when they minimised.
+    /// </summary>
+    public void SetDashboardVisible(bool visible)
+    {
+        if (_dashboardVisible == visible)
+        {
+            return;
+        }
+
+        _dashboardVisible = visible;
+        if (visible && _monitoringRebuildDeferred && _snapshot is not null)
+        {
+            UpdateMonitoringTrends();
+        }
+    }
+
     public async Task ApplyBuiltInAsync(string profileId)
     {
         if (_suiteProfilesById.TryGetValue(profileId, out ProfileV2? suiteProfile))
@@ -5448,6 +5472,20 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             }
         }
 
+        if (!_dashboardVisible)
+        {
+            // The trend widgets and comparison plot live only on the (visible)
+            // Overview page. While the dashboard is hidden in the tray — its normal
+            // resting state after a sign-in launch — rebuilding them renders to
+            // nothing: a SelectMany over the whole rolling buffer plus BuildTrends,
+            // every refresh tick, for no observer. The cheap history accumulation
+            // above still runs, so the trend is complete the moment the window is
+            // shown; only the build is deferred and caught up once in SetDashboardVisible.
+            _monitoringRebuildDeferred = true;
+            return;
+        }
+
+        _monitoringRebuildDeferred = false;
         string? selectedId = SelectedMonitoringTrend?.SensorId;
         string? healthSelectedId = SelectedHealthTrend?.SensorId;
         IReadOnlyList<SensorTrendV1> trends = MonitoringWorkspace.BuildTrends(

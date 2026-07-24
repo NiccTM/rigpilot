@@ -43,6 +43,10 @@ public partial class MainWindow : Window
         DataContext = viewModel;
         viewModel.OsdHotkeyChanged += OnOsdHotkeyChanged;
         _pages = [OverviewPage, ProfilesPage, CoolingPage, PerformancePage, LightingPage, AutomationPage, EcosystemPage, DevicesPage, DiagnosticsPage];
+        // Let the view model skip the Overview-only trend rebuild while the dashboard
+        // is hidden in the tray. Tray show/hide, --tray startup, and close-to-tray all
+        // surface here as visibility changes.
+        IsVisibleChanged += (_, e) => (DataContext as MainViewModel)?.SetDashboardVisible(e.NewValue is true);
         Closing += OnClosing;
         SourceInitialized += OnSourceInitialised;
         StyleComparisonPlot();
