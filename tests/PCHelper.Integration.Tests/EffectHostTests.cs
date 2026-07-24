@@ -8,12 +8,29 @@ namespace PCHelper.Integration.Tests;
 
 public sealed class EffectHostTests
 {
+    /// <summary>
+    /// The Effect Host rejects a watchdog outside 50-5000 ms, and these two tests assert
+    /// what an effect produces rather than how fast it produces it — so they take the whole
+    /// allowance. The previous 2000 ms was tuned on a warm workstation and tripped on a cold
+    /// CI runner ("Effect exceeded its 2000 ms watchdog"), which measured the runner rather
+    /// than the sandbox. <see cref="RunawayEffectTripsWatchdog"/> keeps its own tight budget,
+    /// because there the watchdog IS the assertion.
+    /// </summary>
+    private const int RenderWatchdogMilliseconds = 5000;
+
+    /// <summary>
+    /// Head-room for starting the host process and creating its WebView2 environment. That
+    /// work happens BEFORE the watchdog starts and is not what any of these tests measure,
+    /// so it gets a budget of its own instead of being folded into one fixed process wait.
+    /// </summary>
+    private static readonly TimeSpan HostStartupAllowance = TimeSpan.FromSeconds(90);
+
     [Fact]
     public async Task HashBoundEffectRendersInsideHostProcess()
     {
         EffectRenderResultV1 result = await RunHostAsync(
             "globalThis.render = input => input.leds.map((_, i) => ({ red: i + 1, green: 2, blue: 3 }));",
-            watchdogMilliseconds: 2000);
+            RenderWatchdogMilliseconds);
 
         Assert.True(result.Completed, result.Error);
         Assert.Equal(2, result.Colours.Count);
@@ -26,7 +43,7 @@ public sealed class EffectHostTests
     {
         EffectRenderResultV1 result = await RunHostAsync(
             "globalThis.render = async input => { try { await fetch('https://example.com/'); return input.leds.map(() => ({ red: 255, green: 0, blue: 0 })); } catch { return input.leds.map(() => ({ red: 0, green: 255, blue: 0 })); } };",
-            watchdogMilliseconds: 2000);
+            RenderWatchdogMilliseconds);
 
         Assert.True(result.Completed, result.Error);
         Assert.All(result.Colours, colour => Assert.Equal((byte)255, colour.Green));
@@ -97,7 +114,8 @@ public sealed class EffectHostTests
             Task<string> error = process.StandardError.ReadToEndAsync();
             try
             {
-                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+                await process.WaitForExitAsync().WaitAsync(
+                    HostStartupAllowance + TimeSpan.FromMilliseconds(watchdogMilliseconds));
             }
             catch (TimeoutException)
             {
