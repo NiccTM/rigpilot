@@ -675,22 +675,23 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                         ? cooling.Reason
                         : "Service is healthy; Verified controls and explicitly confirmed Experimental controls can be written.",
             RecoveryRequired: _rollbackBlocked,
-            HardwareControlArmed: IsHardwareControlFullyArmed(),
+            HardwareControlArmed: DescribeHardwareControlArm().FullyArmed,
             Cooling: cooling,
             ReleaseWritesLocked: !_releaseTrust.WritesAllowed,
-            WriteLockReason: _releaseTrust.WritesAllowed ? null : ReleaseTrustPolicy.WriteLockReason);
+            WriteLockReason: _releaseTrust.WritesAllowed ? null : ReleaseTrustPolicy.WriteLockReason,
+            HardwareControlArm: DescribeHardwareControlArm());
     }
 
-    private bool IsHardwareControlFullyArmed()
-    {
-        bool anyAvailable = _gpuFanTransport is not null
-            || _gpuPowerTransport is not null
-            || _gpuClockTransport is not null;
-        return anyAvailable
-            && (_gpuFanTransport is null || _gpuFanArmed)
-            && (_gpuPowerTransport is null || _gpuPowerArmed)
-            && (_gpuClockTransport is null || _gpuClockArmed);
-    }
+    /// <summary>
+    /// The per-family arm state, with null for a family that has no transport here. The
+    /// composite flag is derived from this rather than computed separately, so a reader who
+    /// arms one family can see exactly which families are still disarmed instead of only a
+    /// false that looks like a failed arm.
+    /// </summary>
+    private HardwareControlArmStateV1 DescribeHardwareControlArm() => new(
+        _gpuFanTransport is null ? null : _gpuFanArmed,
+        _gpuPowerTransport is null ? null : _gpuPowerArmed,
+        _gpuClockTransport is null ? null : _gpuClockArmed);
 
     private long CurrentRevision => checked((_engine?.Revision ?? 0) + Interlocked.Read(ref _suiteRevision));
 

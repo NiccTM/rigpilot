@@ -274,7 +274,32 @@ public sealed record ServiceStatus(
     bool HardwareControlArmed = false,
     CoolingRuntimeStatusV1? Cooling = null,
     bool ReleaseWritesLocked = false,
-    string? WriteLockReason = null);
+    string? WriteLockReason = null,
+    HardwareControlArmStateV1? HardwareControlArm = null);
+
+/// <summary>
+/// Per-family GPU arm state, where null means the family has no transport on this
+/// machine at all.
+///
+/// <see cref="ServiceStatus.HardwareControlArmed"/> is a single composite bool, so arming
+/// one family and reading it back reports false and looks like the arm failed. It did not:
+/// the flag demands every available family. Callers verifying one family should read this
+/// breakdown (or the capability states) instead.
+/// </summary>
+public sealed record HardwareControlArmStateV1(bool? GpuFan, bool? GpuPower, bool? GpuClock)
+{
+    [JsonIgnore]
+    public bool AnyAvailable => GpuFan is not null || GpuPower is not null || GpuClock is not null;
+
+    /// <summary>
+    /// True only when at least one family exists and no available family is disarmed. This
+    /// is the definition <see cref="ServiceStatus.HardwareControlArmed"/> carries, kept in
+    /// one place so the composite and the breakdown cannot drift apart.
+    /// </summary>
+    [JsonIgnore]
+    public bool FullyArmed =>
+        AnyAvailable && GpuFan is not false && GpuPower is not false && GpuClock is not false;
+}
 
 [JsonConverter(typeof(JsonStringEnumConverter<CoolingRuntimeState>))]
 public enum CoolingRuntimeState
