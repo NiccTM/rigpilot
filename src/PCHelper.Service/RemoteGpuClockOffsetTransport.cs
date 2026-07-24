@@ -93,6 +93,12 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
         {
             if (await transport.ReadBoundsAsync(GpuClockOffsetDomain.Core, cancellationToken).ConfigureAwait(false) is { IsValid: true })
             {
+                // Warm the memory domain too before releasing. Registration reads both
+                // domains' bounds, and a cache warmed for Core alone would respawn the
+                // child for Memory and leave it resident for the life of the service —
+                // exactly the idle cost this release exists to avoid.
+                _ = await transport.ReadBoundsAsync(GpuClockOffsetDomain.Memory, cancellationToken).ConfigureAwait(false);
+
                 // Bounds cached and the resting state is disarmed: drop the child so an
                 // idle service holds no NVAPI session. The next write respawns it.
                 await transport._host.ReleaseAsync().ConfigureAwait(false);
