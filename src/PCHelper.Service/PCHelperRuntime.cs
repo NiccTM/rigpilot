@@ -369,12 +369,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return Failure(request, "PUBLIC_PREVIEW_READ_ONLY", releaseRejection);
         }
 
-        if (IsMutatingCommand(request.Command) && _rollbackBlocked)
+        // ClearHardwareRecovery is deliberately exempt: it IS the explicit recovery
+        // path this lock points the operator at. Blocking it with the lock it exists
+        // to lift left the service permanently stuck, because nothing else ever
+        // clears the flag. It is still safe — it re-proves default state and refuses
+        // to clear the lock when any leased control fails read-back.
+        if (IsMutatingCommand(request.Command)
+            && _rollbackBlocked
+            && request.Command != IpcCommand.ClearHardwareRecovery)
         {
             return Failure(
                 request,
                 "RECOVERY_REQUIRED",
-                "Hardware writes are locked because the service could not prove a default state during recovery. Restart after correcting the adapter or driver fault; read-only IPC remains available.");
+                "Hardware writes are locked because the service could not prove a default state during recovery. Run 'pchelper-cli clear-recovery --confirm' to re-prove default state, or restart after correcting the adapter or driver fault; read-only IPC remains available.");
         }
 
         if (request.IdempotencyKey is string key && _idempotentResponses.TryGetValue(key, out IpcResponse? cached))
@@ -456,6 +463,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.AcknowledgeHealthAlert => await AcknowledgeHealthAlertAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.GetSafetyRecoveryStatus => Success(request, await GetSafetyRecoveryStatusAsync(cancellationToken).ConfigureAwait(false)),
                 IpcCommand.SetSafeMode => await SetSafeModeAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.ClearHardwareRecovery => await ClearHardwareRecoveryAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.GetHardwareEvidence => Success(request, await BuildHardwareEvidenceAsync(cancellationToken).ConfigureAwait(false)),
                 IpcCommand.GetCoolingQualificationReports => Success(request, await GetCoolingQualificationReportsAsync(cancellationToken).ConfigureAwait(false)),
                 IpcCommand.GetDeviceQualificationPlans => Success(request, DeviceQualificationPlanner.Build(GetSnapshot())),
@@ -5140,6 +5148,88 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             _safetyRecoveryState.Id,
             _safetyRecoveryState,
             cancellationToken).ConfigureAwait(false);
+        IncrementSuiteRevision();
+        return Success(request, await GetSafetyRecoveryStatusAsync(cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// The explicit-recovery escape hatch the failed-rollback rule promises: hardware
+    /// writes stay locked until an operator asks the service to re-prove default state.
+    ///
+    /// This re-runs exactly the restore-and-read-back the unclean-start path runs, and
+    /// clears the lock ONLY when every leased control verifies at its default (or when
+    /// the sole failure is the structurally-bounded GPU fan, matching the startup rule).
+    /// It never clears on the operator's assertion alone — a control that still cannot
+    /// prove default state is reported back and the lock stays on.
+    ///
+    /// Why this exists: nothing in the service ever set <c>_rollbackBlocked</c> back to
+    /// false, so one failed startup recovery locked every hardware write until the
+    /// failing control happened to verify on some later boot. On a card whose NVAPI
+    /// restore is refused from the service session that could be never, leaving the
+    /// suite permanently read-only with no operator route out.
+    /// </summary>
+    private async Task<IpcResponse> ClearHardwareRecoveryAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        ClearHardwareRecoveryRequestV1 payload = IpcJson.FromElement<ClearHardwareRecoveryRequestV1>(request.Payload)
+            ?? throw new InvalidDataException("ClearHardwareRecovery requires a ClearHardwareRecoveryRequestV1 payload.");
+        if (payload.SchemaVersion != ClearHardwareRecoveryRequestV1.CurrentSchemaVersion || !payload.ConfirmRecovery)
+        {
+            return Failure(
+                request,
+                "RECOVERY_NOT_CONFIRMED",
+                "Clearing the hardware write lock requires an explicit operator confirmation.");
+        }
+
+        if (!_rollbackBlocked)
+        {
+            return Success(request, await GetSafetyRecoveryStatusAsync(cancellationToken).ConfigureAwait(false));
+        }
+
+        ProfileTransaction? pending = await _store!.GetPendingAsync(cancellationToken).ConfigureAwait(false);
+        HardwareControlLeaseV1? lease = await _store.GetSuiteEntityAsync<HardwareControlLeaseV1>(
+            SuiteEntityKind.HardwareControlLease,
+            HardwareControlLeaseV1.DefaultId,
+            cancellationToken).ConfigureAwait(false);
+        HardwareStartupRecoveryPlan plan = HardwareControlRecoveryPlanner.BuildStartupPlan(lease, pending, null);
+
+        HardwareRecoveryResult recovery;
+        await _hardwareMutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            SetGpuTransportRecoveryGate(armed: true);
+            try
+            {
+                recovery = await _engine!.RestoreDefaultsAsync(plan.Controls, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                SetGpuTransportRecoveryGate(armed: false);
+                _gpuFanArmed = false;
+                _gpuPowerArmed = false;
+                _gpuClockArmed = false;
+            }
+        }
+        finally
+        {
+            _hardwareMutationGate.Release();
+        }
+
+        if (!recovery.AllDefaultsVerified && !OnlyGpuFanRecoveryFailed(recovery))
+        {
+            return FailureWithPayload(
+                request,
+                "RECOVERY_INCOMPLETE",
+                $"Default state could not be proven, so hardware writes stay locked: {string.Join("; ", recovery.Errors)}",
+                await GetSafetyRecoveryStatusAsync(cancellationToken).ConfigureAwait(false));
+        }
+
+        _rollbackBlocked = false;
+        if (pending is not null)
+        {
+            await _store.ClearPendingAsync(pending.Id, cancellationToken).ConfigureAwait(false);
+        }
+
+        ServiceLog.HardwareRecoveryCleared(logger);
         IncrementSuiteRevision();
         return Success(request, await GetSafetyRecoveryStatusAsync(cancellationToken).ConfigureAwait(false));
     }

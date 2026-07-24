@@ -317,6 +317,19 @@ public sealed record SetSafeModeRequestV1(
     public const int CurrentSchemaVersion = 1;
 }
 
+/// <summary>
+/// Operator request to re-prove default hardware state and lift the failed-rollback
+/// write lock. The service never clears the lock on this assertion alone: it re-runs
+/// the restore-and-read-back and clears only if every leased control verifies.
+/// </summary>
+public sealed record ClearHardwareRecoveryRequestV1(
+    int SchemaVersion,
+    bool ConfirmRecovery,
+    string Reason)
+{
+    public const int CurrentSchemaVersion = 1;
+}
+
 [JsonConverter(typeof(JsonStringEnumConverter<QualificationStepState>))]
 public enum QualificationStepState
 {

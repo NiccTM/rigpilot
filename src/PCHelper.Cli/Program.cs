@@ -42,6 +42,7 @@ internal static class Cli
                 "gpu-fan-state" => await ServiceCommandAsync<GpuFanStateV1>(IpcCommand.GetGpuFanState, json),
                 "gpu-fan-arm" => await SetGpuFanArmedAsync(args, json, arm: true),
                 "gpu-fan-disarm" => await SetGpuFanArmedAsync(args, json, arm: false),
+                "clear-recovery" => await ClearHardwareRecoveryAsync(args, json),
                 "gpu-power-arm" => await SetGpuPowerArmedAsync(args, json, arm: true),
                 "gpu-power-disarm" => await SetGpuPowerArmedAsync(args, json, arm: false),
                 "gpu-clock-arm" => await SetGpuClockArmedAsync(args, json, arm: true),
@@ -629,6 +630,27 @@ internal static class Cli
         Write(status, json, value => Console.WriteLine(
             $"GPU fan control: available={value.Available} armed={value.Armed} device={value.DeviceId}. {value.Message}"));
         return status.Available ? 0 : 3;
+    }
+
+    private static async Task<int> ClearHardwareRecoveryAsync(string[] args, bool json)
+    {
+        if (!HasFlag(args, "--confirm"))
+        {
+            Console.Error.WriteLine("clear-recovery requires --confirm.");
+            return 2;
+        }
+
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.ClearHardwareRecovery,
+            new ClearHardwareRecoveryRequestV1(
+                ClearHardwareRecoveryRequestV1.CurrentSchemaVersion,
+                true,
+                "Operator cleared the hardware write lock from the CLI."));
+        SafetyRecoveryStatusV1 status = IpcJson.FromElement<SafetyRecoveryStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(status, json, value => Console.WriteLine(
+            $"Hardware write lock: rollbackBlocked={value.RollbackBlocked}. {value.Guidance}"));
+        return status.RollbackBlocked ? 3 : 0;
     }
 
     private static async Task<int> SetGpuPowerArmedAsync(string[] args, bool json, bool arm)
@@ -1416,6 +1438,8 @@ internal static class Cli
                                                  Arm Experimental GPU fan control after exact-device acknowledgement.
             pchelper-cli gpu-fan-state [--json] Read live GPU fan policy and duty through the service. Read-only.
             pchelper-cli gpu-fan-disarm [--json] Disarm GPU fan control and restore the automatic curve.
+            pchelper-cli clear-recovery --confirm [--json]
+                                     Re-prove default hardware state and lift the failed-rollback write lock. The lock is cleared only if every leased control reads back at its default.
             pchelper-cli gpu-power-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU power-limit control after exact-device acknowledgement.
             pchelper-cli gpu-power-disarm [--json] Disarm GPU power-limit control and restore the vendor default limit.

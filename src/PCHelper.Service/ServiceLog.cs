@@ -37,6 +37,9 @@ internal static partial class ServiceLog
     [LoggerMessage(EventId = 2008, Level = LogLevel.Warning, Message = "GPU fan channel {Channel} could not be returned to the driver curve during disarm; the fan may remain under manual control.")]
     public static partial void GpuFanDisarmRestoreFailed(ILogger logger, string channel, Exception exception);
 
+    [LoggerMessage(EventId = 2010, Level = LogLevel.Information, Message = "An operator cleared the hardware write lock after every leased control re-proved its default state.")]
+    public static partial void HardwareRecoveryCleared(ILogger logger);
+
     [LoggerMessage(EventId = 2009, Level = LogLevel.Warning, Message = "Hardware-control family {Family} failed default-state reset and read-back: {Detail}")]
     public static partial void HardwareControlFamilyResetFailed(ILogger logger, string family, string detail);
 
