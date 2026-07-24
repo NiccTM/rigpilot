@@ -35,7 +35,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private IGpuPowerLimitTransport? _gpuPowerTransport;
     private IHardwareAdapter? _gpuPowerAdapter;
     private volatile bool _gpuPowerArmed;
-    private NvapiGpuClockOffsetTransport? _gpuClockTransport;
+    private IArmedGpuClockOffsetTransport? _gpuClockTransport;
     private IHardwareAdapter? _gpuClockCoreAdapter;
     private IHardwareAdapter? _gpuClockMemoryAdapter;
     private volatile bool _gpuClockArmed;
@@ -203,11 +203,24 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         // ever constructed or submitted. Registered only when the driver reports an
         // editable delta range for at least the core domain.
         _gpuClockArmed = false;
-        if (NvapiGpuClockOffsetTransport.TryCreate(0, enableWrites: true, out NvapiGpuClockOffsetTransport clockTransport, out _))
+        // Preferred: the NVAPI clock session isolated in its own quiet child process,
+        // for the same reason as the fan and power families — the refused clock writes
+        // (and the refused restore that latched RecoveryRequired) came from sharing one
+        // NVAPI session with the service's own rapid traffic. Falls back to the
+        // in-service transport when the helper cannot bind.
+        IArmedGpuClockOffsetTransport? clockTransport =
+            await RemoteGpuClockOffsetTransport.TryCreateAsync(cancellationToken).ConfigureAwait(false);
+        if (clockTransport is null
+            && NvapiGpuClockOffsetTransport.TryCreate(0, enableWrites: true, out NvapiGpuClockOffsetTransport inServiceClock, out _)
+            && inServiceClock.CanWrite)
         {
-            GpuClockOffsetBounds? coreBounds = clockTransport.CanWrite
-                ? await clockTransport.ReadBoundsAsync(GpuClockOffsetDomain.Core, cancellationToken).ConfigureAwait(false)
-                : null;
+            clockTransport = inServiceClock;
+        }
+
+        if (clockTransport is not null)
+        {
+            GpuClockOffsetBounds? coreBounds =
+                await clockTransport.ReadBoundsAsync(GpuClockOffsetDomain.Core, cancellationToken).ConfigureAwait(false);
             if (coreBounds is { IsValid: true })
             {
                 _gpuClockTransport = clockTransport;
@@ -4496,6 +4509,17 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     /// </summary>
     private static async Task<IGpuPowerLimitTransport?> SelectUsablePowerTransportAsync(CancellationToken cancellationToken)
     {
+        // Preferred: the NVAPI power session isolated in its own quiet child process.
+        // The in-service session is shared with sensor polling, fan settle-polls and
+        // clock reads, and that rapid-call traffic is what made the driver refuse
+        // power writes and default read-backs from the service. The helper also reads
+        // its own NVML milliwatt anchor, so no anchor is needed here.
+        if (await RemoteGpuPowerLimitTransport.TryCreateAsync(cancellationToken).ConfigureAwait(false)
+            is RemoteGpuPowerLimitTransport remote)
+        {
+            return remote;
+        }
+
         uint? defaultTdpMilliwatts = null;
         if (NvmlGpuPowerLimitTransport.TryCreate(enableWrites: false, out NvmlGpuPowerLimitTransport nvmlReader, out _))
         {

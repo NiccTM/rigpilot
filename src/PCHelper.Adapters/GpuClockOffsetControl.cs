@@ -55,6 +55,22 @@ public interface IGpuClockOffsetTransport
     Task RestoreOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// A clock transport that additionally owns an arm gate and a disposable session.
+/// The base seam deliberately excludes both — restores must never be arm-gated, and
+/// the safety-critical adapter is tested against a plain in-memory fake — so this is
+/// the narrower view the service uses to wire the arm keystone and dispose the
+/// session, without forcing either concern onto every implementation.
+/// </summary>
+public interface IArmedGpuClockOffsetTransport : IGpuClockOffsetTransport, IDisposable
+{
+    /// <summary>True when the transport exposes callable setters and can issue writes.</summary>
+    bool CanWrite { get; }
+
+    /// <summary>Arms or disarms live writes. Set only after an acknowledged operator action.</summary>
+    void SetArmed(bool armed);
+}
+
 /// <summary>Raised when a GPU clock-offset operation would violate a safety bound.</summary>
 public sealed class GpuClockSafetyException(string message) : InvalidOperationException(message);
 

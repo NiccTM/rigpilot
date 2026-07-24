@@ -1110,6 +1110,142 @@ if (args.Contains("--gpu-fan-session", StringComparer.OrdinalIgnoreCase))
     }
 }
 
+if (args.Contains("--gpu-power-session", StringComparer.OrdinalIgnoreCase))
+{
+    // Dedicated NVAPI power-limit session. Same reasoning as the fan helper: the
+    // refusals that made the service unable to prove a default power limit were the
+    // rapid-call fragility of one NVAPI session shared with everything else the
+    // service does. A quiet, power-only session removes that. The NVAPI power
+    // policy is expressed in PCM, so the milliwatt anchor is read from NVML here
+    // (NVML reads work on this class of card even though its setters are refused).
+    uint anchorMilliwatts = 0;
+    if (NvmlGpuPowerLimitTransport.TryCreate(enableWrites: false, out NvmlGpuPowerLimitTransport anchorReader, out _))
+    {
+        using (anchorReader)
+        {
+            if (await anchorReader.ReadBoundsAsync("0", CancellationToken.None) is { IsValid: true } anchorBounds)
+            {
+                anchorMilliwatts = anchorBounds.DefaultMilliwatts;
+            }
+        }
+    }
+
+    if (!NvApiGpuPowerLimitTransport.TryCreate(0, anchorMilliwatts, enableWrites: true, out NvApiGpuPowerLimitTransport sessionPower, out string powerBindMessage))
+    {
+        Console.Error.WriteLine($"GPU power session helper could not bind NVAPI: {powerBindMessage}");
+        Environment.Exit(3);
+    }
+
+    using CancellationTokenSource powerShutdown = new();
+    Console.CancelKeyPress += (_, cancelArgs) =>
+    {
+        cancelArgs.Cancel = true;
+        powerShutdown.Cancel();
+    };
+
+    NamedPipeRequestServer powerServer = new(
+        pipeName,
+        PowerSessionHandleAsync,
+        clientIdentityMode: NamedPipeClientIdentityMode.TokenAuthenticatedPrivateChannel);
+    Console.WriteLine("RigPilot GPU power session helper is running.");
+    using (sessionPower)
+    {
+        await powerServer.RunAsync(powerShutdown.Token);
+    }
+
+    return;
+
+    async Task<IpcResponse> PowerSessionHandleAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return request.Command switch
+            {
+                IpcCommand.Handshake => Handshake(request),
+                IpcCommand.AdapterShutdown => ShutdownPowerSession(request),
+                IpcCommand.GpuPowerSession => await HandlePowerSessionAsync(request, sessionPower, cancellationToken),
+                _ => Failure(request, "NOT_IMPLEMENTED", $"GPU power session helper does not implement {request.Command}.")
+            };
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Failure(request, "UNAUTHORIZED", "Adapter-host session token is invalid.");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Failure(request, "GPU_POWER_SESSION_ERROR", exception.Message);
+        }
+    }
+
+    IpcResponse ShutdownPowerSession(IpcRequest request)
+    {
+        _ = Unwrap<string>(request);
+        powerShutdown.Cancel();
+        return Success(request, "GPU power session helper is shutting down.");
+    }
+}
+
+if (args.Contains("--gpu-clock-session", StringComparer.OrdinalIgnoreCase))
+{
+    // Dedicated NVAPI clock-offset session, for the same isolation reason. Note the
+    // clock transport has no arm gate of its own — restores must never be blocked,
+    // because a refused restore is what drove the service into RecoveryRequired and
+    // then left it unable to restore. The adapter above still enforces arming.
+    if (!NvapiGpuClockOffsetTransport.TryCreate(0, enableWrites: true, out NvapiGpuClockOffsetTransport sessionClock, out string clockBindMessage))
+    {
+        Console.Error.WriteLine($"GPU clock session helper could not bind NVAPI: {clockBindMessage}");
+        Environment.Exit(3);
+    }
+
+    using CancellationTokenSource clockShutdown = new();
+    Console.CancelKeyPress += (_, cancelArgs) =>
+    {
+        cancelArgs.Cancel = true;
+        clockShutdown.Cancel();
+    };
+
+    NamedPipeRequestServer clockServer = new(
+        pipeName,
+        ClockSessionHandleAsync,
+        clientIdentityMode: NamedPipeClientIdentityMode.TokenAuthenticatedPrivateChannel);
+    Console.WriteLine("RigPilot GPU clock session helper is running.");
+    using (sessionClock)
+    {
+        await clockServer.RunAsync(clockShutdown.Token);
+    }
+
+    return;
+
+    async Task<IpcResponse> ClockSessionHandleAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return request.Command switch
+            {
+                IpcCommand.Handshake => Handshake(request),
+                IpcCommand.AdapterShutdown => ShutdownClockSession(request),
+                IpcCommand.GpuClockSession => await HandleClockSessionAsync(request, sessionClock, cancellationToken),
+                _ => Failure(request, "NOT_IMPLEMENTED", $"GPU clock session helper does not implement {request.Command}.")
+            };
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Failure(request, "UNAUTHORIZED", "Adapter-host session token is invalid.");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return Failure(request, "GPU_CLOCK_SESSION_ERROR", exception.Message);
+        }
+    }
+
+    IpcResponse ShutdownClockSession(IpcRequest request)
+    {
+        _ = Unwrap<string>(request);
+        clockShutdown.Cancel();
+        return Success(request, "GPU clock session helper is shutting down.");
+    }
+}
+
 using CancellationTokenSource shutdown = new();
 Console.CancelKeyPress += (_, eventArgs) =>
 {
@@ -1193,6 +1329,99 @@ async Task<IpcResponse> ReadSensorsAsync(IpcRequest request, CancellationToken c
 {
     _ = Unwrap<string>(request);
     return Success(request, await coordinator.Adapters[0].ReadSensorsAsync(cancellationToken));
+}
+
+async Task<IpcResponse> HandlePowerSessionAsync(
+    IpcRequest request,
+    NvApiGpuPowerLimitTransport power,
+    CancellationToken cancellationToken)
+{
+    GpuPowerSessionRequest payload = Unwrap<GpuPowerSessionRequest>(request);
+    switch (payload.Op)
+    {
+        case GpuPowerSessionOps.Ping:
+        case GpuPowerSessionOps.ReadBounds:
+        {
+            GpuPowerLimitBounds? bounds = await power.ReadBoundsAsync(payload.ChannelId, cancellationToken);
+            return Success(request, new GpuPowerSessionResult(bounds is not null, false, "bounds read", null, bounds));
+        }
+        case GpuPowerSessionOps.ReadState:
+        {
+            GpuPowerLimitState state = await power.ReadStateAsync(payload.ChannelId, cancellationToken);
+            return Success(request, new GpuPowerSessionResult(true, false, "state read", state, null));
+        }
+        case GpuPowerSessionOps.SetArmed:
+        {
+            power.SetArmed(payload.Armed);
+            return Success(request, new GpuPowerSessionResult(true, false, payload.Armed ? "armed" : "disarmed", null, null));
+        }
+        case GpuPowerSessionOps.SetLimit:
+        {
+            try
+            {
+                await power.SetPowerLimitAsync(payload.ChannelId, payload.Milliwatts, cancellationToken);
+                return Success(request, new GpuPowerSessionResult(true, false, $"{payload.Milliwatts} mW commanded", null, null));
+            }
+            catch (Exception exception) when (exception is GpuPowerSafetyException or InvalidOperationException)
+            {
+                // Report a driver refusal as data, not a fault, so the service can
+                // recycle this helper for a fresh NVAPI session and retry once.
+                return Success(request, new GpuPowerSessionResult(false, true, exception.Message, null, null));
+            }
+        }
+        default:
+            return Failure(request, "UNKNOWN_OP", $"Unknown GPU power session op '{payload.Op}'.");
+    }
+}
+
+async Task<IpcResponse> HandleClockSessionAsync(
+    IpcRequest request,
+    NvapiGpuClockOffsetTransport clock,
+    CancellationToken cancellationToken)
+{
+    GpuClockSessionRequest payload = Unwrap<GpuClockSessionRequest>(request);
+    switch (payload.Op)
+    {
+        case GpuClockSessionOps.Ping:
+        case GpuClockSessionOps.ReadBounds:
+        {
+            GpuClockOffsetBounds? bounds = await clock.ReadBoundsAsync(payload.Domain, cancellationToken);
+            return Success(request, new GpuClockSessionResult(bounds is not null, false, "bounds read", null, bounds));
+        }
+        case GpuClockSessionOps.ReadState:
+        {
+            GpuClockOffsetState state = await clock.ReadStateAsync(payload.Domain, cancellationToken);
+            return Success(request, new GpuClockSessionResult(true, false, "state read", state, null));
+        }
+        case GpuClockSessionOps.SetArmed:
+        {
+            clock.SetArmed(payload.Armed);
+            return Success(request, new GpuClockSessionResult(true, false, payload.Armed ? "armed" : "disarmed", null, null));
+        }
+        case GpuClockSessionOps.SetOffset:
+        case GpuClockSessionOps.RestoreOffset:
+        {
+            try
+            {
+                if (payload.Op == GpuClockSessionOps.RestoreOffset)
+                {
+                    await clock.RestoreOffsetAsync(payload.Domain, payload.OffsetKiloHertz, cancellationToken);
+                }
+                else
+                {
+                    await clock.SetOffsetAsync(payload.Domain, payload.OffsetKiloHertz, cancellationToken);
+                }
+
+                return Success(request, new GpuClockSessionResult(true, false, $"{payload.OffsetKiloHertz} kHz commanded", null, null));
+            }
+            catch (Exception exception) when (exception is GpuClockSafetyException or InvalidOperationException)
+            {
+                return Success(request, new GpuClockSessionResult(false, true, exception.Message, null, null));
+            }
+        }
+        default:
+            return Failure(request, "UNKNOWN_OP", $"Unknown GPU clock session op '{payload.Op}'.");
+    }
 }
 
 async Task<IpcResponse> HandleFanSessionAsync(

@@ -17,7 +17,7 @@ namespace PCHelper.Adapters;
 /// member that calls <c>SetPerformanceStates20</c>, and it proceeds only while
 /// the transport is explicitly armed (or the operator env opt-in is set).
 /// </summary>
-public sealed class NvapiGpuClockOffsetTransport : IGpuClockOffsetTransport, IDisposable
+public sealed class NvapiGpuClockOffsetTransport : IArmedGpuClockOffsetTransport
 {
     public const string WriteOptInEnvironmentVariable = "PCHELPER_GPUCLOCK_REAL_TRANSPORT";
 

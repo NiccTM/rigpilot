@@ -155,7 +155,9 @@ public enum IpcCommand
     AdapterVerifyDefault,
     AdapterVerifyRollback,
     GpuFanSession,
-    ClearHardwareRecovery
+    ClearHardwareRecovery,
+    GpuPowerSession,
+    GpuClockSession
 }
 
 public static class ProtocolConstants
