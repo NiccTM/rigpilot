@@ -3470,6 +3470,23 @@
                   </WrapPanel>
                 </StackPanel>
               </Border>
+              <Border Style="{StaticResource CardStyle}" automation:AutomationProperties.AutomationId="Diagnostics.Startup">
+                <StackPanel>
+                  <TextBlock Text="Startup" Style="{StaticResource CardTitleStyle}" />
+                  <TextBlock Text="Choose whether the RigPilot dashboard starts when you sign in to Windows. This is a per-user setting and needs no administrator rights. It starts only the dashboard and tray agent; the background service has its own startup policy."
+                             Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,12" />
+                  <CheckBox IsChecked="{Binding StartWithWindows, Mode=TwoWay}"
+                            IsEnabled="{Binding CanStartWithWindows}"
+                            ToolTipService.ShowOnDisabled="True"
+                            ToolTip="Portable mode deliberately leaves no machine configuration behind, so it cannot register a sign-in entry."
+                            automation:AutomationProperties.Name="Start RigPilot when I sign in to Windows"
+                            automation:AutomationProperties.AutomationId="Diagnostics.StartWithWindows">
+                    <TextBlock Text="Start RigPilot when I sign in" TextWrapping="Wrap" />
+                  </CheckBox>
+                  <TextBlock Text="RigPilot starts hidden in the notification area, so signing in does not open a dashboard window. Open it from the tray icon or press Ctrl+Shift+F12."
+                             Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                </StackPanel>
+              </Border>
             </local:AdaptiveUniformGrid>
           </StackPanel>
         </ScrollViewer>

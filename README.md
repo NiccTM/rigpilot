@@ -56,6 +56,7 @@ The current source line is `0.6.0-beta.1`. It includes service-owned transaction
 - SQLite state and bounded sensor-history storage under `%ProgramData%\PCHelper`.
 - Structured JSON service logs retained for seven days with a 50 MB cap.
 - Responsive, fully dark WPF dashboard with nine task-focused pages, Simple/Advanced Lab modes, searchable inventory, non-modal status feedback, keyboard navigation, and tray controls.
+- Optional per-user start-with-Windows setting on Diagnostics. It launches the dashboard at sign-in with `--tray`, needs no administrator rights, does not change the Windows service startup policy, and remains unavailable in portable mode.
 - Redacted compatibility report generation and opt-in report API.
 - Headless `pchelper-cli probe --json`, `pchelper-cli trace --json`, `pchelper-cli operation [--id OPERATION_ID] --json`, and `pchelper-cli runtime-preflight --json` diagnostics, including `--local` to bypass an installed service during development. `scripts\Export-CaseFanCalibrationEvidence.ps1` normalizes one exact completed calibration as local read-only evidence and refuses to promote a no-stall result to restart-qualified.
 

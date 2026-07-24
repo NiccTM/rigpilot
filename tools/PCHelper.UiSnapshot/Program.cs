@@ -469,7 +469,8 @@ internal static class Program
             "Devices.GrantTakeoverConsent",
             "Devices.ConfirmTakeover",
             "Devices.ExecuteTakeover",
-            "Devices.ReleaseOwnership"
+            "Devices.ReleaseOwnership",
+            "Diagnostics.StartWithWindows"
         ];
         string[] actionableHardwareControlIds =
         [

@@ -331,7 +331,74 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     /// stays disabled because <see cref="IsServiceOnline"/> can never become
     /// true. Set once at startup (via --portable) before InitialiseAsync.
     /// </summary>
-    public bool IsPortableMode { get; init; }
+    private bool _startWithWindows = WindowsStartupRegistration.IsEnabled();
+    private bool _isPortableMode;
+
+    public bool IsPortableMode
+    {
+        get => _isPortableMode;
+        init
+        {
+            _isPortableMode = value;
+            if (value)
+            {
+                _startWithWindows = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Offered only when the executable path is resolvable and this is not portable
+    /// mode — portable mode deliberately leaves no machine configuration behind, and a
+    /// sign-in entry is exactly that.
+    /// </summary>
+    public bool CanStartWithWindows => !IsPortableMode && WindowsStartupRegistration.IsSupported;
+
+    /// <summary>
+    /// "Start RigPilot when I sign in". Writes the per-user Windows Run entry directly,
+    /// then re-reads it so the switch reports what is actually registered rather than
+    /// what was requested. The Windows service is unaffected either way.
+    /// </summary>
+    public bool StartWithWindows
+    {
+        get => _startWithWindows;
+        set
+        {
+            if (!CanStartWithWindows)
+            {
+                if (_startWithWindows)
+                {
+                    _startWithWindows = false;
+                    OnPropertyChanged(nameof(StartWithWindows));
+                }
+
+                return;
+            }
+
+            if (_startWithWindows == value)
+            {
+                return;
+            }
+
+            try
+            {
+                WindowsStartupRegistration.SetEnabled(value);
+                _startWithWindows = WindowsStartupRegistration.IsEnabled();
+                ShowNotice(
+                    _startWithWindows
+                        ? "RigPilot will start in the notification area when you sign in."
+                        : "RigPilot will no longer start automatically when you sign in.",
+                    "Success");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _startWithWindows = WindowsStartupRegistration.IsEnabled();
+                ShowNotice($"Could not change the sign-in startup setting: {exception.Message}", "Warning");
+            }
+
+            OnPropertyChanged(nameof(StartWithWindows));
+        }
+    }
 
     public MainViewModel()
     {
