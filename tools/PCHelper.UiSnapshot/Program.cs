@@ -55,6 +55,11 @@ internal static class Program
             return RunAutomationSmoke(reportPath);
         }
 
+        if (args.FirstOrDefault()?.Equals("--measure-pages", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return RunPageManagedHeapMeasurement();
+        }
+
         string outputDirectory = Path.GetFullPath(args.FirstOrDefault()
             ?? Path.Combine(AppContext.BaseDirectory, "ui-snapshots"));
         Directory.CreateDirectory(outputDirectory);
@@ -159,6 +164,66 @@ internal static class Program
 
         _ = application.Run(window);
         return result;
+    }
+
+    /// <summary>
+    /// Measures the managed-heap cost of realizing each page's visual tree, so the
+    /// footprint saving from deferring a page until first navigation is a number rather
+    /// than a guess. Reports the settled heap after the window is built (pages that are
+    /// still inline are already resident; deferred pages are not), then the marginal cost
+    /// of navigating to each page in turn. Managed heap is not the whole working set, but
+    /// it is the reproducible part that lazy realization actually defers.
+    /// </summary>
+    private static int RunPageManagedHeapMeasurement()
+    {
+        using MainViewModel viewModel = new();
+        try
+        {
+            viewModel.InitialiseAsync(startAutomaticRefresh: false).GetAwaiter().GetResult();
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine(exception);
+            return 1;
+        }
+
+        PCHelper.App.App application = new() { SuppressProductStartup = true };
+        application.InitializeComponent();
+        application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        MainWindow window = new(viewModel)
+        {
+            Width = DefaultRenderWidth,
+            Height = DefaultRenderHeight,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            ShowActivated = false,
+            ShowInTaskbar = false
+        };
+        application.MainWindow = window;
+        ListBox navigation = (ListBox)(window.FindName("Navigation")
+            ?? throw new InvalidOperationException("The navigation list could not be located."));
+
+        long baseline = SettledHeapBytes();
+        Console.WriteLine($"window built (page 0), deferred pages not realized: {baseline / 1024.0 / 1024.0:0.00} MB managed heap");
+        long previous = baseline;
+        for (int page = 1; page < PageNames.Length; page++)
+        {
+            navigation.SelectedIndex = page;
+            window.UpdateLayout();
+            long now = SettledHeapBytes();
+            Console.WriteLine($"  navigate -> {PageNames[page],-12} marginal {(now - previous) / 1024.0:+0;-0} KB   total {now / 1024.0 / 1024.0:0.00} MB");
+            previous = now;
+        }
+
+        application.Shutdown();
+        return 0;
+    }
+
+    private static long SettledHeapBytes()
+    {
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        return GC.GetTotalMemory(forceFullCollection: true);
     }
 
     private static int RunAutomationSmoke(string reportPath)
