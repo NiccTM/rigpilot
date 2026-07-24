@@ -46,8 +46,19 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
                         new GpuClockSessionRequest(GpuClockSessionOps.SetArmed, GpuClockOffsetDomain.Core, 0, true),
                         cancellationToken).ConfigureAwait(false);
                 }
-            });
+            },
+            IdleSessionTimeout);
     }
+
+    /// <summary>
+    /// Same reasoning as the power helper: release-on-disarm assumed disarmed was the
+    /// resting state, and automatic arming made it permanently resident instead. Clock
+    /// offsets persist in the driver, so dropping an armed-but-idle session changes no
+    /// hardware state and the next write brings it back with the armed flag re-applied.
+    /// The fan helper deliberately has no idle timeout — releasing it returns the cooler
+    /// to firmware.
+    /// </summary>
+    private static readonly TimeSpan IdleSessionTimeout = TimeSpan.FromMinutes(2);
 
     public bool CanWrite => !_disposed;
 

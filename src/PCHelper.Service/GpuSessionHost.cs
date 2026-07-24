@@ -34,6 +34,10 @@ internal sealed class GpuSessionHost : IDisposable
     private readonly SemaphoreSlim _startGate = new(1, 1);
     private readonly ChildProcessJob _job = new();
     private readonly object _gate = new();
+    private readonly TimeSpan? _idleTimeout;
+    private readonly Timer? _idleTimer;
+    private long _lastActivityTimestamp = Stopwatch.GetTimestamp();
+    private int _inFlight;
     private Process? _process;
     private bool _disposed;
 
@@ -45,16 +49,41 @@ internal sealed class GpuSessionHost : IDisposable
     /// must use <see cref="SendOnCurrentSessionAsync"/>; calling <see cref="SendAsync"/>
     /// would re-enter the start gate and deadlock.
     /// </param>
+    /// <param name="idleTimeout">
+    /// When set, an inactive child is dropped after this long and respawned transparently
+    /// on the next send. Pass it ONLY for families whose hardware state persists in the
+    /// driver — power and clock. The fan must never use it: releasing that child hands the
+    /// cooler back to firmware, which is correct on disarm but would silently abandon an
+    /// applied manual duty or a running cooling graph.
+    /// </param>
     public GpuSessionHost(
         string modeArgument,
         string label,
-        Func<GpuSessionHost, CancellationToken, Task>? onSessionStarted = null)
+        Func<GpuSessionHost, CancellationToken, Task>? onSessionStarted = null,
+        TimeSpan? idleTimeout = null)
     {
         _modeArgument = modeArgument;
         _label = label;
         _onSessionStarted = onSessionStarted;
+        _idleTimeout = idleTimeout;
         _pipeName = $"{ProtocolConstants.AdapterHostPipeName}.{modeArgument.TrimStart('-')}.{Environment.ProcessId}.{Guid.NewGuid():N}";
+        if (idleTimeout is TimeSpan timeout)
+        {
+            // Polling at half the timeout bounds the overshoot to 50% without a timer per
+            // send. The callback is cheap when nothing is resident.
+            TimeSpan period = TimeSpan.FromMilliseconds(Math.Max(1000, timeout.TotalMilliseconds / 2));
+            _idleTimer = new Timer(_ => ReleaseIfIdle(), null, period, period);
+        }
     }
+
+    /// <summary>
+    /// Whether an idle session may be dropped right now. Kept pure and separate from the
+    /// process work so the rule that protects an in-flight operation is directly testable.
+    /// </summary>
+    internal static bool ShouldReleaseIdleSession(int inFlight, TimeSpan idleFor, TimeSpan? idleTimeout) =>
+        idleTimeout is TimeSpan timeout
+        && inFlight == 0
+        && idleFor >= timeout;
 
     public bool IsDisposed => _disposed;
 
@@ -65,8 +94,58 @@ internal sealed class GpuSessionHost : IDisposable
         CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        await EnsureAsync(cancellationToken).ConfigureAwait(false);
-        return await SendOnCurrentSessionAsync<TPayload, TResult>(command, payload, cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _inFlight);
+        try
+        {
+            Volatile.Write(ref _lastActivityTimestamp, Stopwatch.GetTimestamp());
+            await EnsureAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await SendOnCurrentSessionAsync<TPayload, TResult>(command, payload, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (_idleTimeout is not null && exception is IOException or TimeoutException)
+            {
+                // Idle release and a send can only interleave in a very small window, but
+                // the cost of losing that race must not be a surfaced error: the session is
+                // respawnable by design and the child holds no state the service cannot
+                // re-apply. Rebuild it once and retry, exactly as a refused write does.
+                await RecycleAsync(cancellationToken).ConfigureAwait(false);
+                return await SendOnCurrentSessionAsync<TPayload, TResult>(command, payload, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref _lastActivityTimestamp, Stopwatch.GetTimestamp());
+            Interlocked.Decrement(ref _inFlight);
+        }
+    }
+
+    /// <summary>
+    /// Drops the child when nothing has used it for the configured idle timeout. Runs on a
+    /// timer thread, so it never throws: a failed release simply leaves the child resident
+    /// until the next tick.
+    /// </summary>
+    private void ReleaseIfIdle()
+    {
+        if (_disposed || _process is null)
+        {
+            return;
+        }
+
+        TimeSpan idleFor = Stopwatch.GetElapsedTime(Volatile.Read(ref _lastActivityTimestamp));
+        if (!ShouldReleaseIdleSession(Volatile.Read(ref _inFlight), idleFor, _idleTimeout))
+        {
+            return;
+        }
+
+        try
+        {
+            ReleaseAsync(requireIdle: true).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Best effort; the next tick retries and the child job object is the backstop.
+        }
     }
 
     /// <summary>Sends without ensuring the child — the caller guarantees it is up.</summary>
@@ -96,7 +175,14 @@ internal sealed class GpuSessionHost : IDisposable
     /// respawns it. Used to drop the NVAPI session while the family is disarmed, so
     /// an idle service carries neither the session nor the child's ~30 MB.
     /// </summary>
-    public async Task ReleaseAsync()
+    public Task ReleaseAsync() => ReleaseAsync(requireIdle: false);
+
+    /// <param name="requireIdle">
+    /// Set by the idle timer, which must not kill a child that a send has claimed since the
+    /// timer decided to. The re-check happens after the process is detached and restores it
+    /// on a lost race, so the only outcome is a skipped release rather than a broken send.
+    /// </param>
+    private async Task ReleaseAsync(bool requireIdle)
     {
         Process? doomed;
         await _startGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -104,6 +190,11 @@ internal sealed class GpuSessionHost : IDisposable
         {
             doomed = _process;
             _process = null;
+            if (requireIdle && doomed is not null && Volatile.Read(ref _inFlight) != 0)
+            {
+                _process = doomed;
+                return;
+            }
         }
         finally
         {
@@ -253,6 +344,7 @@ internal sealed class GpuSessionHost : IDisposable
         }
 
         _disposed = true;
+        _idleTimer?.Dispose();
 
         Process? process;
         lock (_gate)

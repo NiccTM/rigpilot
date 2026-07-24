@@ -44,8 +44,19 @@ internal sealed class RemoteGpuPowerLimitTransport : IGpuPowerLimitTransport
                         new GpuPowerSessionRequest(GpuPowerSessionOps.SetArmed, "0", 0, true),
                         cancellationToken).ConfigureAwait(false);
                 }
-            });
+            },
+            IdleSessionTimeout);
     }
+
+    /// <summary>
+    /// Releasing on disarm assumed disarmed was the resting state. It no longer is: hardware
+    /// control defaults on and the dashboard arms on every connect, so the helper became
+    /// permanently resident and the memory that release was written to reclaim came back.
+    /// An armed-but-idle session is dropped instead, because a power limit persists in the
+    /// driver — releasing changes no hardware state, and the next write respawns the child
+    /// through the existing ensure-on-send path with the armed flag re-applied.
+    /// </summary>
+    private static readonly TimeSpan IdleSessionTimeout = TimeSpan.FromMinutes(2);
 
     public bool CanWrite => !_disposed;
 
