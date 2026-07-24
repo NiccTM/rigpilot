@@ -12,7 +12,7 @@ or hardware-test blocker; Intel CPU undervolt is largely **infeasible** under VB
 
 ## A. CPU tuning (AMD Zen + Intel)
 
-- **PawnIO.Modules** — https://github.com/namazso/PawnIO.Modules — **GPL-2.0-or-later**,
+- **PawnIO.Modules** — <https://github.com/namazso/PawnIO.Modules> — **GPL-2.0-or-later**,
   signed PawnIO driver — **PASS**. Beyond the `RyzenSMU.p` already used, it ships 13
   modules: `IntelMsr` (Intel CPU MSR), SMBus (`SmbusI801`, AMD PIIX4, Skylake IMC),
   `LpcIO`/Super-I/O, and an EC module. Unlocks read-only Intel telemetry, **SMBus access
@@ -27,13 +27,13 @@ or hardware-test blocker; Intel CPU undervolt is largely **infeasible** under VB
 
 ## B. GPU control / telemetry
 
-- **AMD ADLX** — https://github.com/GPUOpen-LibrariesAndSDKs/ADLX — license is a custom
+- **AMD ADLX** — <https://github.com/GPUOpen-LibrariesAndSDKs/ADLX> — license is a custom
   **"ADLX SDK License Agreement.pdf"**, NOT a standard OSI/MIT license. **Needs a GPL-3.0
   compatibility review before integration.** C# via SWIG-generated bindings. Read-only
   telemetry + tuning with read-back. Build the read-only feasibility detector (mirror
   `IntelGraphicsControlAdapter`) but do not link ADLX until the license clears and an AMD
   GPU is available. Effort M.
-- **Intel IGCL** — https://github.com/intel/drivers.gpu.control-library — MIT headers, no
+- **Intel IGCL** — <https://github.com/intel/drivers.gpu.control-library> — MIT headers, no
   official C# wrapper (P/Invoke `ctlInit`, version-tagged structs, 64-bit). Finish on an
   Arc system. Effort M–L.
 - **NVAPI/NVML (already integrated)** — `NvAPIWrapper` (LGPL-3.0) already exposes
@@ -41,11 +41,11 @@ or hardware-test blocker; Intel CPU undervolt is largely **infeasible** under VB
 
 ## C. AIO / USB coolers
 
-- **liquidctl** — https://github.com/liquidctl/liquidctl — **GPLv3** (compatible) but
+- **liquidctl** — <https://github.com/liquidctl/liquidctl> — **GPLv3** (compatible) but
   **Python**: not linkable into the C# service. Value is the documented per-device HID
   protocols (pump/fan duty + RPM read + safe defaults) to **clean-room** a contained HID
   transport, or shell out to `liquidctl.exe` (see
-  https://github.com/jmarucha/FanControl.Liquidctl). Keep pump zero-RPM BLOCKED; run behind
+  <https://github.com/jmarucha/FanControl.Liquidctl>). Keep pump zero-RPM BLOCKED; run behind
   the Adapter Host. Effort L; risk: per-device protocol variance, native crash containment.
 - **Concrete starting point (2026-07-15):** the new read-only HID inventory
   (`pchelper-cli discover-hid`) already **detects the reference NZXT AIO** on the reference
@@ -59,7 +59,7 @@ or hardware-test blocker; Intel CPU undervolt is largely **infeasible** under VB
 
 ## D. RGB / lighting (beyond OpenRGB)
 
-- **RGB.NET** — https://github.com/DarthAffe/RGB.NET — **LGPL-2.1-only** (compatible),
+- **RGB.NET** — <https://github.com/DarthAffe/RGB.NET> — **LGPL-2.1-only** (compatible),
   C#/.NET native. Several providers wrap proprietary vendor daemons (iCUE/Aura) that must
   run — not offline. Use only the open-protocol providers; treat SDK-backed ones as
   inventory-only. Effort M.
@@ -69,7 +69,7 @@ or hardware-test blocker; Intel CPU undervolt is largely **infeasible** under VB
 
 ## E. Peripherals (HID)
 
-- **HidSharp (IntergatedCircuits fork)** — https://github.com/IntergatedCircuits/HidSharp
+- **HidSharp (IntergatedCircuits fork)** — <https://github.com/IntergatedCircuits/HidSharp>
   — **Apache-2.0** (compatible), maintained. Adds HID-level detail (usage pages, product
   strings, LampArray/keyboard/mouse/AIO-LCD classification) beyond the current WMI/PnP
   inventory. HID enumeration should still run behind the Adapter Host (native crash
@@ -77,7 +77,7 @@ or hardware-test blocker; Intel CPU undervolt is largely **infeasible** under VB
 
 ## F. OSD + capture
 
-- **RTSSSharedMemoryNET** — https://github.com/spencerhakim/RTSSSharedMemoryNET —
+- **RTSSSharedMemoryNET** — <https://github.com/spencerhakim/RTSSSharedMemoryNET> —
   **LGPL-3.0** (compatible), C#. Reads RTSS data and writes OSD text via shared memory —
   **no injection** (RTSS hooks). Best fit for read-only-first OSD (user agent). Effort S.
 - **ScreenCapture.NET** (DarthAffe) — MIT, DXGI Desktop Duplication, no injection; best for

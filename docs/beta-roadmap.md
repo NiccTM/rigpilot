@@ -56,6 +56,7 @@ hardware qualified, never the standard of proof.
 ## Workstream A — Cooling: beat Fan Control outright
 
 Beta:
+
 - Physical header identification on the X570-E (witnessed pulses, `PhysicalHeaderObserved`),
   full stall/restart characterisation or measured non-stopping floors per header.
 - Live cooling-graph runtime through profile transactions (already built in source): activation,
@@ -65,6 +66,7 @@ Beta:
   liquidctl protocol reader (GPL-3-compatible, attributed) in the contained Adapter Host child.
 
 0.6–0.8:
+
 - Visual node/curve editor parity: graph, linear, trigger, flat, sync, and feedback curve types
   (engine already supports most), drag-editable points, template/duplicate library, per-curve
   preview against recorded traces.
@@ -80,12 +82,14 @@ Beta:
 ## Workstream B — GPU: beat Afterburner / Precision X1
 
 Beta:
+
 - NVML power-limit adapter (100–385 W bounds already discovered) with prepare/apply/verify/
   rollback/reset, arm-gated.
 - NVAPI core/memory clock-offset adapter within driver-exposed bounds, Experimental,
   session-only, never persisted at boot. Fix NvAPIWrapper policy read-back first.
 
 0.6–0.8:
+
 - ~~GPU core/memory clock offsets~~ **shipped 2026-07-15** (public-SDK NVAPI pstates20, arm-gated,
   read-only-verified live on the reference RTX 3090: core ±1000 MHz, memory −1000/+3000 MHz).
 - **VF curve editor / OC Scanner: DEFERRED BY POLICY (audited 2026-07-15).** The per-point VF
@@ -107,6 +111,7 @@ Beta:
 ## Workstream C — CPU: careful but real
 
 Beta:
+
 - ~~PawnIO 2.2 signed + RyzenSMU module (Zen 1–4 incl. 5800X): read-only SMU telemetry~~
   **live 2026-07-15**: the user installed the signed PawnIO driver, and LibreHardwareMonitorLib
   0.9.6 (already shipped) loads its embedded `RyzenSMU.bin`/`AMDFamily17.bin` modules through it.
@@ -115,6 +120,7 @@ Beta:
   CPU/SMU writes remain Blocked as before — telemetry only.
 
 0.6–0.8:
+
 - Ryzen PBO limits (PPT/TDC/EDC) as the first CPU write family: bounded, vendor-documented
   ranges, mailbox read-back, guaranteed stock reset, boot-recovery revert sentinel — the full
   gate from `docs/qualification/cpu-tuning-and-intel-arc.md`.
@@ -129,11 +135,13 @@ Beta:
 ## Workstream D — Lighting: beat Armoury Crate / RGB Fusion / SignalRGB
 
 Beta:
+
 - OpenRGB bridge bumped to the 1.0 protocol (v4 plugin/SDK API), physical pass against real
   controllers; Windows Dynamic Lighting physical LampArray pass.
 - USB/HID peripheral inventory re-enabled everywhere via the crash-contained discovery child.
 
 0.6–0.8:
+
 - **Native board RGB, one family at a time**: ASUS Aura SMBus first (this board), then ASRock
   Polychrome (SMBus), then Gigabyte RGB Fusion — each as an Adapter Host adapter with
   containment, static-scene read-back, reset, unplug, and recovery evidence. MSI Mystic Light
@@ -152,6 +160,7 @@ Beta:
 ## Workstream E — Peripherals & devices: beat iCUE/CAM device pages
 
 0.6–0.9:
+
 - Signed `.pcha` device packs gain HID write capability classes: DPI stages, polling rate,
   onboard profile slots, battery/charge telemetry, headset sidetone — one exact device at a
   time, contained, with read-back where the protocol allows.
@@ -166,11 +175,13 @@ Beta:
 ## Workstream F — Monitoring, OSD, capture: beat CAM/Afterburner overlays
 
 Beta:
+
 - ScreenRecorderLib (MIT) WGC + Media Foundation H.264/WASAPI recording behind picker consent.
 - RTSS shared-memory client: publish RigPilot's curated sensor line into the RTSS OSD (the
   overlay gamers already trust); RigPilot's own non-injecting OSD stays default.
 
 0.6–0.8:
+
 - Frametime/FPS statistics read from RTSS shared memory (1%/0.1% lows) into monitoring +
   per-game session summaries; benchmark-run capture (start/stop, CSV/JSON export).
 - HWiNFO-class sensor tree view with per-sensor min/avg/max, logging profiles, and alert rules
@@ -180,6 +191,7 @@ Beta:
 ## Workstream G — Games & automation
 
 0.6–0.8:
+
 - GOG/Xbox/Battle.net manifest coverage added to Steam/Epic scanning; artwork via local files
   only (no metadata download, per privacy rule).
 - Game mode: foreground-game trigger applies the per-game bundle (profile + scene + macro +
@@ -189,6 +201,7 @@ Beta:
 ## Workstream H — Updates & system care: beat vendor-suite updaters
 
 0.8–1.0:
+
 - Driver update discovery per exact PnP device against vendor catalogs (user-process network
   only), staged-INF validated executor (built) exercised on real packages, OEM rollback export.
 - BIOS/firmware: discovery + download + integrity check + hand-off to the vendor's own flasher
@@ -198,6 +211,7 @@ Beta:
 ## Workstream I — Platform, ecosystem, distribution
 
 Beta:
+
 - SignPath Foundation (free OSS OV signing, HSM-held) or Azure Artifact Signing ($9.99/mo)
   wired into `publish.ps1`/`build-installer.ps1`; signed alpha → beta pipeline, signed Game Bar
   MSIX, signed takeover-executor live tests.
@@ -205,6 +219,7 @@ Beta:
 - Close the 24-hour soak; working-set reduction pass (target < 300 MB beta, < 250 MB by 1.0).
 
 0.9–1.0:
+
 - **Adapter-pack SDK**: public docs + templates + a pack-signing flow (enroll the production
   Ed25519 publisher key; community packs signed after automated containment tests) — this is
   the moat none of the vendor suites can copy.
@@ -299,7 +314,7 @@ telemetry on real hardware, live PBO/CO writes, auto-update delivery, report-api
 
 ### Addendum — 2026-07-16 (evening): repo public; open-source-informed feature slice
 
-The repository is **public at https://github.com/NiccTM/rigpilot** (SignPath Foundation
+The repository is **public at [NiccTM/rigpilot](https://github.com/NiccTM/rigpilot)** (SignPath Foundation
 prerequisite satisfied; the signing-route decision itself is still open: SignPath free/OSS vs
 Azure Trusted Signing ~$9.99/mo). An ecosystem research pass (2026-07-16) reshaped the pure-code
 tail; shipped this slice (suite 542 tests, 0 warnings):

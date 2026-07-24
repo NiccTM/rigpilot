@@ -21,6 +21,7 @@ Work the phases in order. Each numbered step is one sitting; stop and ask whenev
 step needs my hands, my money, or my decision.
 
 ## Phase 1 — Witnessed live passes (I'm at the machine; record each as an AI_CONTEXT snapshot)
+
 1. Kraken X3 telemetry with NZXT CAM fully closed (`Devices → Read cooler status`).
    AccessDenied with CAM open is the designed result, not a failure.
 2. One small arm-gated write per GPU family — fan duty, power limit, clock offset:
@@ -34,6 +35,7 @@ step needs my hands, my money, or my decision.
 
 ## Phase 2 — Code signing (the keystone; nothing else on this list matters until it's picked)
 Present the two routes with current pricing, then execute my choice:
+
 - **SignPath Foundation** — free for OSS, requires the repo public on GitHub.
 - **Azure Trusted Signing** — ~$9.99/mo, repo stays private.
 Then: wire signing into `publish.ps1`/`build-installer.ps1`, produce the first signed
