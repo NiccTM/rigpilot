@@ -5809,8 +5809,20 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     /// maximum/emergency command must physically move any fan. This tolerance lives only
     /// in the running cooling loop; the commissioning/calibration paths keep their strict
     /// stop-and-restart verification, so enabling a true zero-RPM curve point is unchanged.
-    /// The GPU fan reaches its own zero-RPM acceptance inside its adapter, so it never
-    /// gets here; this covers the motherboard case-fan outputs.
+    ///
+    /// Which outputs actually reach this, verified by reading the adapters rather than
+    /// assumed: in practice it is the GPU fan, NOT the case fans. The GPU adapter's own
+    /// acceptance requires valid bounds (<c>NvidiaGpuFanAdapter.IsAcceptableZeroRpmIdle</c>),
+    /// so when a bounds read comes back unavailable it reports a plain 0% mismatch and this
+    /// is the backstop that keeps the tick alive, using the capability's own range maximum
+    /// as the ceiling. The motherboard case-fan path is currently unreachable: LibreHardware-
+    /// Monitor verifies <c>control.SoftwareValue</c> — the value it just wrote — so a
+    /// physically stopped header still reads back its commanded duty, and its only failure
+    /// modes (mode no longer Software, or a throwing read) either observe the commanded
+    /// value or observe nothing, neither of which this excuses. It is kept because that is a
+    /// property of one adapter's verification, not a guarantee of the cooling loop, and the
+    /// safety-critical exclusion below must hold on the day any adapter starts verifying
+    /// physical RPM.
     /// </summary>
     private async Task<bool> IsAcceptableZeroRpmIdleAsync(
         CapabilityDescriptor capability,
