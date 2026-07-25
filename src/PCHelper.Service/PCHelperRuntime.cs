@@ -41,6 +41,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private volatile bool _gpuClockArmed;
     private CpuTuneBootSentinel? _cpuTuneSentinel;
     private string _cpuTuneRecoveryMessage = "CPU tune journal has not been inspected.";
+    private GpuOcBootSentinel? _gpuOcSentinel;
+    private string _gpuOcStartupMessage = "GPU OC startup profile has not been inspected.";
     private WindowsTakeoverExecutionGate? _takeoverGate;
     private WindowsDriverUpdateExecutor? _updateExecutor;
     private UpdateTransactionCoordinator? _updateCoordinator;
@@ -252,6 +254,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         _cpuTuneSentinel = new CpuTuneBootSentinel(Path.Combine(_dataDirectory!, "cpu-tune-journal.json"));
         _cpuTuneRecoveryMessage = await _cpuTuneSentinel.RecoverAsync(transport: null, cancellationToken).ConfigureAwait(false);
 
+        // GPU OC startup boot-recovery sentinel. The reapply of any saved overclock happens at
+        // the end of InitializeAsync, once the engine and adapters are ready.
+        _gpuOcSentinel = new GpuOcBootSentinel(Path.Combine(_dataDirectory!, "gpu-oc-journal.json"));
+
         _coordinator = new AdapterCoordinator(adapters);
         _engine = new ProfileTransactionEngine(
             adapters,
@@ -269,6 +275,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
         await RecoverPendingOperationAsync(cancellationToken).ConfigureAwait(false);
         await RecoverPendingUpdateTransactionsAsync(cancellationToken).ConfigureAwait(false);
+        await ReapplyPersistedGpuOcAtStartupAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task RefreshAsync(bool persistSensors, CancellationToken cancellationToken)
@@ -506,6 +513,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.SetGpuPowerLimitArmed => await SetGpuPowerLimitArmedSerializedAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetGpuClockOffsetArmed => await SetGpuClockOffsetArmedSerializedAsync(request, cancellationToken).ConfigureAwait(false),
                 IpcCommand.SetHardwareControlArmed => await SetHardwareControlArmedAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.SetGpuOcStartupPersistence => await SetGpuOcStartupPersistenceAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.GetGpuOcStartupPersistence => await GetGpuOcStartupPersistenceAsync(cancellationToken).ConfigureAwait(false) is GpuOcStartupPersistenceStatus ocStatus
+                    ? Success(request, ocStatus)
+                    : Failure(request, "GPU_OC_STARTUP_UNAVAILABLE", "GPU OC startup persistence is unavailable."),
                 IpcCommand.SetCpuTuningArmed => SetCpuTuningArmed(request),
                 _ when IsUserAgentCommand(request.Command) => Failure(
                     request,
@@ -3968,6 +3979,271 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         return result.AllRequestedFamiliesVerified
             ? Success(request, status)
             : FailureWithPayload(request, result.RecoveryRequired ? "RECOVERY_REQUIRED" : "GPU_CLOCK_NOT_VERIFIED", result.Message, status);
+    }
+
+    // --- Persistent GPU overclock (opt-in, boot-recovery-guarded) ------------------------
+    // Saving an overclock for automatic reapplication at startup deliberately overrides the
+    // default session-only stance. It is only ever written after the overclock verifies now
+    // AND the user accepts the restart risk with an exact-device confirmation, and every
+    // reapply is guarded by GpuOcBootSentinel: a bad overclock that prevents a clean boot is
+    // reverted on the next start rather than reapplied. Voltage is never part of it.
+
+    private static readonly JsonSerializerOptions GpuOcSerializerOptions = new() { WriteIndented = true };
+
+    private string GpuOcStartupProfilePath => Path.Combine(_dataDirectory!, "gpu-oc-startup.json");
+
+    private async Task<GpuOcStartupProfileV1?> ReadGpuOcStartupProfileAsync(CancellationToken cancellationToken)
+    {
+        string path = GpuOcStartupProfilePath;
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            string json = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+            GpuOcStartupProfileV1? profile = JsonSerializer.Deserialize<GpuOcStartupProfileV1>(json);
+            return profile is { SchemaVersion: GpuOcStartupProfileV1.CurrentSchemaVersion } ? profile : null;
+        }
+        catch (Exception exception) when (exception is JsonException or IOException)
+        {
+            return null;
+        }
+    }
+
+    private void DeleteGpuOcStartupProfile()
+    {
+        try
+        {
+            if (File.Exists(GpuOcStartupProfilePath))
+            {
+                File.Delete(GpuOcStartupProfilePath);
+            }
+        }
+        catch (IOException)
+        {
+            // Best effort; a surviving profile is re-evaluated (and re-guarded) next start.
+        }
+    }
+
+    private async Task<IpcResponse> SetGpuOcStartupPersistenceAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        SetGpuOcStartupPersistenceRequest payload = IpcJson.FromElement<SetGpuOcStartupPersistenceRequest>(request.Payload)
+            ?? throw new InvalidDataException("SetGpuOcStartupPersistence requires a request payload.");
+
+        if (!payload.Enable)
+        {
+            DeleteGpuOcStartupProfile();
+            _gpuOcSentinel?.MarkSettled();
+            _gpuOcStartupMessage = "Saved GPU overclock cleared; it will not be reapplied at startup.";
+            return Success(request, new GpuOcStartupPersistenceStatus(false, payload.DeviceId, 0, _gpuOcStartupMessage));
+        }
+
+        string? policyError = GpuOcStartupPolicy.ValidateEnable(
+            payload.DeviceId, payload.Outputs, payload.ConfirmedDeviceIds, payload.ConfirmRestartRisk);
+        if (policyError is not null)
+        {
+            return Failure(request, "GPU_OC_STARTUP_REJECTED", policyError);
+        }
+
+        // An overclock is only saved if it applies and read-back verifies right now: one that
+        // cannot be proven today must never be trusted to an unattended boot.
+        (bool applied, string applyMessage) = await ApplyGpuOcOutputsAsync(payload.DeviceId, payload.Outputs, cancellationToken).ConfigureAwait(false);
+        if (!applied)
+        {
+            return Failure(request, "GPU_OC_STARTUP_UNVERIFIED",
+                $"The overclock could not be applied and verified, so it was not saved: {applyMessage}");
+        }
+
+        GpuOcStartupProfileV1 profile = new(
+            GpuOcStartupProfileV1.CurrentSchemaVersion,
+            payload.DeviceId,
+            payload.DeviceId,
+            DateTimeOffset.UtcNow,
+            payload.Outputs);
+        Directory.CreateDirectory(_dataDirectory!);
+        await File.WriteAllTextAsync(
+            GpuOcStartupProfilePath,
+            JsonSerializer.Serialize(profile, GpuOcSerializerOptions),
+            cancellationToken).ConfigureAwait(false);
+        _gpuOcSentinel?.MarkSettled();
+        _gpuOcStartupMessage =
+            "Overclock saved. It is reapplied and read-back verified at each service start, and reverted if a boot does not survive it.";
+        return Success(request, new GpuOcStartupPersistenceStatus(true, payload.DeviceId, payload.Outputs.Count, _gpuOcStartupMessage));
+    }
+
+    private async Task<GpuOcStartupPersistenceStatus> GetGpuOcStartupPersistenceAsync(CancellationToken cancellationToken)
+    {
+        GpuOcStartupProfileV1? profile = await ReadGpuOcStartupProfileAsync(cancellationToken).ConfigureAwait(false);
+        return profile is null
+            ? new GpuOcStartupPersistenceStatus(false, string.Empty, 0, _gpuOcStartupMessage)
+            : new GpuOcStartupPersistenceStatus(true, profile.DeviceId, profile.Outputs.Count, _gpuOcStartupMessage);
+    }
+
+    /// <summary>
+    /// Arms the GPU power and clock families for the device, then applies the outputs through
+    /// the full, validated <see cref="ApplyProfileV2Async"/> path. The apply is issued as a
+    /// Manual activation on purpose: the manual-only boot guard exists to stop an unattended
+    /// boot reapply, and here the boot-recovery sentinel provides exactly that protection, so
+    /// the guard is superseded rather than bypassed. Read-back verification, exact-device
+    /// confirmation, and rollback are all unchanged.
+    /// </summary>
+    private async Task<(bool Success, string Message)> ApplyGpuOcOutputsAsync(
+        string deviceId,
+        IReadOnlyList<GpuOcStartupOutputV1> outputs,
+        CancellationToken cancellationToken)
+    {
+        SetHardwareControlArmedRequest arm = new(Armed: true, ConfirmExperimental: true, [deviceId]);
+        await ApplyHardwareControlTransactionAsync(arm, HardwareControlFamilyNames.GpuPower, cancellationToken).ConfigureAwait(false);
+        await ApplyHardwareControlTransactionAsync(arm, HardwareControlFamilyNames.GpuClock, cancellationToken).ConfigureAwait(false);
+
+        Dictionary<string, CapabilityDescriptor> capabilities = GetSnapshot().Capabilities
+            .ToDictionary(capability => capability.Id, StringComparer.Ordinal);
+        List<ProfileAction> actions = [];
+        foreach (GpuOcStartupOutputV1 output in outputs)
+        {
+            if (!capabilities.TryGetValue(output.CapabilityId, out CapabilityDescriptor? capability))
+            {
+                continue;
+            }
+
+            // Re-clamp to the live driver bounds: they can shift with a driver update between
+            // when the overclock was saved and when it is reapplied.
+            double value = capability.Range is NumericRange range
+                ? Math.Clamp(output.Value, range.Minimum, range.Maximum)
+                : output.Value;
+            actions.Add(new ProfileAction(
+                $"gpu-oc-startup:{output.CapabilityId}",
+                capability.AdapterId,
+                output.CapabilityId,
+                ControlValue.FromNumeric(value),
+                Required: true,
+                Order: 0));
+        }
+
+        if (actions.Count == 0)
+        {
+            return (false, "None of the saved GPU OC controls are currently available.");
+        }
+
+        ProfileV2 profile = new(
+            ProfileV2.CurrentSchemaVersion,
+            $"gpu-oc-startup:{deviceId}",
+            "Saved GPU overclock",
+            "Reapplied through the arm-gated, read-back-verified path at service start.",
+            actions,
+            new SafetyLimits(),
+            null,
+            null,
+            null,
+            [],
+            [],
+            IsBuiltIn: false,
+            IsExperimental: true);
+        IpcRequest applyRequest = NamedPipeRequestClient.CreateRequest(
+            IpcCommand.ApplyProfileV2,
+            new ApplyProfileV2Request(profile, ProfileActivationSource.Manual, ConfirmExperimental: true, [deviceId], ConfirmManualVoltage: false));
+        IpcResponse response = await ApplyProfileV2Async(applyRequest, cancellationToken).ConfigureAwait(false);
+        return response.Success
+            ? (true, "applied and read-back verified")
+            : (false, $"{response.ErrorCode}: {response.Error}");
+    }
+
+    private async Task RestoreGpuOcOutputsToStockAsync(IReadOnlyList<GpuOcStartupOutputV1> outputs, CancellationToken cancellationToken)
+    {
+        Dictionary<string, CapabilityDescriptor> capabilities = GetSnapshot().Capabilities
+            .ToDictionary(capability => capability.Id, StringComparer.Ordinal);
+        foreach (GpuOcStartupOutputV1 output in outputs)
+        {
+            if (!capabilities.TryGetValue(output.CapabilityId, out CapabilityDescriptor? capability))
+            {
+                continue;
+            }
+
+            try
+            {
+                IHardwareAdapter adapter = FindAdapter(capability.AdapterId);
+                await adapter.ResetToDefaultAsync(capability.Id, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                ServiceLog.GpuOcStockRestoreFailed(logger, output.CapabilityId, exception);
+            }
+        }
+    }
+
+    private sealed class GpuOcStockRestore(PCHelperRuntime runtime) : IGpuOcStockRestore
+    {
+        public Task RestoreStockAsync(IReadOnlyList<GpuOcStartupOutputV1> outputs, CancellationToken cancellationToken)
+            => runtime.RestoreGpuOcOutputsToStockAsync(outputs, cancellationToken);
+    }
+
+    private async Task ReapplyPersistedGpuOcAtStartupAsync(CancellationToken cancellationToken)
+    {
+        if (_gpuOcSentinel is null)
+        {
+            return;
+        }
+
+        GpuOcStockRestore restore = new(this);
+        (bool recovered, string recoverMessage) = await _gpuOcSentinel.RecoverAsync(restore, cancellationToken).ConfigureAwait(false);
+        if (recovered)
+        {
+            // A prior reapply did not survive a boot: disable persistence by removing the
+            // profile so the machine is not caught in a reapply-crash loop.
+            DeleteGpuOcStartupProfile();
+            _gpuOcStartupMessage = recoverMessage;
+            ServiceLog.GpuOcStartupRecovered(logger, recoverMessage);
+            return;
+        }
+
+        GpuOcStartupProfileV1? profile = await ReadGpuOcStartupProfileAsync(cancellationToken).ConfigureAwait(false);
+        if (profile is null || profile.Outputs.Count == 0)
+        {
+            _gpuOcStartupMessage = "No saved GPU overclock; nothing to reapply at startup.";
+            return;
+        }
+
+        // Journal the trial BEFORE the first write, so a crash or hang mid-reapply leaves the
+        // entry behind for the next boot's recovery to revert.
+        _gpuOcSentinel.BeginTrial(new GpuOcTrialEntryV1(profile.DeviceId, DateTimeOffset.UtcNow, profile.Outputs));
+        try
+        {
+            (bool applied, string applyMessage) = await ApplyGpuOcOutputsAsync(profile.DeviceId, profile.Outputs, cancellationToken).ConfigureAwait(false);
+            if (applied)
+            {
+                _gpuOcSentinel.MarkSettled();
+                _gpuOcStartupMessage = $"Saved GPU overclock reapplied and verified for '{profile.DeviceId}'.";
+                ServiceLog.GpuOcStartupReapplied(logger, _gpuOcStartupMessage);
+                return;
+            }
+
+            // A clean verified failure (not a crash): revert and disable persistence, because
+            // an overclock that no longer verifies must not keep being retried each boot.
+            await restore.RestoreStockAsync(profile.Outputs, cancellationToken).ConfigureAwait(false);
+            _gpuOcSentinel.MarkSettled();
+            DeleteGpuOcStartupProfile();
+            _gpuOcStartupMessage = $"Saved GPU overclock failed to reapply and was reverted; persistence disabled: {applyMessage}";
+            ServiceLog.GpuOcStartupDisabled(logger, _gpuOcStartupMessage);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Reached the catch, so this was not a boot-preventing hang: revert, clear the
+            // journal, and keep the profile so the user can retry deliberately.
+            try
+            {
+                await restore.RestoreStockAsync(profile.Outputs, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception restoreException) when (restoreException is not OperationCanceledException)
+            {
+                ServiceLog.GpuOcStartupReapplyFailed(logger, restoreException);
+            }
+
+            _gpuOcSentinel.MarkSettled();
+            _gpuOcStartupMessage = $"Saved GPU overclock reapply errored and was reverted: {exception.Message}";
+            ServiceLog.GpuOcStartupReapplyFailed(logger, exception);
+        }
     }
 
     private async Task<HardwareControlTransactionResult> ApplyHardwareControlTransactionAsync(

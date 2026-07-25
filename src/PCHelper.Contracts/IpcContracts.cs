@@ -157,7 +157,9 @@ public enum IpcCommand
     GpuFanSession,
     ClearHardwareRecovery,
     GpuPowerSession,
-    GpuClockSession
+    GpuClockSession,
+    SetGpuOcStartupPersistence,
+    GetGpuOcStartupPersistence
 }
 
 public static class ProtocolConstants
@@ -451,6 +453,26 @@ public sealed record GpuClockOffsetStatus(
     bool Available,
     bool Armed,
     string DeviceId,
+    string Message);
+
+/// <summary>
+/// Request to save (or clear) a GPU overclock for automatic reapplication at startup.
+/// Enabling requires <see cref="ConfirmRestartRisk"/> and an exact-device confirmation in
+/// <see cref="ConfirmedDeviceIds"/>; the service re-applies and read-back-verifies the
+/// <see cref="Outputs"/> before persisting, so an overclock that does not verify now can
+/// never be saved. Disable (<c>Enable=false</c>) clears the saved profile and its journal.
+/// </summary>
+public sealed record SetGpuOcStartupPersistenceRequest(
+    bool Enable,
+    string DeviceId,
+    IReadOnlyList<GpuOcStartupOutputV1> Outputs,
+    IReadOnlyList<string> ConfirmedDeviceIds,
+    bool ConfirmRestartRisk);
+
+public sealed record GpuOcStartupPersistenceStatus(
+    bool Enabled,
+    string DeviceId,
+    int OutputCount,
     string Message);
 
 public sealed record SetCpuTuningArmedRequest(

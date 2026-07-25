@@ -43,6 +43,21 @@ internal static partial class ServiceLog
     [LoggerMessage(EventId = 2009, Level = LogLevel.Warning, Message = "Hardware-control family {Family} failed default-state reset and read-back: {Detail}")]
     public static partial void HardwareControlFamilyResetFailed(ILogger logger, string family, string detail);
 
+    [LoggerMessage(EventId = 2020, Level = LogLevel.Warning, Message = "GPU OC startup recovery: {Message}")]
+    public static partial void GpuOcStartupRecovered(ILogger logger, string message);
+
+    [LoggerMessage(EventId = 2021, Level = LogLevel.Information, Message = "GPU OC startup: {Message}")]
+    public static partial void GpuOcStartupReapplied(ILogger logger, string message);
+
+    [LoggerMessage(EventId = 2022, Level = LogLevel.Warning, Message = "GPU OC startup: {Message}")]
+    public static partial void GpuOcStartupDisabled(ILogger logger, string message);
+
+    [LoggerMessage(EventId = 2023, Level = LogLevel.Warning, Message = "Failed to reset {Capability} to stock during GPU OC recovery.")]
+    public static partial void GpuOcStockRestoreFailed(ILogger logger, string capability, Exception exception);
+
+    [LoggerMessage(EventId = 2024, Level = LogLevel.Error, Message = "GPU OC startup reapply failed.")]
+    public static partial void GpuOcStartupReapplyFailed(ILogger logger, Exception exception);
+
     [LoggerMessage(EventId = 3000, Level = LogLevel.Critical, Message = "RigPilot service stopped unexpectedly.")]
     public static partial void ServiceFailed(ILogger logger, Exception exception);
 }
