@@ -1167,12 +1167,34 @@ public sealed partial class MainViewModel
             return;
         }
 
-        if (!_hardwareControlArmAttemptedThisConnection)
+        if (_hardwareControlArmAttemptedThisConnection)
         {
-            _hardwareControlArmAttemptedThisConnection = true;
-            await ApplyHardwareControlSafelyAsync(_hardwareControlPreferenceRequested);
+            return;
         }
+
+        // Arming needs an exact-device confirmation, which is gathered from the GPU control
+        // capabilities in the snapshot. At sign-in/--tray startup the GPU adapters probe in
+        // helper processes, so those capabilities can land a refresh or two after the service
+        // first becomes reachable. Attempting to enable before they exist would send no
+        // confirmed device, be refused with "requires exact-device confirmation", and burn the
+        // single per-connection attempt — leaving hardware control off until the user toggles
+        // it by hand. Defer instead: EnsureHardwareControlArmedAsync runs every refresh, so the
+        // attempt fires on the first refresh that actually carries the confirmable controls.
+        if (_hardwareControlPreferenceRequested && !HasConfirmableGpuControls())
+        {
+            return;
+        }
+
+        _hardwareControlArmAttemptedThisConnection = true;
+        await ApplyHardwareControlSafelyAsync(_hardwareControlPreferenceRequested);
     }
+
+    private bool HasConfirmableGpuControls() =>
+        _snapshot is not null
+        && _snapshot.Capabilities.Any(capability =>
+            capability.Id.StartsWith("gpufan.", StringComparison.Ordinal)
+            || capability.Id.StartsWith("gpupower.", StringComparison.Ordinal)
+            || capability.Id.StartsWith("gpuclock.", StringComparison.Ordinal));
 
     private static bool ReadPersistedHardwareControlPreference()
     {
