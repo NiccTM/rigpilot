@@ -6903,7 +6903,27 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             SetGpuTransportRecoveryGate(armed: true);
             try
             {
-                recovery = await _engine!.RestoreDefaultsAsync(controls, cancellationToken).ConfigureAwait(false);
+                // Retry the restore a few times with the transports warmed. The GPU control
+                // sessions live in helper processes that spawn on demand, so the first
+                // read-back right after startup can miss before the helper is fully ready;
+                // a single attempt then latches the write lock AND (below) leaves the pending
+                // transaction in place, which re-latches on every restart — even across a
+                // reboot. Retrying lets a transient cold-session read-back settle. Stop early
+                // once everything verifies or the only remaining failure is the GPU fan, which
+                // is structurally safety-bounded and never latches.
+                for (int attempt = 0; attempt < RecoveryResetAttempts; attempt++)
+                {
+                    recovery = await _engine!.RestoreDefaultsAsync(controls, cancellationToken).ConfigureAwait(false);
+                    if (recovery.AllDefaultsVerified || OnlyGpuFanRecoveryFailed(recovery))
+                    {
+                        break;
+                    }
+
+                    if (attempt < RecoveryResetAttempts - 1)
+                    {
+                        await Task.Delay(RecoveryResetRetryInterval, cancellationToken).ConfigureAwait(false);
+                    }
+                }
             }
             finally
             {
@@ -6913,21 +6933,26 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 _gpuClockArmed = false;
             }
 
-            _rollbackBlocked = !recovery.AllDefaultsVerified && !OnlyGpuFanRecoveryFailed(recovery);
+            // A fan-only failure is scoped away from the write lock (the fan is clamped to a
+            // safe bound before any write); treat it as resolved so the pending transaction is
+            // cleared rather than re-recovered — and re-latched via a later non-fan hiccup —
+            // on every subsequent start.
+            bool resolved = recovery.AllDefaultsVerified || OnlyGpuFanRecoveryFailed(recovery);
+            _rollbackBlocked = !resolved;
             if (pending is not null)
             {
                 ProfileTransaction recovered = pending with
                 {
-                    State = recovery.AllDefaultsVerified
+                    State = resolved
                         ? ProfileTransactionState.RolledBack
                         : ProfileTransactionState.RecoveryRequired,
                     UpdatedAt = DateTimeOffset.UtcNow,
-                    Error = recovery.AllDefaultsVerified
-                        ? "Unclean-start recovery restored and read back every leased capability at its default state."
+                    Error = resolved
+                        ? "Unclean-start recovery restored and read back every non-fan leased capability at its default state."
                         : $"RecoveryRequired: {string.Join("; ", recovery.Errors)}"
                 };
                 await _store.SaveAsync(recovered, cancellationToken).ConfigureAwait(false);
-                if (recovery.AllDefaultsVerified)
+                if (resolved)
                 {
                     await _store.ClearPendingAsync(pending.Id, cancellationToken).ConfigureAwait(false);
                 }
