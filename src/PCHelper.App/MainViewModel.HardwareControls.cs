@@ -174,6 +174,11 @@ public sealed partial class MainViewModel
             _hardwareControlPreferenceRequested = enable;
             PersistHardwareControlPreference(enable);
             _hardwareControlArmedThisConnection = enable;
+            // Arming changes hardware state, so the service advanced its revision. Sync the
+            // client's cached revision from this response before the caller can issue the next
+            // action; otherwise a GPU control action fired right after the startup auto-arm
+            // sends the pre-arm revision and is rejected with STATE_REVISION_MISMATCH.
+            UpdateStateRevision(response);
             ShowNotice(enable
                 ? $"Hardware control enabled after {result.Families.Count} GPU {(result.Families.Count == 1 ? "family" : "families")} passed read-back."
                 : "Hardware control disabled after vendor/default state was restored and read back.",
@@ -815,6 +820,9 @@ public sealed partial class MainViewModel
             Guid.NewGuid().ToString("N"));
         IpcResponse response = await _client.SendAsync(request, _lifetime.Token);
         EnsureSuccess(response);
+        // Applying a GPU control advanced the service revision; sync it so a follow-up slider
+        // action does not send a stale expected revision and get STATE_REVISION_MISMATCH.
+        UpdateStateRevision(response);
         ShowNotice($"{slider.Name} applied and read-back verified at {value:0.##} {slider.Unit}.", "Success");
         await RefreshAsync(full: true, userInitiated: false);
     }
