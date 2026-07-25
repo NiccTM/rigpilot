@@ -15,6 +15,19 @@ internal sealed class RuntimeTuneScreeningMonitor(
     AutoOcWorkloadMode? requiredWorkloadMode = null,
     double requiredAverageLoadPercent = 20) : ITuneScreeningMonitor
 {
+    /// <summary>
+    /// How recent a sensor reading must be to count as live. The service refreshes on a
+    /// one-second cadence; this allows for a refresh that overruns it without accepting a
+    /// reading old enough to hide a thermal excursion.
+    /// </summary>
+    private static readonly TimeSpan SampleFreshnessWindow = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long screening tolerates seeing no usable temperature at all before it rejects.
+    /// Beyond this the run really would be unmonitored, so it fails closed.
+    /// </summary>
+    private static readonly TimeSpan TemperatureStalenessGrace = TimeSpan.FromSeconds(10);
+
     private readonly Func<HardwareSnapshot> _snapshotProvider = snapshotProvider;
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
@@ -29,6 +42,9 @@ internal sealed class RuntimeTuneScreeningMonitor(
     {
         DateTimeOffset startedAt = _timeProvider.GetUtcNow();
         DateTimeOffset endsAt = startedAt + duration;
+        // The last poll that produced a usable temperature. Screening must never proceed
+        // blind, but a single late snapshot is not blindness — see the grace check below.
+        DateTimeOffset lastFreshTemperatureAt = startedAt;
         List<double> temperatures = [];
         List<double> powers = [];
         List<double> clocks = [];
@@ -87,7 +103,7 @@ internal sealed class RuntimeTuneScreeningMonitor(
                 .Where(sample => sample.Quality == SensorQuality.Good
                     && sample.Value is double value
                     && double.IsFinite(value)
-                    && now - sample.Timestamp <= TimeSpan.FromSeconds(3))
+                    && now - sample.Timestamp <= SampleFreshnessWindow)
                 .ToArray();
             SensorSample[] currentTemperatureSamples = good
                 .Where(sample => IsTemperature(sample.Unit)
@@ -96,9 +112,34 @@ internal sealed class RuntimeTuneScreeningMonitor(
                 .ToArray();
             if (currentTemperatureSamples.Length == 0)
             {
-                return Reject("No fresh temperature source was available during screening.", temperatures, powers, clocks);
+                // The service refreshes sensors on a one-second cadence, but an individual
+                // refresh can overrun it — measurably so while a screening workload is
+                // loading the card. Treating one late snapshot as fatal aborted whole Auto OC
+                // runs with "No fresh temperature source was available during screening" even
+                // though telemetry was healthy a moment before and after. Wait for the next
+                // poll instead, and only reject when the gap persists long enough that
+                // screening really would be running blind.
+                if (now - lastFreshTemperatureAt > TemperatureStalenessGrace)
+                {
+                    return Reject(
+                        $"No fresh temperature source was available for {TemperatureStalenessGrace.TotalSeconds:0} s during screening.",
+                        temperatures,
+                        powers,
+                        clocks);
+                }
+
+                TimeSpan stalledRemaining = endsAt - now;
+                if (stalledRemaining > TimeSpan.Zero)
+                {
+                    await _delay(
+                        stalledRemaining < TimeSpan.FromSeconds(1) ? stalledRemaining : TimeSpan.FromSeconds(1),
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                continue;
             }
 
+            lastFreshTemperatureAt = now;
             temperatures.AddRange(currentTemperatureSamples.Select(sample => sample.Value!.Value));
 
             // Each sensor is judged against the ceiling for its own class. The bound

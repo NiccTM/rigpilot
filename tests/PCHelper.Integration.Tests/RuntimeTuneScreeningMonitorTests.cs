@@ -134,22 +134,98 @@ public sealed class RuntimeTuneScreeningMonitorTests
         "memory-clock",
         "power");
 
+    [Fact]
+    public async Task ASingleLateSnapshotDoesNotAbortScreening()
+    {
+        // The service refreshes sensors about once a second, but a refresh can overrun that
+        // while the screening workload is loading the card. One late snapshot used to abort
+        // the whole Auto OC run with "No fresh temperature source"; it must now be ridden out.
+        ManualTimeProvider clock = new(new DateTimeOffset(2026, 7, 25, 12, 0, 0, TimeSpan.Zero));
+        CapabilityDescriptor capability = Capability();
+        int poll = 0;
+        RuntimeTuneScreeningMonitor monitor = new(
+            () =>
+            {
+                // The third poll returns sensors stamped well beyond the freshness window.
+                DateTimeOffset stamp = ++poll == 3 ? clock.GetUtcNow() - TimeSpan.FromSeconds(8) : clock.GetUtcNow();
+                return Snapshot(clock.GetUtcNow(), capability, boundLoad: 95, unrelatedLoad: 0, sensorStamp: stamp);
+            },
+            capability,
+            clock,
+            (delay, _) =>
+            {
+                clock.Advance(delay);
+                return Task.CompletedTask;
+            },
+            _ => null,
+            Binding(),
+            new HealthyWorkload(clock),
+            AutoOcWorkloadMode.Core,
+            requiredAverageLoadPercent: 70);
+
+        TuneScreeningResult result = await monitor.ScreenAsync(
+            capability,
+            Plan(capability),
+            TimeSpan.FromSeconds(6),
+            CancellationToken.None);
+
+        Assert.DoesNotContain("No fresh temperature source", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SustainedTemperatureStalenessStillFailsClosed()
+    {
+        // Riding out a blip must not become screening blind: when no usable temperature
+        // appears for the whole grace window, the run is still rejected.
+        ManualTimeProvider clock = new(new DateTimeOffset(2026, 7, 25, 12, 0, 0, TimeSpan.Zero));
+        CapabilityDescriptor capability = Capability();
+        RuntimeTuneScreeningMonitor monitor = new(
+            () => Snapshot(
+                clock.GetUtcNow(),
+                capability,
+                boundLoad: 95,
+                unrelatedLoad: 0,
+                sensorStamp: clock.GetUtcNow() - TimeSpan.FromSeconds(30)),
+            capability,
+            clock,
+            (delay, _) =>
+            {
+                clock.Advance(delay);
+                return Task.CompletedTask;
+            },
+            _ => null,
+            Binding(),
+            new HealthyWorkload(clock),
+            AutoOcWorkloadMode.Core,
+            requiredAverageLoadPercent: 70);
+
+        TuneScreeningResult result = await monitor.ScreenAsync(
+            capability,
+            Plan(capability),
+            TimeSpan.FromSeconds(30),
+            CancellationToken.None);
+
+        Assert.False(result.Passed);
+        Assert.Contains("No fresh temperature source", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static HardwareSnapshot Snapshot(
         DateTimeOffset now,
         CapabilityDescriptor capability,
         double boundLoad,
-        double unrelatedLoad) => new(
+        double unrelatedLoad,
+        DateTimeOffset? sensorStamp = null) => new(
         now,
         [new HardwareDevice(capability.DeviceId, "GPU", DeviceKind.Gpu, "NVIDIA", "Test GPU", null, new Dictionary<string, string>())],
         [capability],
         [
-            Sensor("temperature", "lHM:gpu:0", "GPU temperature", now, 60, "°C"),
-            Sensor("bound-load", "lHM:gpu:0", "GPU load", now, boundLoad, "%"),
-            Sensor("core-clock", "lHM:gpu:0", "GPU core clock", now, 2000, "MHz"),
-            Sensor("memory-clock", "lHM:gpu:0", "GPU memory clock", now, 10000, "MHz"),
-            Sensor("power", "nvml:gpu:uuid", "GPU power", now, 250, "W"),
-            Sensor("fan", "lhm:gpu:0", "GPU fan", now, 1200, "RPM"),
-            Sensor("other-load", "other:gpu", "Other GPU load", now, unrelatedLoad, "%")
+            Sensor("temperature", "lHM:gpu:0", "GPU temperature", sensorStamp ?? now, 60, "°C"),
+            Sensor("bound-load", "lHM:gpu:0", "GPU load", sensorStamp ?? now, boundLoad, "%"),
+            Sensor("core-clock", "lHM:gpu:0", "GPU core clock", sensorStamp ?? now, 2000, "MHz"),
+            Sensor("memory-clock", "lHM:gpu:0", "GPU memory clock", sensorStamp ?? now, 10000, "MHz"),
+            Sensor("power", "nvml:gpu:uuid", "GPU power", sensorStamp ?? now, 250, "W"),
+            Sensor("fan", "lhm:gpu:0", "GPU fan", sensorStamp ?? now, 1200, "RPM"),
+            Sensor("other-load", "other:gpu", "Other GPU load", sensorStamp ?? now, unrelatedLoad, "%")
         ],
         [],
         [],
