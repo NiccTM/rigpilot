@@ -2770,6 +2770,29 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             : null;
     }
 
+    /// <summary>
+    /// Reads the recent System-log health signals and returns a refusal reason when the
+    /// machine is already reporting machine-check exceptions, so Auto OC never starts on a
+    /// platform whose instability would make every screening verdict meaningless. Reading
+    /// the log is best-effort: if it cannot be read the run is allowed, because a probe
+    /// failure must not block a legitimate overclock.
+    /// </summary>
+    private string? DescribePlatformInstabilityBlock()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        IReadOnlyList<HealthSystemSignal> signals;
+        try
+        {
+            signals = _healthSignalProbe.ReadSince(now - AutoOcPreflightPolicy.InstabilityLookback, now);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return null;
+        }
+
+        return AutoOcPreflightPolicy.DescribeBlockingInstability(signals, now);
+    }
+
     private async Task<IpcResponse> StartAutoOcAsync(IpcRequest request, CancellationToken cancellationToken)
     {
         if (_rollbackBlocked)
@@ -2786,6 +2809,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             || !string.Equals(payload.DeviceId, payload.WorkloadHost.TargetDeviceId, StringComparison.Ordinal))
         {
             return Failure(request, "AUTO_OC_NOT_CONFIRMED", "Auto OC requires Experimental and exact-device confirmation for the workload and both clock controls.");
+        }
+        if (DescribePlatformInstabilityBlock() is string instability)
+        {
+            return Failure(request, "AUTO_OC_PLATFORM_UNSTABLE", instability);
         }
 
         HardwareSnapshot snapshot = GetSnapshot();
@@ -2890,6 +2917,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         if (constraintError is not null)
         {
             return Failure(request, "AUTO_OC_V3_CONSTRAINT_INVALID", constraintError);
+        }
+        if (DescribePlatformInstabilityBlock() is string v3Instability)
+        {
+            return Failure(request, "AUTO_OC_PLATFORM_UNSTABLE", v3Instability);
         }
 
         HardwareSnapshot snapshot = GetSnapshot();
