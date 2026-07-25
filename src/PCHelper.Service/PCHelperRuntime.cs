@@ -3040,7 +3040,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             TuningObjective.Performance,
             new Dictionary<string, TuneBounds>(StringComparer.Ordinal)
             {
-                [capability.Id] = new TuneBounds(Math.Max(0, range.Minimum), range.Maximum, range.Step)
+                // Search a physically plausible envelope, not the driver's theoretical range:
+                // the reported maximum is what NVAPI accepts (±1000 MHz core on this class of
+                // card), far past where a failure stops being detectable and becomes a hang.
+                [capability.Id] = AutoOcSearchEnvelope.Constrain(capability.Id, range)
             },
             TimeSpan.FromMinutes(10),
             TemperatureCeilingCelsius: 83,
