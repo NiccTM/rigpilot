@@ -415,7 +415,7 @@ public sealed class UserAgentRuntime : IAsyncDisposable
         }
         try
         {
-            MacroPlaybackEngine engine = new(new WindowsMacroInputSink(), new SystemMacroDelay());
+            MacroPlaybackEngine engine = new(new WindowsMacroInputSink(), new SystemMacroDelay(), new WindowsAntiCheatGuard());
             MacroExecutionResultV1 result = await engine.ExecuteAsync(macro, cancellationToken).ConfigureAwait(false);
             return result.Completed
                 ? Success(request, result)

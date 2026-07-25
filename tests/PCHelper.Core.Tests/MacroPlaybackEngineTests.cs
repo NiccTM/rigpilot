@@ -44,6 +44,40 @@ public sealed class MacroPlaybackEngineTests
         Assert.Equal("key-up:65", sink.Events[^1]);
     }
 
+    [Fact]
+    public async Task RefusesToSynthesizeInputWhileAntiCheatIsActive()
+    {
+        FakeSink sink = new();
+        MacroPlaybackEngine engine = new(sink, new ImmediateDelay(), new BlockingGuard("BEService"));
+        MacroV1 macro = Macro(
+        [
+            new MacroStepV1(MacroStepKind.KeyDown, 65, 0, 0, 0, TimeSpan.Zero),
+            new MacroStepV1(MacroStepKind.KeyUp, 65, 0, 0, 0, TimeSpan.Zero)
+        ]);
+
+        MacroExecutionResultV1 result = await engine.ExecuteAsync(macro, CancellationToken.None);
+
+        Assert.False(result.Completed);
+        Assert.Equal(0, result.ExecutedSteps);
+        Assert.Empty(sink.Events); // Not a single event may reach the OS while anti-cheat is up.
+        Assert.Contains("anti-cheat", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("BEService", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PlaysNormallyWhenTheGuardReportsNoAntiCheat()
+    {
+        // A guard that returns null must not change behaviour from the no-guard path.
+        FakeSink sink = new();
+        MacroPlaybackEngine engine = new(sink, new ImmediateDelay(), new BlockingGuard(null));
+        MacroV1 macro = Macro([new MacroStepV1(MacroStepKind.KeyDown, 65, 0, 0, 0, TimeSpan.Zero), new MacroStepV1(MacroStepKind.KeyUp, 65, 0, 0, 0, TimeSpan.Zero)]);
+
+        MacroExecutionResultV1 result = await engine.ExecuteAsync(macro, CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal(["key-down:65", "key-up:65"], sink.Events);
+    }
+
     private static MacroV1 Macro(IReadOnlyList<MacroStepV1> steps) => new(
         MacroV1.CurrentSchemaVersion,
         "macro.test",
@@ -53,6 +87,11 @@ public sealed class MacroPlaybackEngineTests
     private sealed class ImmediateDelay : IMacroDelay
     {
         public Task WaitAsync(TimeSpan delay, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class BlockingGuard(string? protection) : IInputSynthesisGuard
+    {
+        public string? BlockingProtection() => protection;
     }
 
     private sealed class FakeSink : IMacroInputSink
