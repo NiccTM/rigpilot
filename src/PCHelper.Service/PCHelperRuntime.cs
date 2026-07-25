@@ -6745,38 +6745,60 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return;
         }
 
+        CapabilityDescriptor? capability = GetSnapshot().Capabilities.FirstOrDefault(
+            item => string.Equals(item.Id, pending.CapabilityId, StringComparison.Ordinal));
+        if (capability is null)
+        {
+            // The operation's capability is no longer present (GPU/driver changed, adapter
+            // gone). There is nothing to reset and nothing unsafe outstanding, so clear the
+            // stale pending record rather than latching the write lock on it every restart.
+            await AbortPendingOperationAsync(
+                pending,
+                "the operation's capability is no longer present; no hardware state was outstanding.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        IHardwareAdapter adapter = FindAdapter(capability.AdapterId);
+
+        // Warm the GPU control transports before the reset. Their sessions live in helper
+        // processes that spawn on demand, so at service start the helper may not be ready the
+        // instant recovery runs; an un-warmed reset reads back through a cold session and fails.
+        // Because a failed reset does not clear the pending record, that re-latches the write
+        // lock on every restart — the exact stuck state a cold-session read-back produces.
+        // Warming (as the AutoOc and shutdown recovery paths already do) plus a short retry lets
+        // the reset succeed once the session is up; only a failure that survives that is a real
+        // inability to prove default and still latches.
+        SetGpuTransportRecoveryGate(armed: true);
         try
         {
-            CapabilityDescriptor capability = GetSnapshot().Capabilities.FirstOrDefault(
-                item => string.Equals(item.Id, pending.CapabilityId, StringComparison.Ordinal))
-                ?? throw new InvalidOperationException("The pending operation's capability is no longer available.");
-            IHardwareAdapter adapter = FindAdapter(capability.AdapterId);
-            await adapter.ResetToDefaultAsync(capability.Id, cancellationToken).ConfigureAwait(false);
-            HardwareOperationStatus recovered = pending with
+            Exception? lastError = null;
+            for (int attempt = 0; attempt < RecoveryResetAttempts; attempt++)
             {
-                State = HardwareOperationState.Aborted,
-                UpdatedAt = DateTimeOffset.UtcNow,
-                ProgressPercent = 100,
-                Message = "Boot sentinel prevented candidate reapplication; firmware/default control was restored.",
-                Error = null
-            };
-            lock (_operationSync)
-            {
-                _operationStatus = recovered;
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await adapter.ResetToDefaultAsync(capability.Id, cancellationToken).ConfigureAwait(false);
+                    await AbortPendingOperationAsync(pending, "firmware/default control was restored.", cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    lastError = exception;
+                    if (attempt < RecoveryResetAttempts - 1)
+                    {
+                        await Task.Delay(RecoveryResetRetryInterval, cancellationToken).ConfigureAwait(false);
+                    }
+                }
             }
 
-            await _store.SaveOperationAsync(recovered, cancellationToken).ConfigureAwait(false);
-            await _store.ClearPendingOperationAsync(recovered.Id, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
             _rollbackBlocked = true;
             HardwareOperationStatus blocked = pending with
             {
                 State = HardwareOperationState.RecoveryRequired,
                 UpdatedAt = DateTimeOffset.UtcNow,
                 Message = "A pending hardware operation could not be returned to firmware/default control.",
-                Error = exception.Message
+                Error = lastError?.Message
             };
             lock (_operationSync)
             {
@@ -6785,6 +6807,35 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
             await _store.SaveOperationAsync(blocked, cancellationToken).ConfigureAwait(false);
         }
+        finally
+        {
+            SetGpuTransportRecoveryGate(armed: false);
+            _gpuFanArmed = false;
+            _gpuPowerArmed = false;
+            _gpuClockArmed = false;
+        }
+    }
+
+    private const int RecoveryResetAttempts = 4;
+    private static readonly TimeSpan RecoveryResetRetryInterval = TimeSpan.FromMilliseconds(750);
+
+    private async Task AbortPendingOperationAsync(HardwareOperationStatus pending, string reason, CancellationToken cancellationToken)
+    {
+        HardwareOperationStatus recovered = pending with
+        {
+            State = HardwareOperationState.Aborted,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            ProgressPercent = 100,
+            Message = $"Boot sentinel prevented candidate reapplication; {reason}",
+            Error = null
+        };
+        lock (_operationSync)
+        {
+            _operationStatus = recovered;
+        }
+
+        await _store!.SaveOperationAsync(recovered, cancellationToken).ConfigureAwait(false);
+        await _store.ClearPendingOperationAsync(recovered.Id, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RecoverPendingUpdateTransactionsAsync(CancellationToken cancellationToken)
