@@ -60,6 +60,11 @@ internal static class Program
             return RunPageManagedHeapMeasurement();
         }
 
+        if (args.FirstOrDefault()?.Equals("--measure-winforms", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return RunWinFormsLoadMeasurement();
+        }
+
         string outputDirectory = Path.GetFullPath(args.FirstOrDefault()
             ?? Path.Combine(AppContext.BaseDirectory, "ui-snapshots"));
         Directory.CreateDirectory(outputDirectory);
@@ -224,6 +229,95 @@ internal static class Program
         GC.WaitForPendingFinalizers();
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
         return GC.GetTotalMemory(forceFullCollection: true);
+    }
+
+    /// <summary>
+    /// Measures what the WinForms dependency actually costs the dashboard process, so the
+    /// "drop UseWindowsForms and reimplement the tray" question has a number before anyone
+    /// commits to the reimplementation. WinForms is loaded only for the tray icon and its
+    /// dark context menu; the dashboard is otherwise pure WPF.
+    ///
+    /// The tool itself is WPF-only, so nothing WinForms is loaded until this method touches
+    /// it. It builds exactly what the tray builds — a NotifyIcon, a ContextMenuStrip, a
+    /// menu item, and a System.Drawing font — via reflection (so the tool needs no
+    /// compile-time WinForms reference that would pre-load the framework and spoil the
+    /// baseline), then reports the private-memory growth and the modules newly mapped in.
+    /// This captures the assembly load plus GDI+/native initialization the tray triggers,
+    /// which is the resident cost dropping the dependency would reclaim.
+    /// </summary>
+    private static int RunWinFormsLoadMeasurement()
+    {
+        using System.Diagnostics.Process self = System.Diagnostics.Process.GetCurrentProcess();
+
+        static (long Private, long WorkingSet) Sample(System.Diagnostics.Process p)
+        {
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+            p.Refresh();
+            return (p.PrivateMemorySize64, p.WorkingSet64);
+        }
+
+        HashSet<string> ModuleNames(System.Diagnostics.Process p)
+        {
+            p.Refresh();
+            HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+            foreach (System.Diagnostics.ProcessModule module in p.Modules)
+            {
+                if (module.ModuleName is { } name)
+                {
+                    names.Add(name);
+                }
+            }
+
+            return names;
+        }
+
+        (long Private, long WorkingSet) before = Sample(self);
+        HashSet<string> modulesBefore = ModuleNames(self);
+
+        object? keepAlive = null;
+        try
+        {
+            System.Reflection.Assembly winForms = System.Reflection.Assembly.Load("System.Windows.Forms");
+            object notifyIcon = Activator.CreateInstance(winForms.GetType("System.Windows.Forms.NotifyIcon", throwOnError: true)!)!;
+            object menu = Activator.CreateInstance(winForms.GetType("System.Windows.Forms.ContextMenuStrip", throwOnError: true)!)!;
+            object menuItem = Activator.CreateInstance(
+                winForms.GetType("System.Windows.Forms.ToolStripMenuItem", throwOnError: true)!,
+                ["Measure"])!;
+
+            object? font = null;
+            try
+            {
+                System.Reflection.Assembly drawing = System.Reflection.Assembly.Load("System.Drawing.Common");
+                font = Activator.CreateInstance(
+                    drawing.GetType("System.Drawing.Font", throwOnError: true)!,
+                    ["Segoe UI", 9f])!;
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine($"(System.Drawing font not constructed: {exception.Message})");
+            }
+
+            keepAlive = new[] { notifyIcon, menu, menuItem, font! };
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine(exception);
+            return 1;
+        }
+
+        (long Private, long WorkingSet) after = Sample(self);
+        HashSet<string> modulesAfter = ModuleNames(self);
+        GC.KeepAlive(keepAlive);
+
+        Console.WriteLine("WinForms load cost (private memory the tray dependency adds to the WPF process):");
+        Console.WriteLine($"  private bytes  {before.Private / 1024.0 / 1024.0:0.00} -> {after.Private / 1024.0 / 1024.0:0.00} MB   (+{(after.Private - before.Private) / 1024.0 / 1024.0:0.00} MB)");
+        Console.WriteLine($"  working set    {before.WorkingSet / 1024.0 / 1024.0:0.00} -> {after.WorkingSet / 1024.0 / 1024.0:0.00} MB   (+{(after.WorkingSet - before.WorkingSet) / 1024.0 / 1024.0:0.00} MB)");
+
+        string[] newModules = [.. modulesAfter.Except(modulesBefore).OrderBy(name => name, StringComparer.OrdinalIgnoreCase)];
+        Console.WriteLine($"  modules newly mapped ({newModules.Length}): {(newModules.Length == 0 ? "(none)" : string.Join(", ", newModules))}");
+        return 0;
     }
 
     private static int RunAutomationSmoke(string reportPath)
