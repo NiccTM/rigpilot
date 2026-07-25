@@ -1904,6 +1904,12 @@
                           automation:AutomationProperties.AutomationId="Performance.FullAutoOc" />
                   <Button Content="Abort and restore" Command="{Binding AbortOperationCommand}" Style="{StaticResource HardwareActionButtonStyle}" Margin="0,0,8,8" />
                 </WrapPanel>
+                <CheckBox IsChecked="{Binding AcknowledgeUnstablePlatform, Mode=TwoWay}" Margin="0,0,0,8"
+                          ToolTip="Auto OC refuses to start when Windows has logged WHEA machine-check exceptions in the last 24 hours, because those CPU/memory faults are not caused by the GPU and make any screening result meaningless. Ticking this proceeds anyway. Resets when the app restarts."
+                          automation:AutomationProperties.Name="Run Auto OC despite reported hardware errors"
+                          automation:AutomationProperties.AutomationId="Performance.AcknowledgeUnstablePlatform">
+                  <TextBlock Text="Run Auto OC even though this machine reported hardware errors (not recommended — fix the cause first)" TextWrapping="Wrap" />
+                </CheckBox>
                 <TextBlock Text="{Binding FullAutoOcStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" />
                 <TextBlock Text="AUTOMATIC GPU FAN CURVE" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,5" />
                 <TextBlock Text="Binds the armed GPU fan to GPU temperature through the service graph engine, with a 20% minimum (or the controller's higher reported minimum), full speed at the mode's critical temperature, and stale-sensor maximum cooling." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />

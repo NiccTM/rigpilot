@@ -2777,7 +2777,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     /// the log is best-effort: if it cannot be read the run is allowed, because a probe
     /// failure must not block a legitimate overclock.
     /// </summary>
-    private string? DescribePlatformInstabilityBlock()
+    private string? DescribePlatformInstabilityBlock(bool confirmUnstablePlatform)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         IReadOnlyList<HealthSystemSignal> signals;
@@ -2790,7 +2790,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             return null;
         }
 
-        return AutoOcPreflightPolicy.DescribeBlockingInstability(signals, now);
+        return AutoOcPreflightPolicy.DescribeBlockingInstability(signals, now, confirmUnstablePlatform);
     }
 
     private async Task<IpcResponse> StartAutoOcAsync(IpcRequest request, CancellationToken cancellationToken)
@@ -2810,7 +2810,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         {
             return Failure(request, "AUTO_OC_NOT_CONFIRMED", "Auto OC requires Experimental and exact-device confirmation for the workload and both clock controls.");
         }
-        if (DescribePlatformInstabilityBlock() is string instability)
+        if (DescribePlatformInstabilityBlock(payload.ConfirmUnstablePlatform) is string instability)
         {
             return Failure(request, "AUTO_OC_PLATFORM_UNSTABLE", instability);
         }
@@ -2918,7 +2918,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         {
             return Failure(request, "AUTO_OC_V3_CONSTRAINT_INVALID", constraintError);
         }
-        if (DescribePlatformInstabilityBlock() is string v3Instability)
+        if (DescribePlatformInstabilityBlock(payload.ConfirmUnstablePlatform) is string v3Instability)
         {
             return Failure(request, "AUTO_OC_PLATFORM_UNSTABLE", v3Instability);
         }

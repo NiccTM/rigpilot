@@ -40,8 +40,21 @@ public sealed partial class MainViewModel
     private bool _hardwareControlArmedThisConnection;
     private bool _hardwareControlArmAttemptedThisConnection;
     private bool _isHardwareControlChanging;
+    private bool _acknowledgeUnstablePlatform;
 
     public bool HardwareControlEnabled => _hardwareControlEnabled;
+
+    /// <summary>
+    /// Operator acknowledgement that Auto OC may run even though Windows has recently logged
+    /// WHEA machine-check exceptions. Deliberately NOT persisted: it resets every session, so
+    /// the refusal — and the reasoning behind it — is seen again on a machine that is still
+    /// unstable, rather than being silently disabled once and forgotten.
+    /// </summary>
+    public bool AcknowledgeUnstablePlatform
+    {
+        get => _acknowledgeUnstablePlatform;
+        set => Set(ref _acknowledgeUnstablePlatform, value);
+    }
 
     public bool IsHardwareControlChanging
     {
@@ -614,7 +627,8 @@ public sealed partial class MainViewModel
                     FinalScreeningDuration: TimeSpan.FromMinutes(20),
                     RequestPresentMonValidation: false),
                 ConfirmExperimental: true,
-                ConfirmDevice: true)
+                ConfirmDevice: true,
+                ConfirmUnstablePlatform: AcknowledgeUnstablePlatform)
             : new StartAutoOcV2Request(
                 StartAutoOcV2Request.CurrentSchemaVersion,
                 core.DeviceId,
@@ -622,7 +636,8 @@ public sealed partial class MainViewModel
                 memory.Id,
                 workload.Descriptor,
                 ConfirmExperimental: true,
-                ConfirmDevice: true);
+                ConfirmDevice: true,
+                ConfirmUnstablePlatform: AcknowledgeUnstablePlatform);
         IpcResponse response = await _client.SendAsync(
             NamedPipeRequestClient.CreateRequest(
                 command,

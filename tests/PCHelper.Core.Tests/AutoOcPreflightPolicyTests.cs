@@ -1,3 +1,4 @@
+﻿using PCHelper.Contracts;
 using PCHelper.Core;
 
 namespace PCHelper.Core.Tests;
@@ -71,4 +72,20 @@ public sealed class AutoOcPreflightPolicyTests
             Now,
             overrideInstabilityBlock: true));
     }
+
+    [Fact]
+    public void TheOverrideMustBeOptedIntoRatherThanBeingTheDefault()
+    {
+        // The Auto OC requests carry the acknowledgement as a defaulted-off parameter, so a
+        // caller that does not know about the gate cannot accidentally bypass it.
+        Assert.False(new StartAutoOcV2Request(
+            StartAutoOcV2Request.CurrentSchemaVersion,
+            "nvidia:gpu-0",
+            "gpuclock.core:0",
+            "gpuclock.memory:0",
+            new WorkloadHostDescriptorV1(1, "session", "pipe", "token", "nvidia:gpu-0", 0x10DE, 0, 0),
+            ConfirmExperimental: true,
+            ConfirmDevice: true).ConfirmUnstablePlatform);
+    }
 }
+

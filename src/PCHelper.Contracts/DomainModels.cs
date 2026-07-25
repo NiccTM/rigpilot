@@ -451,7 +451,12 @@ public sealed record StartAutoOcV2Request(
     string MemoryCapabilityId,
     WorkloadHostDescriptorV1 WorkloadHost,
     bool ConfirmExperimental,
-    bool ConfirmDevice)
+    bool ConfirmDevice,
+    // Proceed even though the machine has recently reported WHEA machine-check exceptions.
+    // Defaults to false so the platform-instability gate holds unless the operator has been
+    // shown the refusal and explicitly accepted that the screening result is unreliable and
+    // the run may hard-hang the machine.
+    bool ConfirmUnstablePlatform = false)
 {
     public const int CurrentSchemaVersion = 2;
 }

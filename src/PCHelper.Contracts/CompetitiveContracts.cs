@@ -75,7 +75,10 @@ public sealed record StartAutoOcV3Request(
     WorkloadHostDescriptorV1 WorkloadHost,
     AutoOcObjectiveConstraintsV3 Constraints,
     bool ConfirmExperimental,
-    bool ConfirmDevice)
+    bool ConfirmDevice,
+    // See StartAutoOcV2Request.ConfirmUnstablePlatform: an explicit, defaulted-off
+    // acknowledgement that the machine's reported hardware errors make the result unreliable.
+    bool ConfirmUnstablePlatform = false)
 {
     public const int CurrentSchemaVersion = 3;
 }
