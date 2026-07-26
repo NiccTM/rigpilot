@@ -67,6 +67,51 @@ public sealed class AutoOcSearchEnvelopeTests
     }
 
     [Fact]
+    public void ASearchWhereEveryCandidatePassedAtTheCeilingIsRecognisedAsExhausted()
+    {
+        // Observed live: the core ladder ran 73..200 with every candidate passing, so the
+        // envelope — not the silicon — ended the search and the run measured nothing about
+        // the card's real limit.
+        Assert.True(AutoOcSearchEnvelope.SearchExhaustedCeiling(
+            passedValues: [73, 91, 109, 127, 145, 164, 182, 200],
+            failedValues: [],
+            ceiling: 200));
+    }
+
+    [Fact]
+    public void ASearchThatFoundAFailureIsNotExhausted()
+    {
+        // A real edge was found, so the ceiling was not the binding constraint.
+        Assert.False(AutoOcSearchEnvelope.SearchExhaustedCeiling([73, 91], [109], 200));
+    }
+
+    [Fact]
+    public void ASearchThatStoppedBelowTheCeilingIsNotExhausted()
+    {
+        // Stopped early (thermal headroom, for instance) rather than running out of range.
+        Assert.False(AutoOcSearchEnvelope.SearchExhaustedCeiling([73, 91, 109], [], 200));
+    }
+
+    [Fact]
+    public void TheCoreCeilingIsRaisedOnlyForAnExhaustedSearchOnAStablePlatform()
+    {
+        double raised = AutoOcSearchEnvelope.CoreCeilingFor(previousSearchExhaustedCeiling: true, platformStable: true);
+
+        Assert.Equal(AutoOcSearchEnvelope.MaximumCoreOffsetMhz + AutoOcSearchEnvelope.CoreCeilingExtensionMhz, raised);
+    }
+
+    [Theory]
+    [InlineData(false, true)]   // the search found its edge, so there is nothing to extend
+    [InlineData(true, false)]   // machine checks make "every candidate passed" untrustworthy
+    [InlineData(false, false)]
+    public void TheCoreCeilingStaysPutWithoutBothConditions(bool exhausted, bool stable)
+    {
+        Assert.Equal(
+            AutoOcSearchEnvelope.MaximumCoreOffsetMhz,
+            AutoOcSearchEnvelope.CoreCeilingFor(exhausted, stable));
+    }
+
+    [Fact]
     public void ANonClockCapabilityKeepsItsReportedRange()
     {
         // The power limit is bounded by the controller in watts and is not an offset ladder,

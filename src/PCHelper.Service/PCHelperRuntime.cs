@@ -7040,6 +7040,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             .Where(result => !result.ReadBackVerified)
             .All(result => result.Family == HardwareControlFamilyNames.GpuFan);
 
+    /// <summary>
+    /// Upper bound on the clean-shutdown hardware restore. Generous enough for a normal
+    /// multi-control restore, short enough that stopping the service stays prompt.
+    /// </summary>
+    private static readonly TimeSpan CleanShutdownRestoreTimeout = TimeSpan.FromSeconds(20);
+
     private async Task CompleteCleanShutdownAsync()
     {
         if (_store is null || _engine is null)
@@ -7055,9 +7061,28 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         string? activeProfileId = _engine.ActiveProfileId ?? lease?.ActiveProfileId;
         SetGpuTransportRecoveryGate(armed: true);
         HardwareRecoveryResult recovery;
+        bool restoreTimedOut = false;
         try
         {
-            recovery = await _engine.RestoreDefaultsAsync(controls, CancellationToken.None).ConfigureAwait(false);
+            // Bounded, because this runs while the service is stopping and nothing else can
+            // proceed until it returns. The GPU restore path can take ~90 seconds on a card
+            // whose NVAPI fan reset retries, which is longer than a service-stop window: it
+            // made every runtime deployment fail its pipe-ready handshake and forced a
+            // disarm-before-deploy dance. A timeout here is not a lost restore — the shutdown
+            // marker below records the state as unverified, and startup recovery restores and
+            // read-back-verifies it on the next start.
+            recovery = await _engine.RestoreDefaultsAsync(controls, CancellationToken.None)
+                .WaitAsync(CleanShutdownRestoreTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            restoreTimedOut = true;
+            recovery = new HardwareRecoveryResult(
+                false,
+                [],
+                [$"Clean-shutdown default-state restore did not finish within {CleanShutdownRestoreTimeout.TotalSeconds:0} s; startup recovery will complete it."]);
+            ServiceLog.CleanShutdownRestoreTimedOut(logger, CleanShutdownRestoreTimeout.TotalSeconds);
         }
         finally
         {
@@ -7077,7 +7102,13 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             marker.Id,
             marker,
             CancellationToken.None).ConfigureAwait(false);
-        _rollbackBlocked = !recovery.AllDefaultsVerified && !OnlyGpuFanRecoveryFailed(recovery);
+        // A timeout must NOT latch the global write lock. The hardware state is unproven but
+        // not known-bad, the marker above hands it to startup recovery, and latching here
+        // would resurrect the exact stuck state — a write lock that survives restarts and
+        // that clear-recovery cannot lift — this bound exists to prevent.
+        _rollbackBlocked = !restoreTimedOut
+            && !recovery.AllDefaultsVerified
+            && !OnlyGpuFanRecoveryFailed(recovery);
         if (recovery.AllDefaultsVerified)
         {
             await CompleteAutoOcActiveSessionAsync(

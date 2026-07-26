@@ -58,6 +58,9 @@ internal static partial class ServiceLog
     [LoggerMessage(EventId = 2024, Level = LogLevel.Error, Message = "GPU OC startup reapply failed.")]
     public static partial void GpuOcStartupReapplyFailed(ILogger logger, Exception exception);
 
+    [LoggerMessage(EventId = 2025, Level = LogLevel.Warning, Message = "Clean-shutdown hardware restore exceeded {TimeoutSeconds} s and was bounded; startup recovery will complete and verify it.")]
+    public static partial void CleanShutdownRestoreTimedOut(ILogger logger, double timeoutSeconds);
+
     [LoggerMessage(EventId = 3000, Level = LogLevel.Critical, Message = "RigPilot service stopped unexpectedly.")]
     public static partial void ServiceFailed(ILogger logger, Exception exception);
 }

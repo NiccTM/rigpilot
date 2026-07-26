@@ -43,6 +43,48 @@ public static class AutoOcSearchEnvelope
     public const double MaximumMemoryOffsetMhz = 600;
 
     /// <summary>
+    /// How far the core ceiling may be raised when a previous search exhausted it — every
+    /// candidate passed, so the card's real limit is somewhere above the envelope and the
+    /// run measured nothing but the envelope itself. One step, not an open-ended climb.
+    /// </summary>
+    public const double CoreCeilingExtensionMhz = 100;
+
+    /// <summary>
+    /// The core ceiling for the next search, given whether the previous one ran out of room.
+    ///
+    /// Raising it is only correct when the previous search proved it was the binding
+    /// constraint AND the platform is trustworthy. A run on a machine that is throwing
+    /// machine checks may have "passed" every candidate for reasons that have nothing to do
+    /// with the GPU, so extending the range on that evidence would be building on sand — the
+    /// extension is refused unless the platform is clean.
+    /// </summary>
+    public static double CoreCeilingFor(bool previousSearchExhaustedCeiling, bool platformStable) =>
+        previousSearchExhaustedCeiling && platformStable
+            ? MaximumCoreOffsetMhz + CoreCeilingExtensionMhz
+            : MaximumCoreOffsetMhz;
+
+    /// <summary>
+    /// True when a completed search never found a failure — every candidate passed and the
+    /// highest one sat at the ceiling — which means the ceiling, not the silicon, ended the
+    /// search.
+    /// </summary>
+    public static bool SearchExhaustedCeiling(
+        IEnumerable<double> passedValues,
+        IEnumerable<double> failedValues,
+        double ceiling)
+    {
+        ArgumentNullException.ThrowIfNull(passedValues);
+        ArgumentNullException.ThrowIfNull(failedValues);
+        if (failedValues.Any())
+        {
+            return false;
+        }
+
+        double[] passed = [.. passedValues];
+        return passed.Length > 0 && passed.Max() >= ceiling - 1e-6;
+    }
+
+    /// <summary>
     /// Returns the offset ceiling for a clock capability, or null when the capability is not
     /// a GPU clock offset and should keep its reported range.
     /// </summary>
