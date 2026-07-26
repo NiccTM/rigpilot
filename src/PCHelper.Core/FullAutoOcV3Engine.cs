@@ -227,6 +227,23 @@ public static class FullAutoOcV3Engine
                                     candidateScores,
                                     constraints,
                                     baselineThroughput);
+                                // Transient validation: the steady screen has passed, so the
+                                // candidate is stable at ONE sustained operating point. Games
+                                // are not sustained — cycle load and idle to force the boost
+                                // and voltage transitions a constant load never exercises, and
+                                // reject the candidate if any cycle fails. This is what stops a
+                                // result that "passes the test" from crashing in a game.
+                                if (finalError is null)
+                                {
+                                    finalError = await RunTransientValidationAsync(
+                                        core,
+                                        constraints,
+                                        monitorFactory,
+                                        workload,
+                                        reportProgress,
+                                        cancellationToken).ConfigureAwait(false);
+                                }
+
                                 if (finalError is null)
                                 {
                                     generated = CreateProfile(
@@ -346,6 +363,54 @@ public static class FullAutoOcV3Engine
             startedAt,
             DateTimeOffset.UtcNow,
             $"{message} {restoration.Message}");
+    }
+
+    /// <summary>
+    /// Cycles the workload between load and idle against the already-selected candidate, so
+    /// the card repeatedly climbs into its high boost bins (low voltage, high frequency) and
+    /// falls back out of them. A sustained screen pins the GPU to a single power-limited
+    /// operating point and never visits those bins, which is precisely why a candidate can
+    /// pass a synthetic test and still fail in a game. Returns null when every cycle holds,
+    /// or a description of the first failing cycle.
+    /// </summary>
+    private static async Task<string?> RunTransientValidationAsync(
+        AutoOcTuneStage core,
+        AutoOcObjectiveConstraintsV3 constraints,
+        Func<AutoOcWorkloadMode, ITuneScreeningMonitor> monitorFactory,
+        IAutoOcWorkloadController workload,
+        Action<double, string>? reportProgress,
+        CancellationToken cancellationToken)
+    {
+        TunePlan transientPlan = WithConstraints(
+            core.Request.Plan,
+            constraints,
+            AutoOcV3Policy.TransientLoadDuration);
+        for (int cycle = 1; cycle <= AutoOcV3Policy.TransientValidationCycles; cycle++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            reportProgress?.Invoke(
+                92 + (6d * cycle / AutoOcV3Policy.TransientValidationCycles),
+                $"Transient validation: load cycle {cycle} of {AutoOcV3Policy.TransientValidationCycles}.");
+
+            // Drop to idle first so each burst is a genuine transition rather than a
+            // continuation of the load that came before it.
+            await RequireModeAsync(workload, AutoOcWorkloadMode.Stopped, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(AutoOcV3Policy.TransientIdleDuration, cancellationToken).ConfigureAwait(false);
+
+            await RequireModeAsync(workload, AutoOcWorkloadMode.Combined, cancellationToken).ConfigureAwait(false);
+            TuneScreeningResult burst = await monitorFactory(AutoOcWorkloadMode.Combined)
+                .ScreenAsync(core.Capability, transientPlan, AutoOcV3Policy.TransientLoadDuration, cancellationToken)
+                .ConfigureAwait(false);
+            if (!burst.Passed)
+            {
+                return AutoOcV3Policy.DescribeTransientFailure(
+                    cycle,
+                    AutoOcV3Policy.TransientValidationCycles,
+                    burst.Message);
+            }
+        }
+
+        return null;
     }
 
     private static async Task<(TuneResult Result, double? SelectedValue)> RunStageAsync(

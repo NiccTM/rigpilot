@@ -28,6 +28,40 @@ public static class AutoOcV3Policy
     /// <summary>Peak-temperature agreement between consecutive windows that counts as settled.</summary>
     public const double WarmupPlateauCelsius = 1.0;
 
+    // --- Transient (game-like) validation ------------------------------------------------
+    // A steady synthetic screen is the reason auto-overclockers "pass the test and crash in
+    // the game". Held at full load the GPU sits at ONE power/voltage/frequency point — and
+    // because it is power-limited there, that point is a comparatively low boost bin at high
+    // voltage, which is the most forgiving part of the V/F curve. Games do not do that: load
+    // rises and falls, so the card spends much of its time in high boost bins at LOW voltage,
+    // and it repeatedly crosses between them. Those upper bins and the transitions into them
+    // are where a too-high offset actually fails, and a constant-load screen never visits
+    // them. So after the steady screen the candidate is cycled load/idle to force exactly
+    // those transitions before the profile is accepted.
+
+    /// <summary>Load/idle cycles run against the selected candidate after the steady screen.</summary>
+    public const int TransientValidationCycles = 6;
+
+    /// <summary>Load burst per cycle — long enough to reach a boost state, short enough to stay transient.</summary>
+    public static readonly TimeSpan TransientLoadDuration = TimeSpan.FromSeconds(12);
+
+    /// <summary>
+    /// Idle gap per cycle. Long enough for clocks and voltage to drop back down, so the next
+    /// burst is a real transition rather than a continuation of the previous load.
+    /// </summary>
+    public static readonly TimeSpan TransientIdleDuration = TimeSpan.FromSeconds(6);
+
+    /// <summary>
+    /// Describes a transient-validation failure. The cycle index is reported because
+    /// "failed on cycle 5 of 6" is materially different evidence from "failed immediately":
+    /// the first is a marginal candidate, the second is plainly unstable.
+    /// </summary>
+    public static string DescribeTransientFailure(int cycle, int totalCycles, string? detail) =>
+        $"The candidate passed the steady screen but failed transient (game-like) validation on "
+        + $"load cycle {cycle} of {totalCycles}: {detail ?? "the screening monitor reported a failure"}. "
+        + "Sustained load holds one voltage/frequency point; games swing between them, which is where "
+        + "a marginal overclock actually fails. No profile was generated.";
+
     /// <summary>
     /// True when two consecutive warmup windows agree in peak temperature to
     /// within <see cref="WarmupPlateauCelsius"/>. Null readings never count as a
