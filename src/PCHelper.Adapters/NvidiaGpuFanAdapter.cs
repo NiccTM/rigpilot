@@ -61,6 +61,13 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
     // accepted and the ownership-stripping fallback is never reached), backed by
     // longer gaps between retries. Widening wall-clock time, not adding calls, is the
     // documented mitigation for this driver-session fragility.
+    /// <summary>
+    /// True when rapid NVAPI traffic (a settle-poll burst) has happened since the last
+    /// successful restore, which is the only condition the pre-restore cooldown protects
+    /// against. Restores on the startup/shutdown/recovery paths follow no such burst.
+    /// </summary>
+    private bool _nvApiBurstSinceRestore;
+
     private static readonly TimeSpan ResetCooldownInterval = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan ResetRetryInterval = TimeSpan.FromMilliseconds(1500);
     private const int ResetRetryAttempts = 6;
@@ -262,6 +269,10 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
                 break;
             }
 
+            // Repeated rapid NVAPI reads are exactly the traffic that destabilises the driver
+            // session, so record that a burst happened: a restore issued soon after this needs
+            // the session to settle first.
+            _nvApiBurstSinceRestore = true;
             await _settleDelay(FanSettleInterval, cancellationToken).ConfigureAwait(false);
             state = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
         }
@@ -314,16 +325,32 @@ public sealed class NvidiaGpuFanAdapter : IHardwareAdapter, IHardwareStateVerifi
     /// </summary>
     private async Task RestoreAutomaticWithRetryAsync(CancellationToken cancellationToken)
     {
-        await _settleDelay(ResetCooldownInterval, cancellationToken).ConfigureAwait(false);
+        // The cooldown exists for one specific precondition: a restore issued moments after a
+        // settle-poll burst gets refused, because the rapid NVAPI traffic destabilised the
+        // driver session. So it is paid when that burst actually happened — not on every
+        // restore. On the startup, shutdown, and recovery paths no burst precedes the call,
+        // the very first attempt succeeds, and an unconditional pre-wait bought nothing while
+        // costing seconds on EVERY control restored. Multiplied across fan channels, power,
+        // and clock, that was most of a ~90 s shutdown, which is what made runtime deployments
+        // miss their handshake window.
+        if (_nvApiBurstSinceRestore)
+        {
+            await _settleDelay(ResetCooldownInterval, cancellationToken).ConfigureAwait(false);
+        }
+
         for (int attempt = 1; ; attempt++)
         {
             try
             {
                 await _transport.RestoreAutomaticAsync(_channelId, cancellationToken).ConfigureAwait(false);
+                // The session is quiet again as far as this adapter is concerned.
+                _nvApiBurstSinceRestore = false;
                 return;
             }
             catch (Exception exception) when (exception is not OperationCanceledException && attempt < ResetRetryAttempts)
             {
+                // A refusal is itself evidence the session needs settling, so later attempts
+                // always back off — the retry count and fail-closed behaviour are unchanged.
                 await _settleDelay(ResetRetryInterval, cancellationToken).ConfigureAwait(false);
             }
         }
