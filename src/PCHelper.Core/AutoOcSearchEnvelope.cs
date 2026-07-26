@@ -31,11 +31,16 @@ public static class AutoOcSearchEnvelope
     public const double MaximumCoreOffsetMhz = 200;
 
     /// <summary>
-    /// Memory-clock offset ceiling. GDDR6X error-correction masks instability as falling
-    /// performance long before it becomes visible, and past that point the failure mode is
-    /// again a hang rather than an artifact, so the automatic ladder stops well short.
+    /// Memory-clock offset ceiling. Deliberately lower than the core envelope in proportion
+    /// to the risk: GDDR6X carries on-die error correction, so an unstable module does not
+    /// fail cleanly — it corrects errors, loses throughput, and corrupts what is on screen
+    /// before it ever hangs. Screening cannot see a visual artifact, so the ladder must not
+    /// walk far into that range in the first place. Observed on the reference RTX 3090: a
+    /// memory ladder reaching into the high hundreds of MHz visibly glitched the desktop
+    /// while every candidate still "passed". The throughput-regression rule in
+    /// AutoOcV3Policy.SelectBestCandidate is the other half of this defence.
     /// </summary>
-    public const double MaximumMemoryOffsetMhz = 1000;
+    public const double MaximumMemoryOffsetMhz = 600;
 
     /// <summary>
     /// Returns the offset ceiling for a clock capability, or null when the capability is not

@@ -184,7 +184,15 @@ public static class AutoOcV3Policy
                 candidate.ThroughputScore >= bestStableThroughput * constraints.MinimumEfficiencyPerformancePercent / 100),
             TuningObjective.Quiet => passed.Where(candidate =>
                 candidate.ThroughputScore >= baselineThroughput * constraints.MinimumQuietPerformancePercent / 100),
-            _ => passed
+            // Performance: a candidate must actually beat stock. This is not just "an
+            // overclock that is slower than stock is pointless" — on GDDR6X it is the
+            // instability signal. That memory carries on-die error correction, so an
+            // over-clocked module does not fail outright; it silently corrects errors and
+            // THROUGHPUT FALLS while screening still reports a pass. Left unfiltered the
+            // search reads those corrected runs as merely unimpressive and keeps climbing
+            // into the range that corrupts the display. Treating a regression below stock as
+            // ineligible stops the selection at the point where the memory began erroring.
+            _ => passed.Where(candidate => candidate.ThroughputScore >= baselineThroughput)
         };
         return eligible
             .OrderByDescending(candidate => candidate.ObjectiveScore)
