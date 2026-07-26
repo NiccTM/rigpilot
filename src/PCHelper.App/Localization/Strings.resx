@@ -141,4 +141,28 @@
   <data name="Updates_Checking" xml:space="preserve">
     <value>Checking github.com for the latest release…</value>
   </data>
+  <!-- Application shell: sidebar headings, service panel, and status bar. These appear on
+       every page, so they are the highest-value strings to localize first. The product name
+       "RigPilot" is deliberately NOT a resource — a brand is not translated. -->
+  <data name="Shell_SectionControl" xml:space="preserve">
+    <value>CONTROL</value>
+  </data>
+  <data name="Shell_SectionAutomation" xml:space="preserve">
+    <value>AUTOMATION &amp; TOOLS</value>
+  </data>
+  <data name="Shell_SectionSystem" xml:space="preserve">
+    <value>SYSTEM</value>
+  </data>
+  <data name="Shell_Service" xml:space="preserve">
+    <value>Service</value>
+  </data>
+  <data name="Shell_Source" xml:space="preserve">
+    <value>Source</value>
+  </data>
+  <data name="Shell_Profile" xml:space="preserve">
+    <value>Profile</value>
+  </data>
+  <data name="Shell_HotkeyHint" xml:space="preserve">
+    <value>Ctrl+Shift+F12 opens RigPilot</value>
+  </data>
 </root>

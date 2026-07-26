@@ -225,7 +225,7 @@
                   </Ellipse.Style>
                 </Ellipse>
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
-                  <TextBlock Text="Service" FontWeight="SemiBold" />
+                  <TextBlock Text="{loc:Loc Shell_Service}" FontWeight="SemiBold" />
                   <TextBlock Text="{Binding ServiceStateLabel}" Style="{StaticResource MutedStyle}" Margin="6,0,0,0" />
                 </StackPanel>
               </Grid>
@@ -234,12 +234,12 @@
               <TextBlock Text="{Binding ServiceCompatibilityMessage}" ToolTip="{Binding ServiceCompatibilityMessage}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,3,0,0" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Runtime.Compatibility" />
               <Border Background="{StaticResource BorderBrush}" Height="1" Margin="0,10,0,8" />
               <Grid>
-                <TextBlock Text="Source" Style="{StaticResource SubtleStyle}" />
+                <TextBlock Text="{loc:Loc Shell_Source}" Style="{StaticResource SubtleStyle}" />
                 <TextBlock Text="{Binding DataSourceLabel}" HorizontalAlignment="Right" FontSize="12" />
               </Grid>
             </StackPanel>
           </Border>
-          <TextBlock Text="Ctrl+Shift+F12 opens RigPilot"
+          <TextBlock Text="{loc:Loc Shell_HotkeyHint}"
                      Style="{StaticResource SubtleStyle}"
                      TextAlignment="Center"
                      Margin="4,10,4,0" />
@@ -253,7 +253,7 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                       PreviewMouseWheel="SidebarScroll_PreviewMouseWheel">
           <StackPanel>
-            <TextBlock Text="CONTROL" Style="{StaticResource EyebrowStyle}" Margin="11,0,0,5" />
+            <TextBlock Text="{loc:Loc Shell_SectionControl}" Style="{StaticResource EyebrowStyle}" Margin="11,0,0,5" />
             <ListBox x:Name="Navigation"
                      SelectionChanged="Navigation_SelectionChanged"
                      SelectedIndex="0"
@@ -290,7 +290,7 @@
                   <TextBlock Text="{loc:Loc Nav_Lighting}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem Tag="AUTOMATION &amp; TOOLS" ToolTip="Automation (Ctrl+6)" automation:AutomationProperties.Name="Automation" automation:AutomationProperties.AutomationId="Navigation.Automation">
+              <ListBoxItem Tag="{loc:Loc Shell_SectionAutomation}" ToolTip="Automation (Ctrl+6)" automation:AutomationProperties.Name="Automation" automation:AutomationProperties.AutomationId="Navigation.Automation">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE823;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Automation}" />
@@ -302,7 +302,7 @@
                   <TextBlock Text="{loc:Loc Nav_GamesTools}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem Tag="SYSTEM" ToolTip="Devices (Ctrl+8)" automation:AutomationProperties.Name="Devices" automation:AutomationProperties.AutomationId="Navigation.Devices">
+              <ListBoxItem Tag="{loc:Loc Shell_SectionSystem}" ToolTip="Devices (Ctrl+8)" automation:AutomationProperties.Name="Devices" automation:AutomationProperties.AutomationId="Navigation.Devices">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE772;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Devices}" />
@@ -3618,7 +3618,7 @@
           </StackPanel>
           <Border Grid.Column="1" Background="{StaticResource BorderBrush}" Width="1" Margin="14,0" />
           <StackPanel Grid.Column="2" Orientation="Horizontal">
-            <TextBlock Text="Profile" Style="{StaticResource SubtleStyle}" Margin="0,0,6,0" />
+            <TextBlock Text="{loc:Loc Shell_Profile}" Style="{StaticResource SubtleStyle}" Margin="0,0,6,0" />
             <TextBlock Text="{Binding ActiveProfileName}" FontSize="12" FontWeight="SemiBold" />
           </StackPanel>
           <TextBlock Grid.Column="3" Text="{Binding WriteStateLabel}" Style="{StaticResource SubtleStyle}" HorizontalAlignment="Right" />

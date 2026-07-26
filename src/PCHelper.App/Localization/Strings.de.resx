@@ -141,4 +141,25 @@
   <data name="Updates_Checking" xml:space="preserve">
     <value>github.com wird auf das neueste Release geprüft…</value>
   </data>
+  <data name="Shell_SectionControl" xml:space="preserve">
+    <value>STEUERUNG</value>
+  </data>
+  <data name="Shell_SectionAutomation" xml:space="preserve">
+    <value>AUTOMATISIERUNG &amp; WERKZEUGE</value>
+  </data>
+  <data name="Shell_SectionSystem" xml:space="preserve">
+    <value>SYSTEM</value>
+  </data>
+  <data name="Shell_Service" xml:space="preserve">
+    <value>Dienst</value>
+  </data>
+  <data name="Shell_Source" xml:space="preserve">
+    <value>Quelle</value>
+  </data>
+  <data name="Shell_Profile" xml:space="preserve">
+    <value>Profil</value>
+  </data>
+  <data name="Shell_HotkeyHint" xml:space="preserve">
+    <value>Strg+Umschalt+F12 öffnet RigPilot</value>
+  </data>
 </root>
