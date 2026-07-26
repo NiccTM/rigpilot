@@ -248,6 +248,25 @@ public static class FullAutoOcV3Engine
                                         cancellationToken).ConfigureAwait(false);
                                 }
 
+                                // High-boost validation: everything so far ran at the stock
+                                // power limit, where the card is power-bound and sits in a
+                                // forgiving low-boost/high-voltage state. Pull the limit down
+                                // and it holds higher boost bins at lower voltage — where a
+                                // shifted V/F curve actually breaks, and the state a game
+                                // produces whenever it is not loading the GPU flat out.
+                                if (finalError is null && power is not null)
+                                {
+                                    finalError = await RunLowPowerValidationAsync(
+                                        core,
+                                        power,
+                                        powerValue,
+                                        constraints,
+                                        monitorFactory,
+                                        workload,
+                                        reportProgress,
+                                        cancellationToken).ConfigureAwait(false);
+                                }
+
                                 if (finalError is null)
                                 {
                                     generated = CreateProfile(
@@ -471,6 +490,61 @@ public static class FullAutoOcV3Engine
             SelectedValue = selected.Value,
             StatusLabel = $"{constraints.Objective} objective candidate selected from measured results"
         }, selected.Value);
+    }
+
+    /// <summary>
+    /// Re-screens the selected candidate with the power limit reduced, so the GPU is forced
+    /// into the high-boost / low-voltage states a stock-power screen never reaches. The power
+    /// limit is always put back — on success, on failure, and on error — because leaving the
+    /// card power-starved would be a worse outcome than any verdict this phase produces.
+    /// Returns null when the candidate holds, or a description of the failure.
+    /// </summary>
+    private static async Task<string?> RunLowPowerValidationAsync(
+        AutoOcTuneStage core,
+        AutoOcTuneStage power,
+        double? selectedPowerValue,
+        AutoOcObjectiveConstraintsV3 constraints,
+        Func<AutoOcWorkloadMode, ITuneScreeningMonitor> monitorFactory,
+        IAutoOcWorkloadController workload,
+        Action<double, string>? reportProgress,
+        CancellationToken cancellationToken)
+    {
+        NumericRange? range = power.Capability.Range;
+        if (range?.Default is not double stock)
+        {
+            // Without a controller-reported stock value there is nothing to reduce from, so
+            // skip rather than guess at a power figure.
+            return null;
+        }
+
+        double restoreValue = selectedPowerValue ?? stock;
+        double reduced = AutoOcV3Policy.LowPowerValidationTarget(stock, range.Minimum);
+        if (reduced >= restoreValue - 1e-6)
+        {
+            // Already at or below the validation target; the screen would prove nothing.
+            return null;
+        }
+
+        reportProgress?.Invoke(99, $"High-boost validation at {reduced / 1000:0} W.");
+        try
+        {
+            await ApplyAndVerifyCandidateAsync(power, reduced, cancellationToken).ConfigureAwait(false);
+            await RequireModeAsync(workload, AutoOcWorkloadMode.Combined, cancellationToken).ConfigureAwait(false);
+            TuneScreeningResult screen = await monitorFactory(AutoOcWorkloadMode.Combined)
+                .ScreenAsync(
+                    core.Capability,
+                    WithConstraints(core.Request.Plan, constraints, AutoOcV3Policy.LowPowerValidationDuration),
+                    AutoOcV3Policy.LowPowerValidationDuration,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return screen.Passed ? null : AutoOcV3Policy.DescribeLowPowerFailure(reduced, screen.Message);
+        }
+        finally
+        {
+            // Restore unconditionally, and with no cancellation token: a cancelled run must
+            // still leave the power limit where it was rather than power-starved.
+            await ApplyAndVerifyCandidateAsync(power, restoreValue, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     private static async Task ApplyAndVerifyCandidateAsync(

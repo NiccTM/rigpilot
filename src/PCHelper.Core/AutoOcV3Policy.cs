@@ -51,6 +51,44 @@ public static class AutoOcV3Policy
     /// </summary>
     public static readonly TimeSpan TransientIdleDuration = TimeSpan.FromSeconds(6);
 
+    // --- Low-power (high-boost) validation -----------------------------------------------
+    // A whole-domain clock offset shifts every point on the V/F curve, but instability does
+    // not live at every point. Screening runs at the stock power limit, where the card is
+    // power-bound and therefore sits in a comparatively LOW boost bin at HIGH voltage — the
+    // most tolerant place an offset can be tested. Reduce the power limit and the card does
+    // the opposite: it holds higher boost bins at lower voltage, which is where a shifted
+    // curve actually breaks, and it is the state a game produces whenever it is not pinning
+    // the GPU flat out. So the selected candidate is re-screened with the power limit pulled
+    // down, and a candidate that only survives while power-bound is rejected.
+    //
+    // This is deliberately NOT a VF-curve editor. Reading or writing per-point VF data means
+    // undocumented NVAPI surfaces, which the documented-vendor-APIs rule forbids; the power
+    // limit is a documented, bounded control that reaches the same operating states.
+
+    /// <summary>Fraction of the stock power limit used for the high-boost re-screen.</summary>
+    public const double LowPowerValidationFraction = 0.75;
+
+    /// <summary>How long the reduced-power screen runs. Long enough to settle into the higher boost bins.</summary>
+    public static readonly TimeSpan LowPowerValidationDuration = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// The reduced power limit for validation: a fraction of stock, never below the
+    /// controller's own minimum.
+    /// </summary>
+    public static double LowPowerValidationTarget(double stockValue, double minimumValue) =>
+        Math.Max(minimumValue, stockValue * LowPowerValidationFraction);
+
+    /// <summary>
+    /// Describes a low-power validation failure, saying plainly why a candidate that just
+    /// passed a full-load screen is still being rejected.
+    /// </summary>
+    public static string DescribeLowPowerFailure(double watts, string? detail) =>
+        $"The candidate passed at the stock power limit but failed re-screening at {watts / 1000:0} W: "
+        + $"{detail ?? "the screening monitor reported a failure"}. A reduced power limit makes the GPU hold "
+        + "higher boost clocks at lower voltage, which is where a clock offset actually breaks and is the state "
+        + "games produce whenever they are not loading the card flat out. An overclock that only survives while "
+        + "power-bound would crash in a game, so no profile was generated.";
+
     /// <summary>
     /// Describes a transient-validation failure. The cycle index is reported because
     /// "failed on cycle 5 of 6" is materially different evidence from "failed immediately":
