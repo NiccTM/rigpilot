@@ -1125,33 +1125,32 @@ public static class HardwareTuneEngine
                 }
             }
 
-            if (selected is null)
-            {
-                operationSucceeded = true;
-                return new TuneResult(
-                    capability.Id,
-                    "No candidate passed screening",
-                    null,
-                    results,
-                    null);
-            }
-
             // Refinement: bisect the gap between the last stable candidate and
             // the first failing one to locate the true stability edge, so the
             // coarse step size no longer caps how close to the limit we get.
             // Skipped when the climb already stopped for thermal headroom.
+            //
+            // When even the FIRST coarse candidate failed there is no measured stable
+            // point — but stock is a known-stable anchor, because it is the value the
+            // controller ships at and the search never goes below it. Bisecting between
+            // stock and that first failure recovers the whole stage instead of abandoning
+            // it: without this, a ladder whose opening step is already too aggressive
+            // reports "no candidate satisfied the constraints" even when the card is
+            // perfectly stable at a lower offset, which is a search artifact rather than a
+            // property of the hardware.
+            double refinementAnchor = selected ?? effectiveMin;
             if (request.RefinementCandidates > 0 && !stoppedForThermalHeadroom && firstFailingValue is double firstFail)
             {
                 IReadOnlyList<double> fine = GpuAutoOcSearch.FineCandidates(
-                    selected.Value, firstFail, request.RefinementCandidates);
+                    refinementAnchor, firstFail, request.RefinementCandidates);
                 TimeSpan refinementTime = GpuAutoOcSearch.RefinementScreeningTime(candidateTime);
                 for (int index = 0; index < fine.Count; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     double candidate = GpuAutoOcSearch.SnapToStep(fine[index], effectiveMin, effectiveMax, effectiveStep);
-                    if (candidate <= selected.Value + 1e-6 && request.Direction == TuneDirection.Maximize)
+                    if (candidate <= refinementAnchor + 1e-6 && request.Direction == TuneDirection.Maximize)
                     {
-                        continue; // snapped back onto an already-passed value
+                        continue; // snapped back onto an already-passed value (or onto stock)
                     }
 
                     reportProgress?.Invoke(
@@ -1174,6 +1173,19 @@ public static class HardwareTuneEngine
                         break;
                     }
                 }
+            }
+
+            // Checked only after refinement: the stock-anchored bisection above is the
+            // last chance to find a stable offset when the coarse ladder found none.
+            if (selected is null)
+            {
+                operationSucceeded = true;
+                return new TuneResult(
+                    capability.Id,
+                    "No candidate passed screening",
+                    null,
+                    results,
+                    null);
             }
 
             // Safety margin: back off from the edge so the shipped result has

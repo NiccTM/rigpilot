@@ -562,6 +562,22 @@ public sealed class HardwareOperationsTests
     }
 
     [Fact]
+    public void FineCandidatesSearchDownwardFromStockWhenTheFirstCoarseStepFails()
+    {
+        // The memory ladder's opening step can already be too aggressive (observed live:
+        // the first candidate at +182 MHz failed, so the stage reported no candidate at all
+        // even though the card was stable lower down). Anchoring the bisection at stock —
+        // known stable, since the search never goes below it — produces real candidates
+        // between stock and that first failure instead of abandoning the stage.
+        double[] candidates = [.. GpuAutoOcSearch.FineCandidates(lastStable: 0, firstFail: 182, count: 5)];
+
+        Assert.Equal(5, candidates.Length);
+        Assert.All(candidates, candidate => Assert.InRange(candidate, 0.1, 181.9));
+        // Ascending, so the loop keeps the highest value that still passes.
+        Assert.Equal(candidates.OrderBy(value => value), candidates);
+    }
+
+    [Fact]
     public void ApplyMarginBacksOffTheSafeWayForEachDirection()
     {
         // Maximizing (higher clock = more perf): a lower value is safer.
