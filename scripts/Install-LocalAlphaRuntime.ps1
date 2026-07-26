@@ -4,6 +4,13 @@ param(
     [string]$DeploymentRoot,
     [ValidateRange(10, 90)]
     [int]$ServiceTimeoutSeconds = 45,
+    # Stopping is budgeted separately from starting. The clean-shutdown hardware restore can
+    # take far longer than a start, and when both shared one budget a slow stop consumed the
+    # whole window before the new service was ever given a chance to come up — every
+    # deployment then failed its handshake and rolled back, which looked like a bad payload
+    # rather than a slow stop.
+    [ValidateRange(10, 600)]
+    [int]$ServiceStopTimeoutSeconds = 240,
     [switch]$ReplaceExistingLocalAlpha
 )
 
@@ -41,8 +48,9 @@ function Test-Administrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Wait-ServiceState([string]$ExpectedState) {
-    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($ServiceTimeoutSeconds)
+function Wait-ServiceState([string]$ExpectedState, [int]$TimeoutSeconds = 0) {
+    if ($TimeoutSeconds -le 0) { $TimeoutSeconds = $ServiceTimeoutSeconds }
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
         $service = Get-Service -Name $serviceName -ErrorAction Stop
         if ($service.Status.ToString() -eq $ExpectedState) {
@@ -51,14 +59,15 @@ function Wait-ServiceState([string]$ExpectedState) {
         Start-Sleep -Milliseconds 250
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
 
-    throw "Service '$serviceName' did not reach '$ExpectedState' within $ServiceTimeoutSeconds seconds."
+    throw "Service '$serviceName' did not reach '$ExpectedState' within $TimeoutSeconds seconds."
 }
 
 function Stop-PCHelperService {
     $service = Get-Service -Name $serviceName -ErrorAction Stop
     if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped) {
         Stop-Service -Name $serviceName -ErrorAction Stop
-        Wait-ServiceState "Stopped"
+        # Its own budget: the stop must not eat the start's handshake window.
+        Wait-ServiceState "Stopped" $ServiceStopTimeoutSeconds
     }
 }
 

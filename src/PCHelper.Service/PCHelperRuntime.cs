@@ -5503,6 +5503,15 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     /// restore is refused from the service session that could be never, leaving the
     /// suite permanently read-only with no operator route out.
     /// </summary>
+    /// <summary>How long clear-recovery waits for the mutation gate before reporting it busy.</summary>
+    private static readonly TimeSpan ClearRecoveryGateTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Upper bound on the clear-recovery restore. Comfortably longer than a healthy restore,
+    /// short enough that the operator gets an answer instead of a hung command.
+    /// </summary>
+    private static readonly TimeSpan ClearRecoveryRestoreTimeout = TimeSpan.FromSeconds(25);
+
     private async Task<IpcResponse> ClearHardwareRecoveryAsync(IpcRequest request, CancellationToken cancellationToken)
     {
         ClearHardwareRecoveryRequestV1 payload = IpcJson.FromElement<ClearHardwareRecoveryRequestV1>(request.Payload)
@@ -5528,13 +5537,35 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         HardwareStartupRecoveryPlan plan = HardwareControlRecoveryPlanner.BuildStartupPlan(lease, pending, null);
 
         HardwareRecoveryResult recovery;
-        await _hardwareMutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Bounded on both the gate and the restore. This is the operator's only route out of
+        // a hardware write lock, and it was observed timing out at the client while the
+        // service was still inside an unbounded restore — an escape hatch that hangs exactly
+        // when it is needed is not an escape hatch. Failing with a clear reason lets the
+        // caller retry; blocking indefinitely does not.
+        if (!await _hardwareMutationGate.WaitAsync(ClearRecoveryGateTimeout, cancellationToken).ConfigureAwait(false))
+        {
+            return Failure(
+                request,
+                "RECOVERY_BUSY",
+                "Another hardware operation is holding the mutation gate. Wait for it to finish, or abort it, then clear recovery again.");
+        }
+
         try
         {
             SetGpuTransportRecoveryGate(armed: true);
             try
             {
-                recovery = await _engine!.RestoreDefaultsAsync(plan.Controls, cancellationToken).ConfigureAwait(false);
+                recovery = await _engine!.RestoreDefaultsAsync(plan.Controls, cancellationToken)
+                    .WaitAsync(ClearRecoveryRestoreTimeout, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                return Failure(
+                    request,
+                    "RECOVERY_TIMED_OUT",
+                    $"Default-state restore did not complete within {ClearRecoveryRestoreTimeout.TotalSeconds:0} s, so the write lock was left in place. "
+                    + "This usually means a GPU control session is not responding; restarting the service re-runs startup recovery, which restores and verifies the same controls.");
             }
             finally
             {

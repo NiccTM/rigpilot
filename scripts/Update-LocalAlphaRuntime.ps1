@@ -5,7 +5,11 @@ param(
     [string]$PayloadRoot,
     [string]$DeploymentRoot,
     [ValidateRange(10, 90)]
-    [int]$ServiceTimeoutSeconds = 45
+    [int]$ServiceTimeoutSeconds = 45,
+    # Budgeted separately from the start: a slow clean-shutdown restore must not consume the
+    # handshake window and fail an otherwise good payload.
+    [ValidateRange(10, 600)]
+    [int]$ServiceStopTimeoutSeconds = 240
 )
 
 <#
@@ -84,6 +88,7 @@ if ($previousImagePath -match '(?i)\\RigPilot\\LocalAlpha\\') {
 $installArguments = @{
     PayloadRoot = $payload
     ServiceTimeoutSeconds = $ServiceTimeoutSeconds
+    ServiceStopTimeoutSeconds = $ServiceStopTimeoutSeconds
 }
 if (-not [string]::IsNullOrWhiteSpace($DeploymentRoot)) {
     $installArguments.DeploymentRoot = $DeploymentRoot
@@ -104,7 +109,7 @@ catch {
         $previousPayload = Split-Path -Parent (Split-Path -Parent $Matches.exe)
         if (Test-Path -LiteralPath (Join-Path $previousPayload "service\PCHelper.Service.exe") -PathType Leaf) {
             try {
-                & $installScript -PayloadRoot $previousPayload -ServiceTimeoutSeconds $ServiceTimeoutSeconds | Out-Null
+                & $installScript -PayloadRoot $previousPayload -ServiceTimeoutSeconds $ServiceTimeoutSeconds -ServiceStopTimeoutSeconds $ServiceStopTimeoutSeconds | Out-Null
                 $reinstalledPreviousAlpha = (Get-PCHelperImagePath) -match '(?i)\\RigPilot\\LocalAlpha\\'
             }
             catch {
