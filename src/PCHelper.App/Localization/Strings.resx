@@ -165,4 +165,31 @@
   <data name="Shell_HotkeyHint" xml:space="preserve">
     <value>Ctrl+Shift+F12 opens RigPilot</value>
   </data>
+  <data name="Curve_StartFromShape" xml:space="preserve">
+    <value>START FROM A SHAPE</value>
+  </data>
+  <data name="Curve_ShapeHint" xml:space="preserve">
+    <value>A shape is a starting point: the points become yours to drag.</value>
+  </data>
+  <data name="Curve_StudioTitle" xml:space="preserve">
+    <value>Manual curve studio</value>
+  </data>
+  <data name="Curve_NameLabel" xml:space="preserve">
+    <value>CURVE NAME</value>
+  </data>
+  <data name="Curve_PointsLabel" xml:space="preserve">
+    <value>TEMPERATURE : DUTY POINTS</value>
+  </data>
+  <data name="SensorTree_Title" xml:space="preserve">
+    <value>Sensor tree</value>
+  </data>
+  <data name="SensorTree_Description" xml:space="preserve">
+    <value>Every captured sensor, grouped by device and category. Read-only. The search box above filters this too.</value>
+  </data>
+  <data name="SensorTree_Empty" xml:space="preserve">
+    <value>No sensors captured yet.</value>
+  </data>
+  <data name="Devices_PeripheralsTitle" xml:space="preserve">
+    <value>Connected peripherals</value>
+  </data>
 </root>

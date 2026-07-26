@@ -1501,14 +1501,14 @@
               <StackPanel>
                 <Grid>
                   <StackPanel>
-                    <TextBlock Text="Manual curve studio" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="{loc:Loc Curve_StudioTitle}" Style="{StaticResource CardTitleStyle}" />
                     <TextBlock Text="Fan Control-style temperature-to-duty points for one calibrated output. RigPilot retains the measured nonzero floor and requires the final point to reach that controller's maximum." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                   </StackPanel>
                   <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="8,3"><TextBlock Text="ADVANCED" Style="{StaticResource BadgeTextStyle}" /></Border>
                 </Grid>
                 <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="300" Margin="0,13,0,0">
                   <StackPanel Margin="0,0,10,10">
-                    <TextBlock Text="CURVE NAME" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
+                    <TextBlock Text="{loc:Loc Curve_NameLabel}" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
                     <TextBox Text="{Binding CustomCoolingCurveName, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="Manual cooling curve name" automation:AutomationProperties.AutomationId="Cooling.CustomCurveName" />
                     <!-- Hidden until an output is selected: without a duty range there are no
                          templates to scale, and offering shapes that cannot be applied is worse
@@ -1524,7 +1524,7 @@
                           </Style.Triggers>
                         </Style>
                       </StackPanel.Style>
-                      <TextBlock Text="START FROM A SHAPE" Style="{StaticResource EyebrowStyle}" Margin="0,11,0,5" />
+                      <TextBlock Text="{loc:Loc Curve_StartFromShape}" Style="{StaticResource EyebrowStyle}" Margin="0,11,0,5" />
                       <ItemsControl ItemsSource="{Binding CustomCoolingCurveTemplates}"
                                     automation:AutomationProperties.Name="Fan curve starting shapes"
                                     automation:AutomationProperties.AutomationId="Cooling.CurveTemplates">
@@ -1539,9 +1539,9 @@
                           </DataTemplate>
                         </ItemsControl.ItemTemplate>
                       </ItemsControl>
-                      <TextBlock Text="A shape is a starting point: the points become yours to drag." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,2" />
+                      <TextBlock Text="{loc:Loc Curve_ShapeHint}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,2" />
                     </StackPanel>
-                    <TextBlock Text="TEMPERATURE : DUTY POINTS" Style="{StaticResource EyebrowStyle}" Margin="0,11,0,5" />
+                    <TextBlock Text="{loc:Loc Curve_PointsLabel}" Style="{StaticResource EyebrowStyle}" Margin="0,11,0,5" />
                     <TextBox Text="{Binding CustomCoolingCurvePoints, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" MinHeight="106" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" ToolTip="One point per line, for example: 35:25" automation:AutomationProperties.Name="Manual cooling curve points" automation:AutomationProperties.AutomationId="Cooling.CustomCurvePoints" />
                     <TextBlock Text="Use two to eight strictly increasing points. Values use °C:% and must stay above this output's measured floor." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0" />
                   </StackPanel>
@@ -2888,12 +2888,12 @@
                 <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                   <StackPanel>
-                    <TextBlock Text="Sensor tree" Style="{StaticResource CardTitleStyle}" />
-                    <TextBlock Text="Every captured sensor, grouped by device and category. Read-only. The search box above filters this too." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    <TextBlock Text="{loc:Loc SensorTree_Title}" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="{loc:Loc SensorTree_Description}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                   </StackPanel>
                   <TextBlock Grid.Column="1" Text="{Binding SensorTreeSummary}" Style="{StaticResource SubtleStyle}" VerticalAlignment="Top" Margin="12,0,0,0" />
                 </Grid>
-                <TextBlock Text="No sensors captured yet." Margin="0,10,0,0">
+                <TextBlock Text="{loc:Loc SensorTree_Empty}" Margin="0,10,0,0">
                   <TextBlock.Style>
                     <Style TargetType="TextBlock" BasedOn="{StaticResource SubtleStyle}">
                       <Setter Property="Visibility" Value="Visible" />
@@ -2962,7 +2962,7 @@
                 <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                   <StackPanel>
-                    <TextBlock Text="Connected peripherals" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="{loc:Loc Devices_PeripheralsTitle}" Style="{StaticResource CardTitleStyle}" />
                     <TextBlock Text="A read-only HID inventory scanned inside the crash-isolated Adapter Host. Keyboards, mice, headset controls, RGB and AIO controllers are classified by HID usage; no device is opened for output and no write capability is created." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                   </StackPanel>
                   <Button Grid.Column="1" Content="Scan peripherals" Command="{Binding ScanHidInventoryCommand}" Margin="12,0,0,0" VerticalAlignment="Top" automation:AutomationProperties.Name="Scan connected peripherals" automation:AutomationProperties.AutomationId="Devices.ScanHid" />

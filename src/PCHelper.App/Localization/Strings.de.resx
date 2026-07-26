@@ -162,4 +162,31 @@
   <data name="Shell_HotkeyHint" xml:space="preserve">
     <value>Strg+Umschalt+F12 öffnet RigPilot</value>
   </data>
+  <data name="Curve_StartFromShape" xml:space="preserve">
+    <value>STARTFORM WÄHLEN</value>
+  </data>
+  <data name="Curve_ShapeHint" xml:space="preserve">
+    <value>Eine Form ist nur ein Ausgangspunkt: Die Punkte gehören danach Ihnen und lassen sich frei ziehen.</value>
+  </data>
+  <data name="Curve_StudioTitle" xml:space="preserve">
+    <value>Manuelles Kurvenstudio</value>
+  </data>
+  <data name="Curve_NameLabel" xml:space="preserve">
+    <value>KURVENNAME</value>
+  </data>
+  <data name="Curve_PointsLabel" xml:space="preserve">
+    <value>TEMPERATUR : LEISTUNGSPUNKTE</value>
+  </data>
+  <data name="SensorTree_Title" xml:space="preserve">
+    <value>Sensorbaum</value>
+  </data>
+  <data name="SensorTree_Description" xml:space="preserve">
+    <value>Alle erfassten Sensoren, nach Gerät und Kategorie gruppiert. Nur lesend. Das Suchfeld oben filtert auch diese Ansicht.</value>
+  </data>
+  <data name="SensorTree_Empty" xml:space="preserve">
+    <value>Noch keine Sensoren erfasst.</value>
+  </data>
+  <data name="Devices_PeripheralsTitle" xml:space="preserve">
+    <value>Verbundene Peripheriegeräte</value>
+  </data>
 </root>
