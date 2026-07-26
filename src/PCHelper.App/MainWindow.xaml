@@ -2880,6 +2880,83 @@
               </Grid>
             </Border>
 
+            <!-- Sensor tree: every captured reading, grouped device → category. The Overview's
+                 curated list answers "is anything wrong?"; this answers "what is this device
+                 actually doing?", which a flat list of a few hundred rows cannot. -->
+            <Border Style="{StaticResource CardStyle}" Padding="17" Margin="0,12,0,0">
+              <StackPanel>
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock Text="Sensor tree" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock Text="Every captured sensor, grouped by device and category. Read-only. The search box above filters this too." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                  </StackPanel>
+                  <TextBlock Grid.Column="1" Text="{Binding SensorTreeSummary}" Style="{StaticResource SubtleStyle}" VerticalAlignment="Top" Margin="12,0,0,0" />
+                </Grid>
+                <TextBlock Text="No sensors captured yet." Margin="0,10,0,0">
+                  <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource SubtleStyle}">
+                      <Setter Property="Visibility" Value="Visible" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasSensorTree}" Value="True">
+                          <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </TextBlock.Style>
+                </TextBlock>
+                <ItemsControl ItemsSource="{Binding SensorTree}" Margin="0,10,0,0"
+                              automation:AutomationProperties.Name="Sensor tree"
+                              automation:AutomationProperties.AutomationId="Devices.SensorTree">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Expander Margin="0,0,0,6" automation:AutomationProperties.Name="{Binding DeviceName}">
+                        <Expander.Header>
+                          <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding DeviceName}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding SummaryLabel}" Style="{StaticResource SubtleStyle}" Margin="10,0,0,0" VerticalAlignment="Center" />
+                          </StackPanel>
+                        </Expander.Header>
+                        <ItemsControl ItemsSource="{Binding Groups}" Margin="14,6,0,6">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                              <StackPanel Margin="0,0,0,8">
+                                <TextBlock Text="{Binding Name}" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,4" />
+                                <ItemsControl ItemsSource="{Binding Readings}">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                      <Grid Margin="0,0,0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="110" /></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="1" Text="{Binding DisplayValue}" FontFamily="{StaticResource DataFont}" HorizontalAlignment="Right">
+                                          <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                              <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                              <Style.Triggers>
+                                                <!-- A stale or unavailable reading is dimmed so it is never
+                                                     mistaken for a live one. -->
+                                                <DataTrigger Binding="{Binding IsStale}" Value="True">
+                                                  <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                                                </DataTrigger>
+                                              </Style.Triggers>
+                                            </Style>
+                                          </TextBlock.Style>
+                                        </TextBlock>
+                                      </Grid>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                              </StackPanel>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </Expander>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
             <Border Style="{StaticResource CardStyle}" Padding="17" Margin="0,12,0,0">
               <StackPanel>
                 <Grid>

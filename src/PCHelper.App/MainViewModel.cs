@@ -5735,6 +5735,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         }
 
         Replace(Devices, filtered, device => device.Id, StringComparer.Ordinal);
+        // The sensor tree honours the same search box, so one query narrows both rather than
+        // the page carrying two filters that disagree.
+        UpdateSensorTree();
         DeviceResultSummary = _allDevices.Count == 0
             ? "No inventory loaded"
             : string.IsNullOrEmpty(query)

@@ -73,6 +73,18 @@ public sealed class SensorTreeTests
     }
 
     [Fact]
+    public void ADeviceWithABlankNameFallsBackToItsIdentifier()
+    {
+        // Observed in the first render of this view: a present-but-unnamed device produced a
+        // nameless row labelled only with its sensor count, which is unidentifiable.
+        IReadOnlyList<SensorTreeDevice> tree = SensorTree.Build(
+            [Device("lpc-0", "   ")],
+            [Sensor("s1", "lpc-0", "Fan #1", 900, "RPM")]);
+
+        Assert.Equal("lpc-0", Assert.Single(tree).DeviceName);
+    }
+
+    [Fact]
     public void DevicesWithNoSensorsAreOmitted()
     {
         Assert.Empty(SensorTree.Build([Device("gpu-0", "Idle GPU")], []));

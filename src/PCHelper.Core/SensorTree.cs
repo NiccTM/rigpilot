@@ -99,9 +99,12 @@ public static class SensorTree
                                 sensor.Unit,
                                 sensor.Quality))]))
                     .OrderBy(group => group.Name, StringComparer.OrdinalIgnoreCase)];
+                // A device can be present but unnamed, which rendered as a nameless row
+                // labelled only with its sensor count — visible in the first render of this
+                // view. Blank is treated the same as absent so every branch is identifiable.
                 return new SensorTreeDevice(
                     deviceGroup.Key,
-                    device?.Name ?? deviceGroup.Key,
+                    string.IsNullOrWhiteSpace(device?.Name) ? deviceGroup.Key : device!.Name,
                     device?.Kind ?? DeviceKind.Unknown,
                     groups);
             })
