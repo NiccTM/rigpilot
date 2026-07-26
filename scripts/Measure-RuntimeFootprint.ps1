@@ -3,10 +3,17 @@
     Samples the RigPilot runtime's memory and CPU footprint over time.
 
 .DESCRIPTION
-    The release gate tracks combined working set against a 200 MB target and requires a
-    24-hour memory-growth soak. Both were previously measured by hand, which is why the
-    figures in AI_CONTEXT could not be reproduced on demand. This script makes the
-    measurement repeatable.
+    The release gate tracks combined working set against a < 300 MB beta / < 250 MB 1.0
+    target and requires a 24-hour memory-growth soak. Both were previously measured by
+    hand, which is why the figures in AI_CONTEXT could not be reproduced on demand. This
+    script makes the measurement repeatable.
+
+    The target used to be written four different ways across the docs and this script —
+    200 MB here and in docs/feature-status.md, < 250 MB as the competitive goal in
+    docs/beta-roadmap.md, and < 300 MB beta / < 250 MB 1.0 in the same file's ledger. The
+    staged pair is now the single target everywhere. The retired 200 MB figure had no
+    stated basis and was the one that made a 307 MB measurement read as a 188 MB miss
+    rather than a 7 MB one.
 
     It is READ-ONLY: it reads process counters and writes a CSV. It never touches a
     capability, a profile, or the service state, so it is safe to leave running.

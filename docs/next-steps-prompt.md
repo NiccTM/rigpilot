@@ -64,10 +64,24 @@ genuinely witnessed results.
 
 ## Phase 3 — Footprint (no hardware, no money, currently the only stated release blocker I can attack)
 
-The 10-minute closed-dashboard soak measured 388–394 MB combined working set against a
-200 MB target. The CPU (0.458%) and network (zero unexpected connections) targets passed.
-Releasing the GPU session helpers while disarmed already cut into this; the remaining gap
-is real work, and it is measurable without anyone's help.
+The target is a single staged pair — < 300 MB working set at beta, < 250 MB at
+1.0 — stated identically in `docs/beta-roadmap.md`, `docs/feature-status.md`,
+and `scripts/Measure-RuntimeFootprint.ps1`. The 200 MB figure this section used
+to quote is retired; it had no stated basis, and it made the current measurement
+look four times worse than it is.
+
+The 388–394 MB number is also retired: it predates the GPU session-helper idle
+release. The current settled figure is **307 MB** across three processes with
+the dashboard open and every family armed, so the beta target is missed by about
+7 MB rather than 188.
+
+The open question is no longer the steady state but the trend. A 5.8-hour sample
+grew +7.9% (307 → 331 MB) with private bytes rising in step, so it is real
+allocation rather than page caching, and nothing yet explains it. The 24-hour
+soak that would say whether it plateaus or keeps climbing has not completed — the
+2026-07-24 attempt stopped at 5.8 hours. Run that before any further reduction
+work: shaving 7 MB off a baseline that grows 24 MB in six hours would be
+optimising the wrong number.
 
 ## Phase 4 — The 18-system matrix
 

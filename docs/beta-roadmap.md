@@ -16,7 +16,8 @@ fragmentation (one app per domain) and safety (unsigned drivers, brick incidents
 wedge is being the only suite that is simultaneously:
 
 1. **Complete** — cooling + GPU + CPU + RGB + peripherals + games + monitoring + updates in one app.
-2. **Tiny and quiet** — target < 250 MB working set and < 1% CPU (Armoury Crate ~4 GB installed);
+2. **Tiny and quiet** — target < 300 MB working set at beta and < 250 MB at 1.0, with < 1% CPU
+   (Armoury Crate ~4 GB installed);
    no account, no ads, no cloud dependency, service performs zero network access.
 3. **Provably safe** — signed everything, transactional writes with rollback, per-device
    evidence labels, no WinRing0, no bricked boards. Publish the qualification ledger publicly.
@@ -216,7 +217,8 @@ Beta:
   wired into `publish.ps1`/`build-installer.ps1`; signed alpha → beta pipeline, signed Game Bar
   MSIX, signed takeover-executor live tests.
 - Deploy `report-api` (Cloudflare D1/R2, 30-day lifecycle); opt-in diagnostics uploads live.
-- Close the 24-hour soak; working-set reduction pass (target < 300 MB beta, < 250 MB by 1.0).
+- Close the 24-hour soak (the 2026-07-24 attempt ran 5.8 h, not 24); working-set reduction pass
+  against the single target above — < 300 MB beta, < 250 MB at 1.0.
 
 0.9–1.0:
 
@@ -243,7 +245,7 @@ write path is qualified.
 
 ## Sequencing
 
-```
+```text
 Beta (0.5): A+B(beta items) + C(telemetry) + D(bridges) + F(capture/RTSS) + I(signing/report-api)
 0.6: GPU clock offsets (shipped; VF editor/OC Scanner deferred by documented-API policy) · PBO limits · Aura SMBus native · frametime stats (shipped) · game mode
 0.7: AIO pump (Kraken) · Polychrome · peripheral packs v1 · sensor-tree parity · GOG/Xbox
