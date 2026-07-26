@@ -192,4 +192,55 @@
   <data name="Devices_PeripheralsTitle" xml:space="preserve">
     <value>Connected peripherals</value>
   </data>
+  <!-- Colour picker dialog. The R/G/B channel initials ARE resources: they are initials of
+       the colour names, and a language that does not name the colours in English needs
+       different letters (French labels green "V" for vert). -->
+  <data name="ColourPicker_Title" xml:space="preserve">
+    <value>Choose a colour</value>
+  </data>
+  <data name="ColourPicker_Close" xml:space="preserve">
+    <value>Close colour picker</value>
+  </data>
+  <data name="ColourPicker_Field" xml:space="preserve">
+    <value>Saturation and brightness field</value>
+  </data>
+  <data name="ColourPicker_HueSlider" xml:space="preserve">
+    <value>Hue slider</value>
+  </data>
+  <data name="ColourPicker_HexLabel" xml:space="preserve">
+    <value>HEX</value>
+  </data>
+  <data name="ColourPicker_HexName" xml:space="preserve">
+    <value>Colour hexadecimal value</value>
+  </data>
+  <data name="ColourPicker_RedLabel" xml:space="preserve">
+    <value>R</value>
+  </data>
+  <data name="ColourPicker_GreenLabel" xml:space="preserve">
+    <value>G</value>
+  </data>
+  <data name="ColourPicker_BlueLabel" xml:space="preserve">
+    <value>B</value>
+  </data>
+  <data name="ColourPicker_RedName" xml:space="preserve">
+    <value>Red channel 0 to 255</value>
+  </data>
+  <data name="ColourPicker_GreenName" xml:space="preserve">
+    <value>Green channel 0 to 255</value>
+  </data>
+  <data name="ColourPicker_BlueName" xml:space="preserve">
+    <value>Blue channel 0 to 255</value>
+  </data>
+  <data name="ColourPicker_Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="ColourPicker_CancelName" xml:space="preserve">
+    <value>Cancel colour selection</value>
+  </data>
+  <data name="ColourPicker_Select" xml:space="preserve">
+    <value>Select</value>
+  </data>
+  <data name="ColourPicker_SelectName" xml:space="preserve">
+    <value>Confirm colour selection</value>
+  </data>
 </root>

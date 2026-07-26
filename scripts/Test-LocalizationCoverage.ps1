@@ -109,7 +109,11 @@ foreach ($file in Get-ChildItem -LiteralPath $appRoot -Recurse -File |
     $lines = @(Get-Content -LiteralPath $file.FullName)
     for ($index = 0; $index -lt $lines.Count; $index++) {
         foreach ($attribute in $attributes) {
-            $pattern = [regex]::Escape($attribute) + '\s*=\s*"([^"]*)"'
+            # The leading lookbehind is load-bearing: without it "Content" matches inside
+            # SizeToContent="WidthAndHeight", reporting a layout enum as untranslated prose.
+            # It rejects a preceding word character only, so attached properties that
+            # legitimately end in one of these names (ToolTipService.ToolTip) still count.
+            $pattern = '(?<!\w)' + [regex]::Escape($attribute) + '\s*=\s*"([^"]*)"'
             foreach ($match in [regex]::Matches($lines[$index], $pattern)) {
                 $value = $match.Groups[1].Value
                 if ($value -match '^\{loc:Loc\b') { $localizedCount++; continue }

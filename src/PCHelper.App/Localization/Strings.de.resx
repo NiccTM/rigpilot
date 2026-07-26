@@ -189,4 +189,52 @@
   <data name="Devices_PeripheralsTitle" xml:space="preserve">
     <value>Verbundene Peripheriegeräte</value>
   </data>
+  <data name="ColourPicker_Title" xml:space="preserve">
+    <value>Farbe wählen</value>
+  </data>
+  <data name="ColourPicker_Close" xml:space="preserve">
+    <value>Farbauswahl schließen</value>
+  </data>
+  <data name="ColourPicker_Field" xml:space="preserve">
+    <value>Feld für Sättigung und Helligkeit</value>
+  </data>
+  <data name="ColourPicker_HueSlider" xml:space="preserve">
+    <value>Farbtonregler</value>
+  </data>
+  <data name="ColourPicker_HexLabel" xml:space="preserve">
+    <value>HEX</value>
+  </data>
+  <data name="ColourPicker_HexName" xml:space="preserve">
+    <value>Hexadezimalwert der Farbe</value>
+  </data>
+  <data name="ColourPicker_RedLabel" xml:space="preserve">
+    <value>R</value>
+  </data>
+  <data name="ColourPicker_GreenLabel" xml:space="preserve">
+    <value>G</value>
+  </data>
+  <data name="ColourPicker_BlueLabel" xml:space="preserve">
+    <value>B</value>
+  </data>
+  <data name="ColourPicker_RedName" xml:space="preserve">
+    <value>Rotkanal 0 bis 255</value>
+  </data>
+  <data name="ColourPicker_GreenName" xml:space="preserve">
+    <value>Grünkanal 0 bis 255</value>
+  </data>
+  <data name="ColourPicker_BlueName" xml:space="preserve">
+    <value>Blaukanal 0 bis 255</value>
+  </data>
+  <data name="ColourPicker_Cancel" xml:space="preserve">
+    <value>Abbrechen</value>
+  </data>
+  <data name="ColourPicker_CancelName" xml:space="preserve">
+    <value>Farbauswahl abbrechen</value>
+  </data>
+  <data name="ColourPicker_Select" xml:space="preserve">
+    <value>Übernehmen</value>
+  </data>
+  <data name="ColourPicker_SelectName" xml:space="preserve">
+    <value>Farbauswahl bestätigen</value>
+  </data>
 </root>

@@ -65,6 +65,12 @@ internal static class Program
             return RunWinFormsLoadMeasurement();
         }
 
+        if (args.FirstOrDefault()?.Equals("--colour-picker", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return RunColourPickerSnapshot(Path.GetFullPath(args.ElementAtOrDefault(1)
+                ?? Path.Combine(AppContext.BaseDirectory, "ui-snapshots")));
+        }
+
         string outputDirectory = Path.GetFullPath(args.FirstOrDefault()
             ?? Path.Combine(AppContext.BaseDirectory, "ui-snapshots"));
         Directory.CreateDirectory(outputDirectory);
@@ -870,6 +876,75 @@ internal static class Program
         int SafeCaseFanOutputCount,
         int ProtectedCoolingOutputCount,
         string ServiceCompatibilityMessage);
+
+    /// <summary>
+    /// Renders the colour picker dialog. It is the only user-facing window that is not
+    /// MainWindow, so until this existed it was the one surface no snapshot could show —
+    /// which is exactly where a broken resource key survives review, because a missing key
+    /// renders as its own name in brackets rather than failing the build.
+    /// </summary>
+    private static int RunColourPickerSnapshot(string outputDirectory)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        PCHelper.App.App application = new() { SuppressProductStartup = true };
+        application.InitializeComponent();
+        application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        ColourPickerWindow window = new("#FF4EA1FF")
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = 0,
+            Top = 0,
+            ShowActivated = false,
+            ShowInTaskbar = false
+        };
+        application.MainWindow = window;
+
+        int result = 0;
+        bool rendered = false;
+        window.ContentRendered += async (_, _) =>
+        {
+            if (rendered)
+            {
+                return;
+            }
+
+            rendered = true;
+            try
+            {
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
+                FrameworkElement root = (FrameworkElement)window.Content;
+                root.UpdateLayout();
+                RenderTargetBitmap bitmap = new(
+                    Math.Max(1, (int)Math.Ceiling(root.ActualWidth)),
+                    Math.Max(1, (int)Math.Ceiling(root.ActualHeight)),
+                    96,
+                    96,
+                    PixelFormats.Pbgra32);
+                bitmap.Render(root);
+                PngBitmapEncoder encoder = new();
+                encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                string outputPath = Path.Combine(outputDirectory, "dialog-colour-picker.png");
+                using (FileStream stream = File.Create(outputPath))
+                {
+                    encoder.Save(stream);
+                }
+
+                Console.WriteLine(outputPath);
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(exception);
+                result = 1;
+            }
+            finally
+            {
+                application.Shutdown();
+            }
+        };
+
+        _ = application.Run(window);
+        return result;
+    }
 
     private static void Capture(MainWindow window, string outputDirectory, int pageIndex)
     {
