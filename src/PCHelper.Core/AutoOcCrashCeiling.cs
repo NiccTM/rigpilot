@@ -1,6 +1,26 @@
 namespace PCHelper.Core;
 
 /// <summary>
+/// Records which offset is applied to the hardware right now, so a candidate that hard-hangs
+/// the machine can still be identified after the reboot.
+///
+/// This is the journal-before-apply pattern the CPU and GPU boot sentinels already use, and
+/// it exists because screening cannot report on the candidate that kills the machine: the
+/// process never runs again. An entry is written immediately BEFORE the value reaches the
+/// hardware and cleared once the candidate has been screened — pass or fail, both mean the
+/// machine survived it. An entry still present at the next service start therefore names the
+/// exact offset that hung the box.
+/// </summary>
+public interface IAutoOcCandidateJournal
+{
+    /// <summary>Must complete durably before the value is applied.</summary>
+    void BeginCandidate(string capabilityId, double value);
+
+    /// <summary>Clears the entry once the candidate has been screened and the machine survived.</summary>
+    void EndCandidate();
+}
+
+/// <summary>
 /// One remembered hang: the capability being screened and the offset that was applied when
 /// the machine stopped responding.
 /// </summary>

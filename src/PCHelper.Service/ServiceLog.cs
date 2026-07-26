@@ -61,6 +61,9 @@ internal static partial class ServiceLog
     [LoggerMessage(EventId = 2025, Level = LogLevel.Warning, Message = "Clean-shutdown hardware restore exceeded {TimeoutSeconds} s and was bounded; startup recovery will complete and verify it.")]
     public static partial void CleanShutdownRestoreTimedOut(ILogger logger, double timeoutSeconds);
 
+    [LoggerMessage(EventId = 2026, Level = LogLevel.Warning, Message = "An Auto OC candidate journal survived a restart: {Capability} was applied at {Value} when the machine went down. Later searches will stay below it.")]
+    public static partial void AutoOcCrashRemembered(ILogger logger, string capability, double value);
+
     [LoggerMessage(EventId = 3000, Level = LogLevel.Critical, Message = "RigPilot service stopped unexpectedly.")]
     public static partial void ServiceFailed(ILogger logger, Exception exception);
 }

@@ -65,6 +65,21 @@ public sealed class AutoOcCrashCeilingTests
     }
 
     [Fact]
+    public void ACrashCeilingComposesWithTheStaticEnvelopeAndOnlyTightensIt()
+    {
+        // End-to-end shape of what the search does: take the envelope ceiling, then let a
+        // remembered hang lower it. The +200 MHz core envelope becomes +160 after a hang at
+        // +200, so the ladder cannot walk back into the offset that killed the machine.
+        double envelope = AutoOcSearchEnvelope.MaximumCoreOffsetMhz;
+        double? crash = AutoOcCrashCeiling.CeilingFor(Core, [Crash(200, Now.AddHours(-1))], Now);
+
+        double effective = AutoOcCrashCeiling.ConstrainCeiling(envelope, crash);
+
+        Assert.True(effective < envelope);
+        Assert.Equal(160, effective);
+    }
+
+    [Fact]
     public void ConstrainCeilingOnlyEverLowersTheProposedCeiling()
     {
         // Applied on top of the static envelope, a remembered hang may tighten it but must

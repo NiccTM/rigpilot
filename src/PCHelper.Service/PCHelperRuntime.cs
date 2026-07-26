@@ -43,6 +43,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private string _cpuTuneRecoveryMessage = "CPU tune journal has not been inspected.";
     private GpuOcBootSentinel? _gpuOcSentinel;
     private string _gpuOcStartupMessage = "GPU OC startup profile has not been inspected.";
+    private AutoOcCandidateJournalStore? _autoOcJournal;
     private WindowsTakeoverExecutionGate? _takeoverGate;
     private WindowsDriverUpdateExecutor? _updateExecutor;
     private UpdateTransactionCoordinator? _updateCoordinator;
@@ -257,6 +258,17 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         // GPU OC startup boot-recovery sentinel. The reapply of any saved overclock happens at
         // the end of InitializeAsync, once the engine and adapters are ready.
         _gpuOcSentinel = new GpuOcBootSentinel(Path.Combine(_dataDirectory!, "gpu-oc-journal.json"));
+
+        // Auto OC candidate journal. A surviving entry means the machine went down while that
+        // offset was applied — the only evidence a hard hang leaves — so promote it into the
+        // crash history now, before any search can be started, and later searches stay below it.
+        _autoOcJournal = new AutoOcCandidateJournalStore(
+            Path.Combine(_dataDirectory!, "auto-oc-candidate-journal.json"),
+            Path.Combine(_dataDirectory!, "auto-oc-crash-history.json"));
+        if (_autoOcJournal.PromoteSurvivingEntry() is AutoOcCrashRecordV1 promoted)
+        {
+            ServiceLog.AutoOcCrashRemembered(logger, promoted.CapabilityId, promoted.Value);
+        }
 
         _coordinator = new AdapterCoordinator(adapters);
         _engine = new ProfileTransactionEngine(
@@ -3030,7 +3042,32 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         }
     }
 
-    private static StartTuneRequest CreateAutoOcTuneRequest(CapabilityDescriptor capability, double safetyMargin)
+    /// <summary>
+    /// Tightens search bounds with any remembered hang for this capability. Only ever lowers
+    /// the ceiling, and never below the floor, so a crash memory can shrink a search to
+    /// nothing-above-stock but cannot invert it.
+    /// </summary>
+    private TuneBounds ApplyCrashCeiling(string capabilityId, TuneBounds bounds)
+    {
+        if (_autoOcJournal is null)
+        {
+            return bounds;
+        }
+
+        double? crashCeiling = AutoOcCrashCeiling.CeilingFor(
+            capabilityId,
+            _autoOcJournal.ReadHistory(),
+            DateTimeOffset.UtcNow);
+        if (crashCeiling is null)
+        {
+            return bounds;
+        }
+
+        double ceiling = Math.Max(bounds.Minimum, AutoOcCrashCeiling.ConstrainCeiling(bounds.Maximum, crashCeiling));
+        return ceiling < bounds.Maximum ? bounds with { Maximum = ceiling } : bounds;
+    }
+
+    private StartTuneRequest CreateAutoOcTuneRequest(CapabilityDescriptor capability, double safetyMargin)
     {
         NumericRange range = capability.Range
             ?? throw new InvalidOperationException("Auto OC target has no numeric bounds.");
@@ -3043,7 +3080,9 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 // Search a physically plausible envelope, not the driver's theoretical range:
                 // the reported maximum is what NVAPI accepts (±1000 MHz core on this class of
                 // card), far past where a failure stops being detectable and becomes a hang.
-                [capability.Id] = AutoOcSearchEnvelope.Constrain(capability.Id, range)
+                // A remembered hang tightens it further — never loosens it — so an offset that
+                // already killed this machine is never approached a second time.
+                [capability.Id] = ApplyCrashCeiling(capability.Id, AutoOcSearchEnvelope.Constrain(capability.Id, range))
             },
             TimeSpan.FromMinutes(10),
             TemperatureCeilingCelsius: 83,
@@ -3065,7 +3104,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             ThermalHeadroomCelsius: 4);
     }
 
-    private static StartTuneRequest CreateAutoOcTuneRequest(
+    private StartTuneRequest CreateAutoOcTuneRequest(
         CapabilityDescriptor capability,
         double safetyMargin,
         AutoOcObjectiveConstraintsV3 constraints)
@@ -3415,7 +3454,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                         : HardwareOperationState.Running,
                     progress,
                     message),
-                operationCancellation.Token).ConfigureAwait(false);
+                operationCancellation.Token,
+                journal: _autoOcJournal).ConfigureAwait(false);
             if (result.GeneratedProfile is ProfileV1 generated)
             {
                 await _store!.SaveProfileAsync(generated, CancellationToken.None).ConfigureAwait(false);
@@ -3588,7 +3628,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                             : HardwareOperationState.Running,
                     progress,
                     message),
-                operationCancellation.Token).ConfigureAwait(false);
+                operationCancellation.Token,
+                journal: _autoOcJournal).ConfigureAwait(false);
             if (result.GeneratedProfile is ProfileV2 generated
                 && result.ValidationState == AutoOcValidationState.Provisional
                 && result.AllRequestedFamiliesVerified

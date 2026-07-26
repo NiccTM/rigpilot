@@ -26,7 +26,8 @@ public static class FullAutoOcV3Engine
         Func<AutoOcWorkloadMode, ITuneScreeningMonitor> monitorFactory,
         IAutoOcWorkloadController workload,
         Action<double, string>? reportProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IAutoOcCandidateJournal? journal = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
         ArgumentNullException.ThrowIfNull(constraints);
@@ -164,6 +165,7 @@ public static class FullAutoOcV3Engine
                         22,
                         reportProgress,
                         candidateScores,
+                        journal,
                         cancellationToken).ConfigureAwait(false);
                     if (coreValue is null)
                     {
@@ -184,6 +186,7 @@ public static class FullAutoOcV3Engine
                             22,
                             reportProgress,
                             candidateScores,
+                            journal,
                             cancellationToken).ConfigureAwait(false);
                         if (memoryValue is null)
                         {
@@ -206,6 +209,7 @@ public static class FullAutoOcV3Engine
                                     16,
                                     reportProgress,
                                     candidateScores,
+                                    journal,
                                     cancellationToken).ConfigureAwait(false);
                             }
 
@@ -426,6 +430,7 @@ public static class FullAutoOcV3Engine
         double progressSpan,
         Action<double, string>? reportProgress,
         List<AutoOcCandidateScoreV3> allScores,
+        IAutoOcCandidateJournal? journal,
         CancellationToken cancellationToken)
     {
         await RequireModeAsync(workload, mode, cancellationToken).ConfigureAwait(false);
@@ -443,7 +448,8 @@ public static class FullAutoOcV3Engine
                 progressStart + (progress * progressSpan / 100),
                 $"{stageName}: {text}"),
             cancellationToken,
-            retainSelectedOnSuccess: true).ConfigureAwait(false);
+            retainSelectedOnSuccess: true,
+            journal: journal).ConfigureAwait(false);
         IReadOnlyList<AutoOcCandidateScoreV3> scores = AutoOcV3Policy.ScoreCandidates(
             stageName,
             result,

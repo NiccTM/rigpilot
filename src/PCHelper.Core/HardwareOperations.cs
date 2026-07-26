@@ -1041,7 +1041,8 @@ public static class HardwareTuneEngine
         ITuneScreeningMonitor monitor,
         Action<double, string>? reportProgress,
         CancellationToken cancellationToken,
-        bool retainSelectedOnSuccess = false)
+        bool retainSelectedOnSuccess = false,
+        IAutoOcCandidateJournal? journal = null)
     {
         HardwareOperationEligibility eligibility = HardwareOperationEligibilityEvaluator.ForTuning(
             capability,
@@ -1102,7 +1103,7 @@ public static class HardwareTuneEngine
                     5 + (45d * index / Math.Max(1, candidates.Length)),
                     $"Testing candidate {candidate:0.###} {capability.Unit}".TrimEnd());
                 CandidateOutcome outcome = await TestCandidateAsync(
-                    adapter, monitor, original, capability, request.Plan, candidate, candidateTime, cancellationToken).ConfigureAwait(false);
+                    adapter, monitor, original, capability, request.Plan, candidate, candidateTime, cancellationToken, journal).ConfigureAwait(false);
                 results.Add(outcome.Result);
                 if (!outcome.Passed)
                 {
@@ -1157,7 +1158,7 @@ public static class HardwareTuneEngine
                         50 + (10d * index / Math.Max(1, fine.Count)),
                         $"Refining near the stability edge: {candidate:0.###} {capability.Unit}".TrimEnd());
                     CandidateOutcome outcome = await TestCandidateAsync(
-                        adapter, monitor, original, capability, request.Plan, candidate, refinementTime, cancellationToken).ConfigureAwait(false);
+                        adapter, monitor, original, capability, request.Plan, candidate, refinementTime, cancellationToken, journal).ConfigureAwait(false);
                     results.Add(outcome.Result);
                     if (!outcome.Passed)
                     {
@@ -1261,6 +1262,34 @@ public static class HardwareTuneEngine
     /// candidate (never crashes the search).
     /// </summary>
     private static async Task<CandidateOutcome> TestCandidateAsync(
+        IHardwareAdapter adapter,
+        ITuneScreeningMonitor monitor,
+        PreparedAction original,
+        CapabilityDescriptor capability,
+        TunePlan plan,
+        double candidate,
+        TimeSpan candidateTime,
+        CancellationToken cancellationToken,
+        IAutoOcCandidateJournal? journal = null)
+    {
+        // Journal before the write. A candidate that hard-hangs the machine reports nothing —
+        // the process never runs again — so the surviving entry is the only evidence of which
+        // offset killed it, and the next search uses that to stay below it.
+        journal?.BeginCandidate(capability.Id, candidate);
+        try
+        {
+            return await TestCandidateCoreAsync(
+                adapter, monitor, original, capability, plan, candidate, candidateTime, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Reached on pass, fail, and throw alike: all of them mean the machine survived
+            // this candidate, so the entry must not outlive it.
+            journal?.EndCandidate();
+        }
+    }
+
+    private static async Task<CandidateOutcome> TestCandidateCoreAsync(
         IHardwareAdapter adapter,
         ITuneScreeningMonitor monitor,
         PreparedAction original,
