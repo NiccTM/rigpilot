@@ -75,6 +75,24 @@ internal sealed class RuntimeTuneScreeningMonitor(
                         clocks);
                 }
 
+                // Artifact evidence outranks every other signal here. Throughput, temperature,
+                // and driver resets all describe how the run FELT; a failed pattern check says
+                // the GPU returned a wrong answer, which is the one thing an overclock must
+                // never do. It is also the only detector for the GDDR6X failure mode, where
+                // error correction turns real corruption into a merely unimpressive score.
+                // Any mismatch at all rejects the candidate — there is no acceptable rate of
+                // silently wrong results.
+                if (host.ArtifactErrorCount > 0)
+                {
+                    return Reject(
+                        $"The GPU returned {host.ArtifactErrorCount} corrupted value(s) during screening: a known pattern did not "
+                        + "survive a round trip through GPU memory under load. This is silent data corruption — the failure mode "
+                        + "that shows up as on-screen glitching and that throughput alone cannot see — so the candidate was rejected.",
+                        temperatures,
+                        powers,
+                        clocks);
+                }
+
                 firstDispatchCount ??= host.DispatchCount;
                 firstDispatchAt ??= _timeProvider.GetUtcNow();
                 lastDispatchCount = host.DispatchCount;

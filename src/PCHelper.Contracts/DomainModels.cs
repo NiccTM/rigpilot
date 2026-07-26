@@ -425,7 +425,12 @@ public sealed record WorkloadHostStatusV1(
     int MatchingHardwareAdapterCount,
     long DispatchCount,
     DateTimeOffset HeartbeatAt,
-    string? Error)
+    string? Error,
+    // Elements whose index-derived pattern did not survive a round trip through GPU memory
+    // under load. Unlike throughput or a driver reset this observes silently WRONG results,
+    // which is the failure mode GDDR6X error correction otherwise hides. Defaulted so a host
+    // that predates the check reports no evidence rather than false confidence.
+    long ArtifactErrorCount = 0)
 {
     public const int CurrentSchemaVersion = 1;
 }

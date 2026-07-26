@@ -1,5 +1,60 @@
 RWStructuredBuffer<float4> Data : register(u0);
 
+// --- Artifact detection ------------------------------------------------------------------
+// Screening can measure throughput and observe a driver reset, but neither sees the failure
+// mode that matters most for memory overclocking: silently WRONG results. GDDR6X carries
+// on-die error correction, so an unstable module does not fault — it corrects, slows, and
+// corrupts what is on screen. A compute workload that only accumulates numbers cannot tell
+// a corrupted value from a legitimate one, because every result is as plausible as any other.
+//
+// So the artifact pass computes a value that depends ONLY on the element index, and checks
+// it. ArtifactSeed writes f(index); ArtifactVerify recomputes f(index) and compares. Any
+// difference is a bit that did not survive the round trip through memory, which is precisely
+// the corruption a user sees as on-screen glitching.
+//
+// The pattern is chosen to be exactly representable in binary32 — a 16-bit integer widened
+// to float — so the comparison is exact. No epsilon, no false positives from rounding: a
+// mismatch is a real corrupted bit, and the verify counts it atomically.
+RWStructuredBuffer<float4> Artifact : register(u1);
+RWStructuredBuffer<uint> ArtifactErrors : register(u2);
+
+float4 ExpectedPattern(uint index)
+{
+    // Masked to 16 bits so every component is an integer below 65536 and therefore exact in
+    // a 32-bit float; the offsets keep the four components distinct.
+    float base = (float)(index & 0xFFFFu);
+    return float4(base, base + 1.0f, base + 2.0f, base + 3.0f);
+}
+
+[numthreads(256, 1, 1)]
+void ArtifactSeedMain(uint3 id : SV_DispatchThreadID)
+{
+    uint count;
+    uint stride;
+    Artifact.GetDimensions(count, stride);
+    if (id.x >= count) return;
+    Artifact[id.x] = ExpectedPattern(id.x);
+}
+
+[numthreads(256, 1, 1)]
+void ArtifactVerifyMain(uint3 id : SV_DispatchThreadID)
+{
+    uint count;
+    uint stride;
+    Artifact.GetDimensions(count, stride);
+    if (id.x >= count) return;
+
+    float4 expected = ExpectedPattern(id.x);
+    float4 actual = Artifact[id.x];
+    // Exact comparison: the pattern is integral and exactly representable, so any difference
+    // is corruption rather than arithmetic error.
+    if (any(actual != expected))
+    {
+        uint previous;
+        InterlockedAdd(ArtifactErrors[0], 1u, previous);
+    }
+}
+
 [numthreads(256, 1, 1)]
 void CoreMain(uint3 id : SV_DispatchThreadID)
 {

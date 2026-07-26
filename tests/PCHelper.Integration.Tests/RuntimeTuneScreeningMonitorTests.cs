@@ -239,6 +239,72 @@ public sealed class RuntimeTuneScreeningMonitorTests
         double value,
         string unit) => new(id, "test", deviceId, name, now, value, unit, SensorQuality.Good, TimeSpan.Zero);
 
+    [Fact]
+    public async Task RejectsACandidateThatReturnedCorruptedValuesEvenWhileEverythingElseLooksHealthy()
+    {
+        // The whole point of artifact detection: load, temperature, and dispatch progress all
+        // look fine, and the card is still returning wrong answers. On GDDR6X that is the
+        // normal presentation of instability, because error correction stops it faulting.
+        ManualTimeProvider clock = new(new DateTimeOffset(2026, 7, 26, 12, 0, 0, TimeSpan.Zero));
+        CapabilityDescriptor capability = Capability();
+        RuntimeTuneScreeningMonitor monitor = new(
+            () => Snapshot(clock.GetUtcNow(), capability, boundLoad: 99, unrelatedLoad: 10),
+            capability,
+            clock,
+            (delay, _) =>
+            {
+                clock.Advance(delay);
+                return Task.CompletedTask;
+            },
+            _ => null,
+            Binding(),
+            new CorruptingWorkload(clock),
+            AutoOcWorkloadMode.Core,
+            requiredAverageLoadPercent: 70);
+
+        TuneScreeningResult result = await monitor.ScreenAsync(
+            capability,
+            Plan(capability),
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        Assert.False(result.Passed);
+        Assert.Contains("corrupted", result.Message, StringComparison.OrdinalIgnoreCase);
+        // The message has to name the failure mode, or a rejection with healthy-looking
+        // telemetry reads as a false positive.
+        Assert.Contains("silent data corruption", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A host that is healthy in every respect except that the pattern check failed.</summary>
+    private sealed class CorruptingWorkload(TimeProvider clock) : IAutoOcWorkloadController
+    {
+        public Task<WorkloadHostStatusV1> SetModeAsync(AutoOcWorkloadMode requested, CancellationToken cancellationToken) =>
+            Task.FromResult(Status(requested));
+
+        public Task<WorkloadHostStatusV1> GetStatusAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(Status(AutoOcWorkloadMode.Core));
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        private WorkloadHostStatusV1 Status(AutoOcWorkloadMode current) => new(
+            WorkloadHostStatusV1.CurrentSchemaVersion,
+            "session",
+            true,
+            true,
+            true,
+            current,
+            "Test GPU",
+            0x10DE,
+            1,
+            1,
+            0,
+            1,
+            1,
+            clock.GetUtcNow(),
+            null,
+            ArtifactErrorCount: 7);
+    }
+
     private sealed class HealthyWorkload(
         TimeProvider clock,
         AutoOcWorkloadMode mode = AutoOcWorkloadMode.Core) : IAutoOcWorkloadController

@@ -206,6 +206,19 @@ internal static class Program
         private readonly ID3D11UnorderedAccessView _view;
         private readonly ID3D11ComputeShader _coreShader;
         private readonly ID3D11ComputeShader _memoryShader;
+        // Artifact detection: a dedicated buffer holding an index-derived pattern, a one-slot
+        // counter the verify shader increments atomically, and a staging buffer to read that
+        // counter back. Kept separate from the load buffer so the core/memory shaders cannot
+        // overwrite the pattern they are meant to be stressing around.
+        private readonly ID3D11Buffer _artifactBuffer;
+        private readonly ID3D11UnorderedAccessView _artifactView;
+        private readonly ID3D11Buffer _artifactErrorBuffer;
+        private readonly ID3D11UnorderedAccessView _artifactErrorView;
+        private readonly ID3D11Buffer _artifactErrorStaging;
+        private readonly ID3D11ComputeShader _artifactSeedShader;
+        private readonly ID3D11ComputeShader _artifactVerifyShader;
+        private readonly uint _artifactGroups;
+        private long _artifactErrorTotal;
         // The workload has to saturate the GPU, not merely touch it: the screening
         // monitor rejects any sample below its measured target-device load floor,
         // so an under-driven workload silently invalidates the whole run. The
@@ -294,11 +307,48 @@ internal static class Program
             _buffer = _device.CreateBuffer(bufferDescription);
             _view = _device.CreateUnorderedAccessView(_buffer);
 
+            // Artifact buffer: a fixed, modest slice rather than a fraction of VRAM. Its job
+            // is to be verified exactly, not to fill the card — the load shaders above already
+            // do that — and a smaller buffer keeps the verify dispatch short enough to run
+            // between load batches without starving them.
+            const int artifactElements = 1 << 20;
+            BufferDescription artifactDescription = new(
+                artifactElements * 16u,
+                BindFlags.UnorderedAccess | BindFlags.ShaderResource,
+                ResourceUsage.Default,
+                CpuAccessFlags.None,
+                ResourceOptionFlags.BufferStructured,
+                16);
+            _artifactBuffer = _device.CreateBuffer(artifactDescription);
+            _artifactView = _device.CreateUnorderedAccessView(_artifactBuffer);
+            _artifactGroups = artifactElements / 256u;
+
+            BufferDescription errorDescription = new(
+                4u,
+                BindFlags.UnorderedAccess,
+                ResourceUsage.Default,
+                CpuAccessFlags.None,
+                ResourceOptionFlags.BufferStructured,
+                4);
+            _artifactErrorBuffer = _device.CreateBuffer(errorDescription);
+            _artifactErrorView = _device.CreateUnorderedAccessView(_artifactErrorBuffer);
+            _artifactErrorStaging = _device.CreateBuffer(new BufferDescription(
+                4u,
+                BindFlags.None,
+                ResourceUsage.Staging,
+                CpuAccessFlags.Read,
+                ResourceOptionFlags.None,
+                4));
+
             string shaderPath = Path.Combine(AppContext.BaseDirectory, "Workload.hlsl");
             ReadOnlyMemory<byte> coreBytecode = Compiler.CompileFromFile(shaderPath, "CoreMain", "cs_5_0");
             ReadOnlyMemory<byte> memoryBytecode = Compiler.CompileFromFile(shaderPath, "MemoryMain", "cs_5_0");
+            ReadOnlyMemory<byte> seedBytecode = Compiler.CompileFromFile(shaderPath, "ArtifactSeedMain", "cs_5_0");
+            ReadOnlyMemory<byte> verifyBytecode = Compiler.CompileFromFile(shaderPath, "ArtifactVerifyMain", "cs_5_0");
             _coreShader = _device.CreateComputeShader(coreBytecode.Span);
             _memoryShader = _device.CreateComputeShader(memoryBytecode.Span);
+            _artifactSeedShader = _device.CreateComputeShader(seedBytecode.Span);
+            _artifactVerifyShader = _device.CreateComputeShader(verifyBytecode.Span);
             _completionQueries = new ID3D11Query[QueueDepth];
             for (int index = 0; index < QueueDepth; index++)
             {
@@ -357,6 +407,11 @@ internal static class Program
                         }
                     }
 
+                    // Seed the artifact pattern, let this batch's load run around it, then
+                    // verify. Interleaving it with the load is the point: the corruption being
+                    // hunted appears while the memory is under stress, not while it is idle.
+                    RunArtifactCycle();
+
                     _context.End(_completionQueries[WorkloadQueue.SubmitSlot(_submittedBatches, QueueDepth)]);
                     _context.Flush();
                     _submittedBatches++;
@@ -364,6 +419,7 @@ internal static class Program
                     if (WorkloadQueue.WaitSlot(_submittedBatches, QueueDepth) is int oldest)
                     {
                         await WaitForGpuCompletionAsync(_completionQueries[oldest], cancellationToken).ConfigureAwait(false);
+                        ReadArtifactErrors();
                     }
 
                     lock (_stateGate) _heartbeat = DateTimeOffset.UtcNow;
@@ -389,6 +445,52 @@ internal static class Program
             _context.CSSetUnorderedAccessView(0, _view);
             _context.Dispatch(groupsX, groupsY, 1);
             Interlocked.Increment(ref _dispatchCount);
+        }
+
+        /// <summary>
+        /// Seeds the index-derived pattern and verifies it, so a value that did not survive
+        /// the round trip through memory under load is counted. This is the only check that
+        /// sees silently WRONG results: throughput and driver resets both miss them, and on
+        /// GDDR6X error correction turns real corruption into a merely unimpressive score.
+        /// </summary>
+        private void RunArtifactCycle()
+        {
+            _context.CSSetShader(_artifactSeedShader);
+            _context.CSSetUnorderedAccessView(1, _artifactView);
+            _context.CSSetUnorderedAccessView(2, _artifactErrorView);
+            _context.Dispatch(_artifactGroups, 1, 1);
+
+            _context.CSSetShader(_artifactVerifyShader);
+            _context.Dispatch(_artifactGroups, 1, 1);
+        }
+
+        /// <summary>
+        /// Copies the GPU-side mismatch counter back. Read-only and best effort: a failed
+        /// readback must not fault the workload, it only means this window contributes no
+        /// artifact evidence.
+        /// </summary>
+        private void ReadArtifactErrors()
+        {
+            try
+            {
+                _context.CopyResource(_artifactErrorStaging, _artifactErrorBuffer);
+                Vortice.Direct3D11.MappedSubresource mapped = _context.Map(_artifactErrorStaging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+                try
+                {
+                    // Marshal rather than a raw pointer dereference: this host runs in the
+                    // signed-in user session next to hardware control, and the counter is one
+                    // 32-bit value — not worth enabling unsafe code across the project for.
+                    int observed = System.Runtime.InteropServices.Marshal.ReadInt32(mapped.DataPointer);
+                    Interlocked.Exchange(ref _artifactErrorTotal, observed < 0 ? 0 : observed);
+                }
+                finally
+                {
+                    _context.Unmap(_artifactErrorStaging, 0);
+                }
+            }
+            catch (Exception exception) when (exception is SharpGen.Runtime.SharpGenException or InvalidOperationException)
+            {
+            }
         }
 
         private async Task WaitForGpuCompletionAsync(ID3D11Query query, CancellationToken cancellationToken)
@@ -431,7 +533,8 @@ internal static class Program
                 MatchingHardwareAdapterCount,
                 Interlocked.Read(ref _dispatchCount),
                 heartbeat,
-                fault);
+                fault,
+                Interlocked.Read(ref _artifactErrorTotal));
         }
 
         public void Dispose()
@@ -444,6 +547,13 @@ internal static class Program
             {
                 query.Dispose();
             }
+            _artifactVerifyShader.Dispose();
+            _artifactSeedShader.Dispose();
+            _artifactErrorStaging.Dispose();
+            _artifactErrorView.Dispose();
+            _artifactErrorBuffer.Dispose();
+            _artifactView.Dispose();
+            _artifactBuffer.Dispose();
             _memoryShader.Dispose();
             _coreShader.Dispose();
             _view.Dispose();
