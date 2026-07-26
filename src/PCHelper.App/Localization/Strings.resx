@@ -262,4 +262,41 @@
   <data name="Nav_DiagnosticsLong" xml:space="preserve">
     <value>Diagnostics and settings</value>
   </data>
+  <!-- Header command bar and the non-modal notice. These render on every page. -->
+  <data name="Header_InterfaceModeName" xml:space="preserve">
+    <value>Current interface mode</value>
+  </data>
+  <data name="Header_HardwareControlLabel" xml:space="preserve">
+    <value>Hardware control</value>
+  </data>
+  <data name="Header_HardwareControlName" xml:space="preserve">
+    <value>Enable hardware control on this machine</value>
+  </data>
+  <data name="Header_HardwareControlTooltip" xml:space="preserve">
+    <value>Owner acknowledgement, remembered on this machine: arms every implemented GPU write family (fan, power limit, clocks) while connected. Turning it off restores vendor defaults.</value>
+  </data>
+  <data name="Header_AdvancedLabTooltip" xml:space="preserve">
+    <value>Switch between daily controls and exact capability detail</value>
+  </data>
+  <data name="Header_AdvancedLabName" xml:space="preserve">
+    <value>Toggle Advanced Lab</value>
+  </data>
+  <data name="Header_RefreshHint" xml:space="preserve">
+    <value>F5 to refresh</value>
+  </data>
+  <data name="Header_RefreshTooltip" xml:space="preserve">
+    <value>Refresh inventory and live readings (F5)</value>
+  </data>
+  <data name="Header_RefreshName" xml:space="preserve">
+    <value>Refresh hardware state</value>
+  </data>
+  <data name="Header_RefreshLabel" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="Notice_Dismiss" xml:space="preserve">
+    <value>Dismiss message</value>
+  </data>
+  <data name="Capability_WhyExpander" xml:space="preserve">
+    <value>Why, and the next safe step</value>
+  </data>
 </root>

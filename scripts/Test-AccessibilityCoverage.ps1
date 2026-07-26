@@ -64,11 +64,21 @@ function Get-AccessibleName($node) {
     return $null
 }
 
+# A markup extension is normally not usable as a name, because {Binding …} resolves to a
+# value this script cannot see. {loc:Loc …} is the exception: it resolves to a fixed string
+# from the resx at load time, so a control named by one is exactly as nameable as a literal.
+# Without this, localizing a control's own label REMOVED its accessible name from the count —
+# a false regression that would have arrived once per extraction batch, forever.
+function Test-IsNameText([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+    if ($Value -match '^\s*\{loc:Loc') { return $true }
+    return $Value -notmatch '^\s*\{' -and $Value -match '[A-Za-z]{2}'
+}
+
 function Test-HasTextContent($node) {
     # Literal Content/Text on the element itself.
     foreach ($name in 'Content', 'Text') {
-        $value = $node.GetAttribute($name)
-        if (-not [string]::IsNullOrWhiteSpace($value) -and $value -notmatch '^\s*\{' -and $value -match '[A-Za-z]{2}') {
+        if (Test-IsNameText $node.GetAttribute($name)) {
             return $true
         }
     }
@@ -77,8 +87,7 @@ function Test-HasTextContent($node) {
     foreach ($descendant in $node.SelectNodes('.//*')) {
         if ($descendant.LocalName -ne 'TextBlock' -and $descendant.LocalName -ne 'Run') { continue }
         if ($descendant.GetAttribute('FontFamily') -match 'IconFont') { continue }
-        $text = $descendant.GetAttribute('Text')
-        if (-not [string]::IsNullOrWhiteSpace($text) -and $text -notmatch '^\s*\{' -and $text -match '[A-Za-z]{2}') {
+        if (Test-IsNameText $descendant.GetAttribute('Text')) {
             return $true
         }
         if (-not [string]::IsNullOrWhiteSpace($descendant.InnerText) -and $descendant.InnerText -match '[A-Za-z]{2}') {

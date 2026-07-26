@@ -99,7 +99,7 @@
                     IsExpanded="{Binding IsDetailsExpanded, Mode=TwoWay}"
                     Foreground="{StaticResource MutedTextBrush}">
             <Expander.Header>
-              <TextBlock Text="Why, and the next safe step" Style="{StaticResource SubtleStyle}" />
+              <TextBlock Text="{loc:Loc Capability_WhyExpander}" Style="{StaticResource SubtleStyle}" />
             </Expander.Header>
             <StackPanel Margin="0,6,0,0">
               <TextBlock Text="{Binding Reason}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" />
@@ -346,7 +346,7 @@
                   Padding="10,5"
                   Margin="0,0,8,0"
                   ToolTip="{Binding InterfaceModeDescription}"
-                  automation:AutomationProperties.Name="Current interface mode"
+                  automation:AutomationProperties.Name="{loc:Loc Header_InterfaceModeName}"
                   automation:AutomationProperties.AutomationId="Header.InterfaceMode">
             <TextBlock Text="{Binding InterfaceModeLabel}" Style="{StaticResource BadgeTextStyle}" />
           </Border>
@@ -354,15 +354,15 @@
                     Command="{Binding ToggleHardwareControlCommand}"
                     VerticalAlignment="Center"
                     Margin="0,0,14,0"
-                    ToolTip="Owner acknowledgement, remembered on this machine: arms every implemented GPU write family (fan, power limit, clocks) while connected. Turning it off restores vendor defaults."
-                    automation:AutomationProperties.Name="Enable hardware control on this machine"
+                    ToolTip="{loc:Loc Header_HardwareControlTooltip}"
+                    automation:AutomationProperties.Name="{loc:Loc Header_HardwareControlName}"
                     automation:AutomationProperties.AutomationId="Header.HardwareControl">
-            <TextBlock Text="Hardware control" FontWeight="SemiBold" />
+            <TextBlock Text="{loc:Loc Header_HardwareControlLabel}" FontWeight="SemiBold" />
           </CheckBox>
           <Button Command="{Binding ToggleAdvancedLabCommand}"
                   Margin="0,0,10,0"
-                  ToolTip="Switch between daily controls and exact capability detail"
-                  automation:AutomationProperties.Name="Toggle Advanced Lab"
+                  ToolTip="{loc:Loc Header_AdvancedLabTooltip}"
+                  automation:AutomationProperties.Name="{loc:Loc Header_AdvancedLabName}"
                   automation:AutomationProperties.AutomationId="Header.ToggleAdvancedLab">
             <StackPanel Orientation="Horizontal">
               <TextBlock Text="&#xE9D9;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" Margin="0,0,7,0" />
@@ -371,16 +371,16 @@
           </Button>
           <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
             <TextBlock Text="{Binding LastUpdatedText}" Style="{StaticResource SubtleStyle}" HorizontalAlignment="Right" />
-            <TextBlock Text="F5 to refresh" Style="{StaticResource SubtleStyle}" HorizontalAlignment="Right" Margin="0,2,0,0" />
+            <TextBlock Text="{loc:Loc Header_RefreshHint}" Style="{StaticResource SubtleStyle}" HorizontalAlignment="Right" Margin="0,2,0,0" />
           </StackPanel>
           <Button Command="{Binding RefreshCommand}"
                   Style="{StaticResource PrimaryButtonStyle}"
-                  ToolTip="Refresh inventory and live readings (F5)"
-                  automation:AutomationProperties.Name="Refresh hardware state"
+                  ToolTip="{loc:Loc Header_RefreshTooltip}"
+                  automation:AutomationProperties.Name="{loc:Loc Header_RefreshName}"
                   automation:AutomationProperties.AutomationId="Header.Refresh">
             <StackPanel Orientation="Horizontal">
               <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" Foreground="#FFFFFF" Margin="0,0,8,0" />
-              <TextBlock Text="Refresh" Foreground="#FFFFFF" FontWeight="SemiBold" />
+              <TextBlock Text="{loc:Loc Header_RefreshLabel}" Foreground="#FFFFFF" FontWeight="SemiBold" />
             </StackPanel>
           </Button>
         </StackPanel>
@@ -419,8 +419,8 @@
                   Style="{StaticResource GhostButtonStyle}"
                   Padding="8,3"
                   MinHeight="0"
-                  ToolTip="Dismiss message"
-                  automation:AutomationProperties.Name="Dismiss message">
+                  ToolTip="{loc:Loc Notice_Dismiss}"
+                  automation:AutomationProperties.Name="{loc:Loc Notice_Dismiss}">
             <TextBlock Text="&#xE711;" FontFamily="{StaticResource IconFont}" />
           </Button>
           <TextBlock Text="&#xE946;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />

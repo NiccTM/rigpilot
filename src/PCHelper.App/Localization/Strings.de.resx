@@ -252,4 +252,40 @@
   <data name="Nav_DiagnosticsLong" xml:space="preserve">
     <value>Diagnose und Einstellungen</value>
   </data>
+  <data name="Header_InterfaceModeName" xml:space="preserve">
+    <value>Aktueller Oberflächenmodus</value>
+  </data>
+  <data name="Header_HardwareControlLabel" xml:space="preserve">
+    <value>Hardware-Steuerung</value>
+  </data>
+  <data name="Header_HardwareControlName" xml:space="preserve">
+    <value>Hardware-Steuerung auf diesem Rechner aktivieren</value>
+  </data>
+  <data name="Header_HardwareControlTooltip" xml:space="preserve">
+    <value>Bestätigung durch den Besitzer, auf diesem Rechner gespeichert: Aktiviert bei bestehender Verbindung alle implementierten GPU-Schreibfunktionen (Lüfter, Leistungsgrenze, Taktraten). Beim Deaktivieren werden die Herstellervorgaben wiederhergestellt.</value>
+  </data>
+  <data name="Header_AdvancedLabTooltip" xml:space="preserve">
+    <value>Zwischen den täglichen Steuerelementen und den genauen Fähigkeitsdetails wechseln</value>
+  </data>
+  <data name="Header_AdvancedLabName" xml:space="preserve">
+    <value>Erweitertes Labor umschalten</value>
+  </data>
+  <data name="Header_RefreshHint" xml:space="preserve">
+    <value>F5 zum Aktualisieren</value>
+  </data>
+  <data name="Header_RefreshTooltip" xml:space="preserve">
+    <value>Inventar und Live-Messwerte aktualisieren (F5)</value>
+  </data>
+  <data name="Header_RefreshName" xml:space="preserve">
+    <value>Hardware-Zustand aktualisieren</value>
+  </data>
+  <data name="Header_RefreshLabel" xml:space="preserve">
+    <value>Aktualisieren</value>
+  </data>
+  <data name="Notice_Dismiss" xml:space="preserve">
+    <value>Meldung schließen</value>
+  </data>
+  <data name="Capability_WhyExpander" xml:space="preserve">
+    <value>Begründung und der nächste sichere Schritt</value>
+  </data>
 </root>
