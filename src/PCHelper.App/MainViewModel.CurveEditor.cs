@@ -24,6 +24,43 @@ public sealed partial class MainViewModel
     private const int CurveMinPoints = 2;
 
     /// <summary>
+    /// Named starting shapes for the editor, scaled to the selected output's own duty range.
+    /// Empty until an output is chosen, which is what hides the buttons rather than offering
+    /// templates that could not be applied.
+    /// </summary>
+    public IReadOnlyList<CurveTemplate> CustomCoolingCurveTemplates
+    {
+        get
+        {
+            (double minimumDuty, double maximumDuty) = GetCustomCoolingCurveDutyRange();
+            return CurveTemplateLibrary.For(minimumDuty, maximumDuty);
+        }
+    }
+
+    public bool HasCustomCoolingCurveTemplates => CustomCoolingCurveTemplates.Count > 0;
+
+    /// <summary>
+    /// Replaces the editor's points with a template's. It writes the template through the
+    /// SAME text property a user types into, so the points go through the identical parse,
+    /// clamp, and preview path rather than a second route that could accept something the
+    /// editor itself would reject. The result is then the user's to drag — a template is a
+    /// starting point, not a binding that keeps re-shaping the curve.
+    /// </summary>
+    public void ApplyCurveTemplate(string? key)
+    {
+        (double minimumDuty, double maximumDuty) = GetCustomCoolingCurveDutyRange();
+        if (CurveTemplateLibrary.Find(key, minimumDuty, maximumDuty) is not CurveTemplate template)
+        {
+            return;
+        }
+
+        CustomCoolingCurvePoints = CurveTemplateLibrary.ToEditorText(template);
+        ShowNotice(
+            $"Applied the {template.Name} shape. The points are yours to adjust — drag any handle to change it.",
+            "Success");
+    }
+
+    /// <summary>
     /// Canvas-space handles for every curve point, so the editor can draw a
     /// grabbable dot on each and hit-test drags. Recomputed with the preview.
     /// </summary>

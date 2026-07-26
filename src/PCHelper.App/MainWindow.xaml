@@ -1510,6 +1510,37 @@
                   <StackPanel Margin="0,0,10,10">
                     <TextBlock Text="CURVE NAME" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
                     <TextBox Text="{Binding CustomCoolingCurveName, UpdateSourceTrigger=PropertyChanged}" automation:AutomationProperties.Name="Manual cooling curve name" automation:AutomationProperties.AutomationId="Cooling.CustomCurveName" />
+                    <!-- Hidden until an output is selected: without a duty range there are no
+                         templates to scale, and offering shapes that cannot be applied is worse
+                         than offering none. -->
+                    <StackPanel>
+                      <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                          <Setter Property="Visibility" Value="Collapsed" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasCustomCoolingCurveTemplates}" Value="True">
+                              <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </StackPanel.Style>
+                      <TextBlock Text="START FROM A SHAPE" Style="{StaticResource EyebrowStyle}" Margin="0,11,0,5" />
+                      <ItemsControl ItemsSource="{Binding CustomCoolingCurveTemplates}"
+                                    automation:AutomationProperties.Name="Fan curve starting shapes"
+                                    automation:AutomationProperties.AutomationId="Cooling.CurveTemplates">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <Button Content="{Binding Name}"
+                                    ToolTip="{Binding Description}"
+                                    Margin="0,0,8,8"
+                                    Click="ApplyCurveTemplate_Click"
+                                    automation:AutomationProperties.Name="{Binding Name}" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <TextBlock Text="A shape is a starting point: the points become yours to drag." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,2" />
+                    </StackPanel>
                     <TextBlock Text="TEMPERATURE : DUTY POINTS" Style="{StaticResource EyebrowStyle}" Margin="0,11,0,5" />
                     <TextBox Text="{Binding CustomCoolingCurvePoints, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" MinHeight="106" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" ToolTip="One point per line, for example: 35:25" automation:AutomationProperties.Name="Manual cooling curve points" automation:AutomationProperties.AutomationId="Cooling.CustomCurvePoints" />
                     <TextBlock Text="Use two to eight strictly increasing points. Values use °C:% and must stay above this output's measured floor." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0" />

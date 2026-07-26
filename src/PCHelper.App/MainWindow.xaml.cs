@@ -375,6 +375,17 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ApplyCurveTemplate_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel
+            && sender is FrameworkElement { DataContext: PCHelper.Core.CurveTemplate template })
+        {
+            viewModel.ApplyCurveTemplate(template.Key);
+        }
+
+        e.Handled = true;
+    }
+
     private void PickOpenRgbColour_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel viewModel)
