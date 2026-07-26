@@ -79,9 +79,9 @@ is refused rather than allowed. Macros are for the desktop, never for defeating 
 
 ## Observed: one real Defender detection, and what it was actually about
 
-On 2026-07-20 Microsoft Defender reported `Trojan:Win32/Steanoz.Z!MTB` on this development
-machine. It is worth recording precisely, because the honest reading is not "RigPilot was
-flagged" — no shipped binary was involved.
+On 2026-07-20 Microsoft Defender reported `Trojan:Win32/Steanoz.Z!MTB` on this
+development machine. It is worth recording precisely, because the honest reading
+is not "RigPilot was flagged" — no shipped binary was involved.
 
 The flagged resource was an **ad-hoc developer command line**, not a file:
 
@@ -91,32 +91,36 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
   … $asm.GetType("NvAPIWrapper.GPU.GPUCooler") … GetProperties() …
 ```
 
-That was an assistant-issued exploratory command used to enumerate the NvAPIWrapper cooler
-API surface. The `!MTB` suffix marks a machine-learning behavioural detection, and the
-behaviour it matched is a textbook loader signature: `-ExecutionPolicy Bypass` combined with
-`-NonInteractive`, reflective `Assembly::LoadFile` of a DLL from a user-writable path, and
-runtime type inspection. Malware droppers do exactly this. Defender was not wrong about the
+That was an assistant-issued exploratory command used to enumerate the
+NvAPIWrapper cooler API surface. The `!MTB` suffix marks a machine-learning
+behavioural detection, and the behaviour it matched is a textbook loader
+signature: `-ExecutionPolicy Bypass` combined with `-NonInteractive`, reflective
+`Assembly::LoadFile` of a DLL from a user-writable path, and runtime type
+inspection. Malware droppers do exactly this. Defender was not wrong about the
 shape; it was wrong about the intent.
 
 Three things follow, and the third is the one that matters:
 
-1. **Nothing was lost.** Defender terminated the command; the NvAPIWrapper package in the
-   NuGet cache was untouched (verified by hash-relevant size and original 2020 timestamp,
-   and by a clean publish immediately afterwards). "A threat or app was removed" referred to
-   the in-flight process, not a file.
+1. **Nothing was lost.** Defender terminated the command; the NvAPIWrapper
+   package in the NuGet cache was untouched (verified by hash-relevant size and
+   original 2020 timestamp, and by a clean publish immediately afterwards). "A
+   threat or app was removed" referred to the in-flight process, not a file.
 2. **The pattern does not exist in the product.** No RigPilot script uses
-   `-ExecutionPolicy Bypass`, and the only reflective `LoadFile` in the tree is inside a
-   Microsoft-generated Game Bar sideloading telemetry script from the packaging template.
-3. **Investigating hardware APIs is itself detection-adjacent.** Reflecting over a
-   GPU-control DLL from PowerShell looks, to a behavioural classifier, exactly like staging
-   one. Prefer a throwaway compiled console project or an existing test for API exploration,
-   rather than reflective loads from a bypassed-policy shell. This costs nothing and avoids
-   generating detections that later have to be explained to a user.
+   `-ExecutionPolicy Bypass`, and the only reflective `LoadFile` in the tree is
+   inside a Microsoft-generated Game Bar sideloading telemetry script from the
+   packaging template.
+3. **Investigating hardware APIs is itself detection-adjacent.** Reflecting over
+   a GPU-control DLL from PowerShell looks, to a behavioural classifier, exactly
+   like staging one. Prefer a throwaway compiled console project or an existing
+   test for API exploration, rather than reflective loads from a bypassed-policy
+   shell. This costs nothing and avoids generating detections that later have to
+   be explained to a user.
 
-This is also a preview of the reputation problem the release faces: the signal that fired here
-was behaviour, not a signature, so signing (checklist item 1) removes the "unknown publisher"
-half of the risk but not the behavioural half. Anything RigPilot does that resembles staging
-code at runtime should be avoidable by design, not by allowlisting.
+This is also a preview of the reputation problem the release faces: the signal
+that fired here was behaviour, not a signature, so signing (checklist item 1)
+removes the "unknown publisher" half of the risk but not the behavioural half.
+Anything RigPilot does that resembles staging code at runtime should be
+avoidable by design, not by allowlisting.
 
 ## For users seeing a flag
 
