@@ -299,4 +299,74 @@
   <data name="Capability_WhyExpander" xml:space="preserve">
     <value>Why, and the next safe step</value>
   </data>
+  <!-- Overview page: metric cards, the mode banners, and the Experimental Control Center. -->
+  <data name="Overview_DevicesEyebrow" xml:space="preserve">
+    <value>DEVICES</value>
+  </data>
+  <data name="Overview_DevicesCaption" xml:space="preserve">
+    <value>Enumerated hardware</value>
+  </data>
+  <data name="Overview_SensorsEyebrow" xml:space="preserve">
+    <value>LIVE SENSORS</value>
+  </data>
+  <data name="Overview_SensorsCaption" xml:space="preserve">
+    <value>Current readings</value>
+  </data>
+  <data name="Overview_VerifiedEyebrow" xml:space="preserve">
+    <value>VERIFIED CONTROLS</value>
+  </data>
+  <data name="Overview_VerifiedCaption" xml:space="preserve">
+    <value>Write-capable</value>
+  </data>
+  <data name="Overview_ProfileEyebrow" xml:space="preserve">
+    <value>ACTIVE PROFILE</value>
+  </data>
+  <data name="Overview_ProfileCaption" xml:space="preserve">
+    <value>Manual selection wins</value>
+  </data>
+  <data name="Overview_SimpleTitle" xml:space="preserve">
+    <value>Daily controls</value>
+  </data>
+  <data name="Overview_SimpleBody" xml:space="preserve">
+    <value>Use Profiles for stock-safe changes and keep an eye on these core readings. Experimental controls, calibration, raw trends, ownership details, imports, and qualification evidence are available only in Advanced Lab.</value>
+  </data>
+  <data name="Overview_AdvancedTitle" xml:space="preserve">
+    <value>Advanced Lab workspace</value>
+  </data>
+  <data name="Overview_AdvancedBody" xml:space="preserve">
+    <value>Raw monitoring, sensor comparison, event history, exact capability evidence, imports, and commissioning tools are now available below. Hardware writes remain evidence-gated.</value>
+  </data>
+  <data name="Overview_AdvancedBadge" xml:space="preserve">
+    <value>ADVANCED</value>
+  </data>
+  <data name="Experimental_Title" xml:space="preserve">
+    <value>Experimental Control Center</value>
+  </data>
+  <data name="Experimental_Subtitle" xml:space="preserve">
+    <value>Explanatory only — nothing on this panel sends a hardware command.</value>
+  </data>
+  <data name="Experimental_DetectedEyebrow" xml:space="preserve">
+    <value>DETECTED</value>
+  </data>
+  <data name="Experimental_DetectedCaption" xml:space="preserve">
+    <value>Experimental capabilities</value>
+  </data>
+  <data name="Experimental_HeaderPathEyebrow" xml:space="preserve">
+    <value>HEADER PATH</value>
+  </data>
+  <data name="Experimental_HeaderPathCaption" xml:space="preserve">
+    <value>Bounded non-protected fan outputs</value>
+  </data>
+  <data name="Experimental_ProtectedEyebrow" xml:space="preserve">
+    <value>PROTECTED</value>
+  </data>
+  <data name="Experimental_ProtectedCaption" xml:space="preserve">
+    <value>Pump or CPU-fan safety roles</value>
+  </data>
+  <data name="Experimental_AcknowledgeName" xml:space="preserve">
+    <value>Acknowledge Experimental hardware controls for this session</value>
+  </data>
+  <data name="Experimental_AcknowledgeBody" xml:space="preserve">
+    <value>I understand Experimental controls can misconfigure unsupported hardware. This session-only acknowledgement does not bypass exact-device confirmation, commissioning, or CPU/pump protection.</value>
+  </data>
 </root>

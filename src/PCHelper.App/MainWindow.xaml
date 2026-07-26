@@ -440,9 +440,9 @@
                     <ColumnDefinition Width="38" />
                   </Grid.ColumnDefinitions>
                   <StackPanel>
-                    <TextBlock Text="DEVICES" Style="{StaticResource EyebrowStyle}" />
+                    <TextBlock Text="{loc:Loc Overview_DevicesEyebrow}" Style="{StaticResource EyebrowStyle}" />
                     <TextBlock Text="{Binding DeviceCount}" Style="{StaticResource MetricValueStyle}" Margin="0,7,0,2" />
-                    <TextBlock Text="Enumerated hardware" Style="{StaticResource SubtleStyle}" />
+                    <TextBlock Text="{loc:Loc Overview_DevicesCaption}" Style="{StaticResource SubtleStyle}" />
                   </StackPanel>
                   <Border Grid.Column="1" Width="34" Height="34" CornerRadius="9" Background="{StaticResource AccentSoftBrush}" VerticalAlignment="Top">
                     <TextBlock Text="&#xE772;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -456,9 +456,9 @@
                     <ColumnDefinition Width="38" />
                   </Grid.ColumnDefinitions>
                   <StackPanel>
-                    <TextBlock Text="LIVE SENSORS" Style="{StaticResource EyebrowStyle}" />
+                    <TextBlock Text="{loc:Loc Overview_SensorsEyebrow}" Style="{StaticResource EyebrowStyle}" />
                     <TextBlock Text="{Binding SensorCount}" Style="{StaticResource MetricValueStyle}" Margin="0,7,0,2" />
-                    <TextBlock Text="Current readings" Style="{StaticResource SubtleStyle}" />
+                    <TextBlock Text="{loc:Loc Overview_SensorsCaption}" Style="{StaticResource SubtleStyle}" />
                   </StackPanel>
                   <Border Grid.Column="1" Width="34" Height="34" CornerRadius="9" Background="{StaticResource AccentSoftBrush}" VerticalAlignment="Top">
                     <TextBlock Text="&#xE9D9;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -472,9 +472,9 @@
                     <ColumnDefinition Width="38" />
                   </Grid.ColumnDefinitions>
                   <StackPanel>
-                    <TextBlock Text="VERIFIED CONTROLS" Style="{StaticResource EyebrowStyle}" />
+                    <TextBlock Text="{loc:Loc Overview_VerifiedEyebrow}" Style="{StaticResource EyebrowStyle}" />
                     <TextBlock Text="{Binding VerifiedControlCount}" Style="{StaticResource MetricValueStyle}" Margin="0,7,0,2" />
-                    <TextBlock Text="Write-capable" Style="{StaticResource SubtleStyle}" />
+                    <TextBlock Text="{loc:Loc Overview_VerifiedCaption}" Style="{StaticResource SubtleStyle}" />
                   </StackPanel>
                   <Border Grid.Column="1" Width="34" Height="34" CornerRadius="9" Background="{StaticResource SafeSoftBrush}" VerticalAlignment="Top">
                     <TextBlock Text="&#xE73E;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource SafeBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -488,9 +488,9 @@
                     <ColumnDefinition Width="38" />
                   </Grid.ColumnDefinitions>
                   <StackPanel>
-                    <TextBlock Text="ACTIVE PROFILE" Style="{StaticResource EyebrowStyle}" />
+                    <TextBlock Text="{loc:Loc Overview_ProfileEyebrow}" Style="{StaticResource EyebrowStyle}" />
                     <TextBlock Text="{Binding ActiveProfileName}" FontSize="22" FontWeight="SemiBold" Margin="0,9,0,4" />
-                    <TextBlock Text="Manual selection wins" Style="{StaticResource SubtleStyle}" />
+                    <TextBlock Text="{loc:Loc Overview_ProfileCaption}" Style="{StaticResource SubtleStyle}" />
                   </StackPanel>
                   <Border Grid.Column="1" Width="34" Height="34" CornerRadius="9" Background="{StaticResource AccentSoftBrush}" VerticalAlignment="Top">
                     <TextBlock Text="&#xE771;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -507,8 +507,8 @@
                     <TextBlock Text="&#xE73E;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                   </Border>
                   <StackPanel Grid.Column="1">
-                    <TextBlock Text="Daily controls" FontSize="15" FontWeight="SemiBold" />
-                    <TextBlock Text="Use Profiles for stock-safe changes and keep an eye on these core readings. Experimental controls, calibration, raw trends, ownership details, imports, and qualification evidence are available only in Advanced Lab." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    <TextBlock Text="{loc:Loc Overview_SimpleTitle}" FontSize="15" FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Loc Overview_SimpleBody}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                   </StackPanel>
                 </Grid>
               </Border>
@@ -522,11 +522,11 @@
                     <TextBlock Text="&#xE9D9;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                   </Border>
                   <StackPanel Grid.Column="1">
-                    <TextBlock Text="Advanced Lab workspace" FontSize="15" FontWeight="SemiBold" />
-                    <TextBlock Text="Raw monitoring, sensor comparison, event history, exact capability evidence, imports, and commissioning tools are now available below. Hardware writes remain evidence-gated." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    <TextBlock Text="{loc:Loc Overview_AdvancedTitle}" FontSize="15" FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Loc Overview_AdvancedBody}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                   </StackPanel>
                   <Border Grid.Column="2" Background="{StaticResource AccentSoftBrush}" CornerRadius="12" Padding="9,4" Margin="14,0,0,0" VerticalAlignment="Top">
-                    <TextBlock Text="ADVANCED" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource AccentBrush}" />
+                    <TextBlock Text="{loc:Loc Overview_AdvancedBadge}" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource AccentBrush}" />
                   </Border>
                 </Grid>
               </Border>
@@ -541,8 +541,8 @@
                       <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource WarningBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <StackPanel Grid.Column="1">
-                      <TextBlock Text="Experimental Control Center" FontSize="16" FontWeight="SemiBold" />
-                      <TextBlock Text="Explanatory only — nothing on this panel sends a hardware command." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                      <TextBlock Text="{loc:Loc Experimental_Title}" FontSize="16" FontWeight="SemiBold" />
+                      <TextBlock Text="{loc:Loc Experimental_Subtitle}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,3,0,0" />
                     </StackPanel>
                     <Border Grid.Column="2" Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" CornerRadius="12" Padding="9,4" Margin="14,0,0,0" VerticalAlignment="Top">
                       <TextBlock Text="{Binding ExperimentalGateBadge}" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource WarningBrush}" />
@@ -552,13 +552,13 @@
                   <TextBlock Text="{Binding ExperimentalGateSummary}" TextWrapping="Wrap" Margin="0,14,0,0" automation:AutomationProperties.LiveSetting="Polite" />
 
                   <local:AdaptiveUniformGrid MaximumColumns="3" MinimumColumns="1" MinimumItemWidth="220" Margin="0,14,0,2">
-                    <Border Style="{StaticResource InsetCardStyle}" Padding="12" Margin="0,0,10,10"><StackPanel><TextBlock Text="DETECTED" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding ExperimentalControlCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0" /><TextBlock Text="Experimental capabilities" Style="{StaticResource SubtleStyle}" Margin="0,2,0,0" /></StackPanel></Border>
-                    <Border Style="{StaticResource InsetCardStyle}" Padding="12" Margin="0,0,10,10"><StackPanel><TextBlock Text="HEADER PATH" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding CommissioningEligibleExperimentalControlCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0" /><TextBlock Text="Bounded non-protected fan outputs" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" /></StackPanel></Border>
-                    <Border Style="{StaticResource InsetCardStyle}" Padding="12" Margin="0,0,10,10"><StackPanel><TextBlock Text="PROTECTED" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding ProtectedExperimentalControlCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0" /><TextBlock Text="Pump or CPU-fan safety roles" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" /></StackPanel></Border>
+                    <Border Style="{StaticResource InsetCardStyle}" Padding="12" Margin="0,0,10,10"><StackPanel><TextBlock Text="{loc:Loc Experimental_DetectedEyebrow}" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding ExperimentalControlCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0" /><TextBlock Text="{loc:Loc Experimental_DetectedCaption}" Style="{StaticResource SubtleStyle}" Margin="0,2,0,0" /></StackPanel></Border>
+                    <Border Style="{StaticResource InsetCardStyle}" Padding="12" Margin="0,0,10,10"><StackPanel><TextBlock Text="{loc:Loc Experimental_HeaderPathEyebrow}" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding CommissioningEligibleExperimentalControlCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0" /><TextBlock Text="{loc:Loc Experimental_HeaderPathCaption}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" /></StackPanel></Border>
+                    <Border Style="{StaticResource InsetCardStyle}" Padding="12" Margin="0,0,10,10"><StackPanel><TextBlock Text="{loc:Loc Experimental_ProtectedEyebrow}" Style="{StaticResource EyebrowStyle}" /><TextBlock Text="{Binding ProtectedExperimentalControlCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0" /><TextBlock Text="{loc:Loc Experimental_ProtectedCaption}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,2,0,0" /></StackPanel></Border>
                   </local:AdaptiveUniformGrid>
 
-                  <CheckBox IsChecked="{Binding AdvancedWritesAcknowledged}" Margin="0,2,0,0" automation:AutomationProperties.Name="Acknowledge Experimental hardware controls for this session" automation:AutomationProperties.AutomationId="Overview.AcknowledgeExperimental">
-                    <TextBlock Text="I understand Experimental controls can misconfigure unsupported hardware. This session-only acknowledgement does not bypass exact-device confirmation, commissioning, or CPU/pump protection." TextWrapping="Wrap" />
+                  <CheckBox IsChecked="{Binding AdvancedWritesAcknowledged}" Margin="0,2,0,0" automation:AutomationProperties.Name="{loc:Loc Experimental_AcknowledgeName}" automation:AutomationProperties.AutomationId="Overview.AcknowledgeExperimental">
+                    <TextBlock Text="{loc:Loc Experimental_AcknowledgeBody}" TextWrapping="Wrap" />
                   </CheckBox>
                   <TextBlock Text="{Binding ExperimentalAcknowledgementDetail}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0" />
 
@@ -1504,7 +1504,7 @@
                     <TextBlock Text="{loc:Loc Curve_StudioTitle}" Style="{StaticResource CardTitleStyle}" />
                     <TextBlock Text="Fan Control-style temperature-to-duty points for one calibrated output. RigPilot retains the measured nonzero floor and requires the final point to reach that controller's maximum." Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                   </StackPanel>
-                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="8,3"><TextBlock Text="ADVANCED" Style="{StaticResource BadgeTextStyle}" /></Border>
+                  <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="8,3"><TextBlock Text="{loc:Loc Overview_AdvancedBadge}" Style="{StaticResource BadgeTextStyle}" /></Border>
                 </Grid>
                 <local:AdaptiveUniformGrid MaximumColumns="2" MinimumColumns="1" MinimumItemWidth="300" Margin="0,13,0,0">
                   <StackPanel Margin="0,0,10,10">

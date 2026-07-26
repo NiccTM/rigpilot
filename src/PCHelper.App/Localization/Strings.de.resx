@@ -288,4 +288,73 @@
   <data name="Capability_WhyExpander" xml:space="preserve">
     <value>Begründung und der nächste sichere Schritt</value>
   </data>
+  <data name="Overview_DevicesEyebrow" xml:space="preserve">
+    <value>GERÄTE</value>
+  </data>
+  <data name="Overview_DevicesCaption" xml:space="preserve">
+    <value>Erfasste Hardware</value>
+  </data>
+  <data name="Overview_SensorsEyebrow" xml:space="preserve">
+    <value>LIVE-SENSOREN</value>
+  </data>
+  <data name="Overview_SensorsCaption" xml:space="preserve">
+    <value>Aktuelle Messwerte</value>
+  </data>
+  <data name="Overview_VerifiedEyebrow" xml:space="preserve">
+    <value>VERIFIZIERTE STEUERUNGEN</value>
+  </data>
+  <data name="Overview_VerifiedCaption" xml:space="preserve">
+    <value>Schreibfähig</value>
+  </data>
+  <data name="Overview_ProfileEyebrow" xml:space="preserve">
+    <value>AKTIVES PROFIL</value>
+  </data>
+  <data name="Overview_ProfileCaption" xml:space="preserve">
+    <value>Manuelle Auswahl hat Vorrang</value>
+  </data>
+  <data name="Overview_SimpleTitle" xml:space="preserve">
+    <value>Tägliche Steuerung</value>
+  </data>
+  <data name="Overview_SimpleBody" xml:space="preserve">
+    <value>Verwenden Sie Profile für Änderungen im sicheren Werksrahmen und behalten Sie diese Kernwerte im Blick. Experimentelle Steuerungen, Kalibrierung, Rohtrends, Besitzdetails, Importe und Qualifizierungsnachweise sind ausschließlich im erweiterten Labor verfügbar.</value>
+  </data>
+  <data name="Overview_AdvancedTitle" xml:space="preserve">
+    <value>Arbeitsbereich des erweiterten Labors</value>
+  </data>
+  <data name="Overview_AdvancedBody" xml:space="preserve">
+    <value>Rohüberwachung, Sensorvergleich, Ereignisverlauf, exakte Fähigkeitsnachweise, Importe und Inbetriebnahmewerkzeuge stehen jetzt unten zur Verfügung. Hardware-Schreibvorgänge bleiben nachweisgebunden.</value>
+  </data>
+  <data name="Overview_AdvancedBadge" xml:space="preserve">
+    <value>ERWEITERT</value>
+  </data>
+  <data name="Experimental_Title" xml:space="preserve">
+    <value>Zentrale für experimentelle Steuerungen</value>
+  </data>
+  <data name="Experimental_Subtitle" xml:space="preserve">
+    <value>Nur zur Erläuterung — nichts auf dieser Seite sendet einen Hardware-Befehl.</value>
+  </data>
+  <data name="Experimental_DetectedEyebrow" xml:space="preserve">
+    <value>ERKANNT</value>
+  </data>
+  <data name="Experimental_DetectedCaption" xml:space="preserve">
+    <value>Experimentelle Fähigkeiten</value>
+  </data>
+  <data name="Experimental_HeaderPathEyebrow" xml:space="preserve">
+    <value>HEADER-PFAD</value>
+  </data>
+  <data name="Experimental_HeaderPathCaption" xml:space="preserve">
+    <value>Begrenzte, nicht geschützte Lüfterausgänge</value>
+  </data>
+  <data name="Experimental_ProtectedEyebrow" xml:space="preserve">
+    <value>GESCHÜTZT</value>
+  </data>
+  <data name="Experimental_ProtectedCaption" xml:space="preserve">
+    <value>Sicherheitsrollen für Pumpe oder CPU-Lüfter</value>
+  </data>
+  <data name="Experimental_AcknowledgeName" xml:space="preserve">
+    <value>Experimentelle Hardware-Steuerungen für diese Sitzung bestätigen</value>
+  </data>
+  <data name="Experimental_AcknowledgeBody" xml:space="preserve">
+    <value>Mir ist bewusst, dass experimentelle Steuerungen nicht unterstützte Hardware fehlerhaft konfigurieren können. Diese nur für die Sitzung geltende Bestätigung umgeht weder die Bestätigung des exakten Geräts noch die Inbetriebnahme oder den Schutz von CPU und Pumpe.</value>
+  </data>
 </root>
