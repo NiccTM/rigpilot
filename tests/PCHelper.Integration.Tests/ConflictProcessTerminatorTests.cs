@@ -74,6 +74,26 @@ public sealed class ConflictProcessTerminatorTests
     }
 
     [Fact]
+    public void TerminatesAControllerMatchedByInstallPathWhenItsProcessNameIsGeneric()
+    {
+        // NZXT CAM's background service runs as a generic "service.exe"; it is on the allowlist
+        // only via its install-path hint. The close action must still terminate it, while an
+        // unrelated service.exe on a different path is left alone (the hint is specific, not a
+        // blanket "kill every service.exe").
+        FakeProcessControl control = new(
+            new RunningProcessInfo(20, "service", @"C:\Program Files\NZXT CAM\service.exe"),
+            new RunningProcessInfo(21, "service", @"C:\Windows\System32\unrelated\service.exe"));
+        ConflictProcessTerminator terminator = new(control);
+
+        StopConflictingProcessesResultV1 result = terminator.Terminate(
+            new StopConflictingProcessesRequestV1(StopConflictingProcessesRequestV1.CurrentSchemaVersion, ["nzxt-cam"], Confirm: true));
+
+        Assert.Equal([20], control.Killed);
+        Assert.DoesNotContain(21, control.Killed);
+        Assert.Equal(1, result.TerminatedCount);
+    }
+
+    [Fact]
     public void ReportsAKillFailureWithoutClaimingSuccess()
     {
         FakeProcessControl control = new(new RunningProcessInfo(10, "NZXT CAM")) { KillError = "access denied" };

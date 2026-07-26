@@ -9,7 +9,7 @@ public sealed class SystemInventoryAdapter : IHardwareAdapter, IAdapterTopologyC
     public AdapterManifest Manifest { get; } = new(
         "windows.inventory",
         "Windows Inventory",
-        "0.5.5-alpha",
+        "0.6.0-beta.1",
         "GPL-3.0-only",
         null,
         AdapterExecutionContext.SystemService,

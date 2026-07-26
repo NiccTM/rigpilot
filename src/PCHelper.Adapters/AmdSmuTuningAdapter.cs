@@ -52,7 +52,7 @@ public sealed class AmdSmuTuningAdapter : IHardwareAdapter
     public AdapterManifest Manifest { get; } = new(
         AdapterIdValue,
         "AMD Ryzen PBO limit tuning (qualification-gated)",
-        "0.5.5-alpha",
+        "0.6.0-beta.1",
         "AMD SMU mailbox via signed PawnIO (no transport implemented)",
         "Signed PawnIO RyzenSMU module",
         AdapterExecutionContext.SystemService,

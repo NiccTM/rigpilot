@@ -29,6 +29,8 @@ public sealed class ServiceHandshakeTests
         Assert.Equal(ProtocolConstants.Version, handshake.SelectedProtocolVersion);
         Assert.All(ServiceRuntimeFeatures.RequiredByDashboard, feature =>
             Assert.Contains(feature, handshake.Features, StringComparer.OrdinalIgnoreCase));
+        Assert.Contains(ServiceRuntimeFeatures.AutoOcV3, handshake.Features, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(ServiceRuntimeFeatures.ProfileDryRunV1, handshake.Features, StringComparer.OrdinalIgnoreCase);
     }
 
     [Fact]

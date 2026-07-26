@@ -1,0 +1,188 @@
+<Window x:Class="PCHelper.App.ColourPickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Choose a colour"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        FontFamily="Segoe UI Variable Text, Segoe UI"
+        Foreground="{StaticResource TextBrush}">
+
+  <!-- Outer margin leaves room for the card's drop shadow to render inside the
+       transparent window bounds. -->
+  <Border Margin="16" CornerRadius="16"
+          Background="{StaticResource CardBackgroundBrush}"
+          BorderBrush="{StaticResource CardBorderBrush}"
+          BorderThickness="1">
+    <Border.Effect>
+      <DropShadowEffect Color="#000000" BlurRadius="30" ShadowDepth="10" Direction="270" Opacity="0.5" />
+    </Border.Effect>
+
+    <Grid Margin="20,16,20,18" Width="416">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+
+      <!-- Title bar: doubles as the drag handle. -->
+      <Grid x:Name="TitleBar" Grid.Row="0" Margin="0,0,0,16" Background="Transparent"
+            MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="&#xE790;" FontFamily="{StaticResource IconFont}" FontSize="15"
+                     Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,9,0" />
+          <TextBlock Text="Choose a colour" FontFamily="Segoe UI Variable Display, Segoe UI"
+                     FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+        <Button x:Name="CloseButton" Content="&#xE711;" HorizontalAlignment="Right"
+                Width="30" Height="30" MinHeight="0" Padding="0" Click="Cancel_Click"
+                FontFamily="{StaticResource IconFont}" FontSize="11"
+                Background="Transparent" BorderThickness="0" Cursor="Hand"
+                AutomationProperties.Name="Close colour picker" />
+      </Grid>
+
+      <!-- Saturation / value square + hue strip. -->
+      <Grid Grid.Row="1" Margin="0,0,0,16">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="14" />
+          <ColumnDefinition Width="26" />
+        </Grid.ColumnDefinitions>
+
+        <!-- SV square: pure-hue base, white->transparent (saturation) and
+             transparent->black (value) overlays, with a ring thumb on top. -->
+        <Border Grid.Column="0" CornerRadius="10" ClipToBounds="True" Height="232"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+          <Grid>
+            <Border x:Name="SvHueLayer" />
+            <Border>
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                  <GradientStop Color="#FFFFFFFF" Offset="0" />
+                  <GradientStop Color="#00FFFFFF" Offset="1" />
+                </LinearGradientBrush>
+              </Border.Background>
+            </Border>
+            <Border>
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                  <GradientStop Color="#00000000" Offset="0" />
+                  <GradientStop Color="#FF000000" Offset="1" />
+                </LinearGradientBrush>
+              </Border.Background>
+            </Border>
+            <Canvas x:Name="SvCanvas" Background="Transparent" Cursor="Cross"
+                    MouseLeftButtonDown="SvCanvas_MouseDown"
+                    MouseMove="SvCanvas_MouseMove"
+                    MouseLeftButtonUp="SvCanvas_MouseUp"
+                    AutomationProperties.Name="Saturation and brightness field">
+              <Border x:Name="SvThumb" Width="16" Height="16" CornerRadius="8"
+                      BorderBrush="#FFFFFFFF" BorderThickness="2.5" IsHitTestVisible="False">
+                <Border.Effect>
+                  <DropShadowEffect Color="#000000" BlurRadius="4" ShadowDepth="0" Opacity="0.6" />
+                </Border.Effect>
+              </Border>
+            </Canvas>
+          </Grid>
+        </Border>
+
+        <!-- Hue strip. -->
+        <Border Grid.Column="2" CornerRadius="7" ClipToBounds="True" Height="232"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+          <Grid>
+            <Border>
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                  <GradientStop Color="#FFFF0000" Offset="0.000" />
+                  <GradientStop Color="#FFFFFF00" Offset="0.167" />
+                  <GradientStop Color="#FF00FF00" Offset="0.333" />
+                  <GradientStop Color="#FF00FFFF" Offset="0.500" />
+                  <GradientStop Color="#FF0000FF" Offset="0.667" />
+                  <GradientStop Color="#FFFF00FF" Offset="0.833" />
+                  <GradientStop Color="#FFFF0000" Offset="1.000" />
+                </LinearGradientBrush>
+              </Border.Background>
+            </Border>
+            <Canvas x:Name="HueCanvas" Background="Transparent" Cursor="SizeNS"
+                    MouseLeftButtonDown="HueCanvas_MouseDown"
+                    MouseMove="HueCanvas_MouseMove"
+                    MouseLeftButtonUp="HueCanvas_MouseUp"
+                    AutomationProperties.Name="Hue slider">
+              <Border x:Name="HueThumb" Width="30" Height="10" CornerRadius="5" Margin="-2,0,0,0"
+                      Background="#00000000" BorderBrush="#FFFFFFFF" BorderThickness="2.5"
+                      IsHitTestVisible="False">
+                <Border.Effect>
+                  <DropShadowEffect Color="#000000" BlurRadius="4" ShadowDepth="0" Opacity="0.6" />
+                </Border.Effect>
+              </Border>
+            </Canvas>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- Preview swatch + hex field. -->
+      <Grid Grid.Row="2" Margin="0,0,0,12">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Border Width="56" Height="56" CornerRadius="12" BorderThickness="1"
+                BorderBrush="{StaticResource BorderStrongBrush}">
+          <Border.Background>
+            <SolidColorBrush x:Name="PreviewBrush" Color="#FF4EA1FF" />
+          </Border.Background>
+        </Border>
+        <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+          <TextBlock Text="HEX" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
+          <TextBox x:Name="HexBox" MaxLength="7" FontFamily="{StaticResource DataFont}"
+                   TextChanged="HexBox_TextChanged"
+                   AutomationProperties.Name="Colour hexadecimal value" />
+        </StackPanel>
+      </Grid>
+
+      <!-- R / G / B numeric fields. -->
+      <Grid Grid.Row="3" Margin="0,0,0,18">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="10" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="10" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <StackPanel Grid.Column="0">
+          <TextBlock Text="R" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
+          <TextBox x:Name="RedBox" MaxLength="3" FontFamily="{StaticResource DataFont}"
+                   TextChanged="RgbBox_TextChanged" AutomationProperties.Name="Red channel 0 to 255" />
+        </StackPanel>
+        <StackPanel Grid.Column="2">
+          <TextBlock Text="G" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
+          <TextBox x:Name="GreenBox" MaxLength="3" FontFamily="{StaticResource DataFont}"
+                   TextChanged="RgbBox_TextChanged" AutomationProperties.Name="Green channel 0 to 255" />
+        </StackPanel>
+        <StackPanel Grid.Column="4">
+          <TextBlock Text="B" Style="{StaticResource EyebrowStyle}" Margin="0,0,0,5" />
+          <TextBox x:Name="BlueBox" MaxLength="3" FontFamily="{StaticResource DataFont}"
+                   TextChanged="RgbBox_TextChanged" AutomationProperties.Name="Blue channel 0 to 255" />
+        </StackPanel>
+      </Grid>
+
+      <!-- Actions. -->
+      <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button Content="Cancel" MinWidth="96" Margin="0,0,10,0" Click="Cancel_Click"
+                IsCancel="True" AutomationProperties.Name="Cancel colour selection" />
+        <Button Content="Select" MinWidth="96" Style="{StaticResource PrimaryButtonStyle}"
+                Click="Select_Click" IsDefault="True"
+                AutomationProperties.Name="Confirm colour selection" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</Window>

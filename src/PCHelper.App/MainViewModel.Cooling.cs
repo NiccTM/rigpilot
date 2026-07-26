@@ -662,7 +662,12 @@ public sealed partial class MainViewModel
         }
     }
 
-    private async Task StartTuneCoreAsync(int refinementCandidates = 0, double safetyMargin = 0, double thermalHeadroom = 0)
+    private async Task StartTuneCoreAsync(
+        int refinementCandidates = 0,
+        double safetyMargin = 0,
+        double thermalHeadroom = 0,
+        WorkloadHostDescriptorV1? workloadHost = null,
+        AutoOcWorkloadMode? workloadMode = null)
     {
         EnsureServiceWritesAvailable();
         OperationTargetDisplay target = SelectedTuneTarget
@@ -698,7 +703,9 @@ public sealed partial class MainViewModel
                 MaximumCandidates: 12,
                 RefinementCandidates: refinementCandidates,
                 SafetyMargin: safetyMargin,
-                ThermalHeadroomCelsius: thermalHeadroom);
+                ThermalHeadroomCelsius: thermalHeadroom,
+                WorkloadHost: workloadHost,
+                WorkloadMode: workloadMode);
             IpcRequest request = NamedPipeRequestClient.CreateRequest(
                 IpcCommand.StartTune,
                 payload,

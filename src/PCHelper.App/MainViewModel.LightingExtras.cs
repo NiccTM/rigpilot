@@ -392,6 +392,21 @@ public sealed partial class MainViewModel
 
             List<RgbApplyOutcome> outcomes = [];
             HashSet<string> reservedFamilies = new(StringComparer.OrdinalIgnoreCase);
+
+            // Only the OpenRGB bridge renders per-LED gradients. Dynamic Lighting and the
+            // native writers are flat-colour, so a gradient colourway would otherwise reach
+            // them as the stale manual colour (Sunset -> blue). Lower the colourway to its
+            // representative colour for those tiers so Sunset reaches them as its amber. The
+            // bridge still receives the manual colour and renders the full gradient itself.
+            string flatColour = colour;
+            if (useColourway
+                && SelectedColourway is { Id: var colourwayId }
+                && !string.Equals(colourwayId, "static", StringComparison.Ordinal)
+                && RgbColour.TryParse(colour, out RgbColour manualColour))
+            {
+                flatColour = LightingColourways.RepresentativeColour(colourwayId, manualColour).ToString();
+            }
+
             bool openRgbActive = await ApplyReadyOpenRgbRoutesAsync(
                 colour,
                 brightness,
@@ -402,7 +417,7 @@ public sealed partial class MainViewModel
             if (!openRgbActive)
             {
                 await ApplyReadyDynamicLightingRoutesAsync(
-                    colour,
+                    flatColour,
                     brightness,
                     scene,
                     outcomes,
@@ -410,7 +425,7 @@ public sealed partial class MainViewModel
             }
 
             await ApplyUncoveredNativeRgbRoutesAsync(
-                colour,
+                flatColour,
                 brightness,
                 turnOff,
                 outcomes,
@@ -695,58 +710,40 @@ public sealed partial class MainViewModel
         HashSet<string> reservedFamilies)
     {
         string nativeColour = ScaleRgbHex(colour, brightness);
-        await ApplyNativeRgbRouteAsync(
-            "native:kraken",
-            "NZXT Kraken",
-            "nzxt-kraken",
-            IpcCommand.SetKrakenLighting,
-            new KrakenLightingRequestV1(KrakenLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, KrakenLightingRequestV1.ExactDeviceId),
+
+        // Every native RGB family is reached identically: build its exact-device request,
+        // send its command, normalise the reply through ToRgbWriteResult, read WriteIssued.
+        // Only the request type, command, and labels differ, so the routes are a table
+        // rather than four copy-paste blocks. Order is preserved from the original
+        // sequence (Kraken, Aura, DIMM, Razer) and each is awaited in turn.
+        static Func<IpcResponse, (bool, string?)> Inspect<T>(Func<T, RgbWriteResult> map)
+            where T : class =>
             response =>
             {
-                KrakenLightingResultV1? result = IpcJson.FromElement<KrakenLightingResultV1>(response.Payload);
-                return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
-            },
-            outcomes,
-            reservedFamilies);
-        await ApplyNativeRgbRouteAsync(
-            "native:aura",
-            "ASUS Aura headers",
-            "asus-aura",
-            IpcCommand.SetAuraLighting,
-            new AuraLightingRequestV1(AuraLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, AuraLightingRequestV1.ExactDeviceId),
-            response =>
-            {
-                AuraLightingResultV1? result = IpcJson.FromElement<AuraLightingResultV1>(response.Payload);
-                return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
-            },
-            outcomes,
-            reservedFamilies);
-        await ApplyNativeRgbRouteAsync(
-            "native:dimm",
-            "G.Skill Trident Z RAM",
-            "dimm-rgb",
-            IpcCommand.SetDimmRgb,
-            new DimmRgbRequestV1(DimmRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, DimmRgbRequestV1.ExactDeviceId),
-            response =>
-            {
-                DimmRgbResultV1? result = IpcJson.FromElement<DimmRgbResultV1>(response.Payload);
+                RgbWriteResult? result = IpcJson.FromElement<T>(response.Payload) is { } wire ? map(wire) : null;
                 return (result?.WriteIssued == true, result?.Message);
-            },
-            outcomes,
-            reservedFamilies);
-        await ApplyNativeRgbRouteAsync(
-            "native:razer",
-            "Razer Lian Li O11 case",
-            "razer-lianli",
-            IpcCommand.SetRazerRgb,
-            new RazerRgbRequestV1(RazerRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, RazerRgbRequestV1.ExactDeviceId),
-            response =>
-            {
-                RazerRgbResultV1? result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload);
-                return (result?.Outcome == KrakenLightingOutcome.WriteIssued, result?.Message);
-            },
-            outcomes,
-            reservedFamilies);
+            };
+
+        (string RouteId, string Name, string Family, IpcCommand Command, object Request, Func<IpcResponse, (bool, string?)> Inspect)[] routes =
+        [
+            ("native:kraken", "NZXT Kraken", "nzxt-kraken", IpcCommand.SetKrakenLighting,
+                new KrakenLightingRequestV1(KrakenLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, KrakenLightingRequestV1.ExactDeviceId),
+                Inspect<KrakenLightingResultV1>(result => result.ToRgbWriteResult())),
+            ("native:aura", "ASUS Aura headers", "asus-aura", IpcCommand.SetAuraLighting,
+                new AuraLightingRequestV1(AuraLightingRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, AuraLightingRequestV1.ExactDeviceId),
+                Inspect<AuraLightingResultV1>(result => result.ToRgbWriteResult())),
+            ("native:dimm", "G.Skill Trident Z RAM", "dimm-rgb", IpcCommand.SetDimmRgb,
+                new DimmRgbRequestV1(DimmRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, DimmRgbRequestV1.ExactDeviceId),
+                Inspect<DimmRgbResultV1>(result => result.ToRgbWriteResult())),
+            ("native:razer", "Razer Lian Li O11 case", "razer-lianli", IpcCommand.SetRazerRgb,
+                new RazerRgbRequestV1(RazerRgbRequestV1.CurrentSchemaVersion, nativeColour, turnOff, true, RazerRgbRequestV1.ExactDeviceId),
+                Inspect<RazerRgbResultV1>(result => result.ToRgbWriteResult())),
+        ];
+
+        foreach ((string routeId, string name, string family, IpcCommand command, object request, Func<IpcResponse, (bool, string?)> inspect) in routes)
+        {
+            await ApplyNativeRgbRouteAsync(routeId, name, family, command, request, inspect, outcomes, reservedFamilies);
+        }
     }
 
     private async Task ApplyNativeRgbRouteAsync(
@@ -836,7 +833,13 @@ public sealed partial class MainViewModel
         int failed = outcomes.Count(outcome => outcome.State == RgbApplyState.Failed);
         int unknown = outcomes.Count(outcome => outcome.State == RgbApplyState.Unknown);
         int skipped = outcomes.Count(outcome => outcome.State == RgbApplyState.Skipped);
-        RgbSyncStatus = $"{operationLabel}: {applied} applied · {blocked} blocked · {failed} failed before write · {unknown} unknown · {skipped} skipped. Successful routes without hardware colour read-back still require visual confirmation.";
+        string counts = $"{operationLabel}: {applied} applied · {blocked} blocked · {failed} failed before write · {unknown} unknown · {skipped} skipped.";
+        // The "confirm by sight" caveat only makes sense when a route actually
+        // wrote. With 0 applied (e.g. every route skipped because the bridge is
+        // off or a competing writer holds the family) it read as a non-sequitur.
+        RgbSyncStatus = applied > 0
+            ? $"{counts} Successful routes without hardware colour read-back still require visual confirmation."
+            : counts;
         if (showNotice)
         {
             ShowNotice(RgbSyncStatus, applied > 0 && blocked + failed + unknown == 0 ? "Success" : "Warning");

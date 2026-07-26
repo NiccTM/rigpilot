@@ -10,11 +10,16 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RuntimeIdentifiers Condition="'$(MSBuildProjectExtension)' == '.csproj'">win-x64</RuntimeIdentifiers>
     <Authors>RigPilot contributors</Authors>
+    <!-- Company and Product populate the Win32 version resource (CompanyName/ProductName)
+         on every binary. Present publisher metadata reduces "unknown publisher" antivirus
+         heuristics and is asserted by scripts\Test-DistributionHygiene.ps1. -->
+    <Company>RigPilot contributors</Company>
+    <Product>RigPilot</Product>
     <Copyright>Copyright (c) RigPilot contributors</Copyright>
     <RepositoryUrl>https://github.com/NiccTM/rigpilot</RepositoryUrl>
     <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
-    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.5.5</VersionPrefix>
-    <VersionSuffix Condition="'$(VersionSuffix)' == ''">alpha</VersionSuffix>
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.7.0</VersionPrefix>
+    <VersionSuffix Condition="'$(VersionSuffix)' == ''"></VersionSuffix>
     <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">$(VersionPrefix).0</AssemblyVersion>
     <FileVersion Condition="'$(FileVersion)' == ''">$(VersionPrefix).0</FileVersion>
   </PropertyGroup>

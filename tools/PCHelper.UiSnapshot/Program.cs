@@ -55,6 +55,16 @@ internal static class Program
             return RunAutomationSmoke(reportPath);
         }
 
+        if (args.FirstOrDefault()?.Equals("--measure-pages", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return RunPageManagedHeapMeasurement();
+        }
+
+        if (args.FirstOrDefault()?.Equals("--measure-winforms", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return RunWinFormsLoadMeasurement();
+        }
+
         string outputDirectory = Path.GetFullPath(args.FirstOrDefault()
             ?? Path.Combine(AppContext.BaseDirectory, "ui-snapshots"));
         Directory.CreateDirectory(outputDirectory);
@@ -80,6 +90,7 @@ internal static class Program
             : 0;
 
         bool portable = args.Contains("portable", StringComparer.OrdinalIgnoreCase);
+        bool onboarding = args.Contains("onboarding", StringComparer.OrdinalIgnoreCase);
         using MainViewModel viewModel = new() { IsPortableMode = portable };
         try
         {
@@ -88,6 +99,10 @@ internal static class Program
             // in its first presentation frame.
             viewModel.InitialiseAsync(startAutomaticRefresh: false).GetAwaiter().GetResult();
             viewModel.IsAdvancedLab = advancedLab;
+            if (onboarding)
+            {
+                viewModel.ShowOnboardingForSnapshot(step: 2);
+            }
         }
         catch (Exception exception)
         {
@@ -154,6 +169,155 @@ internal static class Program
 
         _ = application.Run(window);
         return result;
+    }
+
+    /// <summary>
+    /// Measures the managed-heap cost of realizing each page's visual tree, so the
+    /// footprint saving from deferring a page until first navigation is a number rather
+    /// than a guess. Reports the settled heap after the window is built (pages that are
+    /// still inline are already resident; deferred pages are not), then the marginal cost
+    /// of navigating to each page in turn. Managed heap is not the whole working set, but
+    /// it is the reproducible part that lazy realization actually defers.
+    /// </summary>
+    private static int RunPageManagedHeapMeasurement()
+    {
+        using MainViewModel viewModel = new();
+        try
+        {
+            viewModel.InitialiseAsync(startAutomaticRefresh: false).GetAwaiter().GetResult();
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine(exception);
+            return 1;
+        }
+
+        PCHelper.App.App application = new() { SuppressProductStartup = true };
+        application.InitializeComponent();
+        application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        MainWindow window = new(viewModel)
+        {
+            Width = DefaultRenderWidth,
+            Height = DefaultRenderHeight,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            ShowActivated = false,
+            ShowInTaskbar = false
+        };
+        application.MainWindow = window;
+        ListBox navigation = (ListBox)(window.FindName("Navigation")
+            ?? throw new InvalidOperationException("The navigation list could not be located."));
+
+        long baseline = SettledHeapBytes();
+        Console.WriteLine($"window built (page 0), deferred pages not realized: {baseline / 1024.0 / 1024.0:0.00} MB managed heap");
+        long previous = baseline;
+        for (int page = 1; page < PageNames.Length; page++)
+        {
+            navigation.SelectedIndex = page;
+            window.UpdateLayout();
+            long now = SettledHeapBytes();
+            Console.WriteLine($"  navigate -> {PageNames[page],-12} marginal {(now - previous) / 1024.0:+0;-0} KB   total {now / 1024.0 / 1024.0:0.00} MB");
+            previous = now;
+        }
+
+        application.Shutdown();
+        return 0;
+    }
+
+    private static long SettledHeapBytes()
+    {
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        return GC.GetTotalMemory(forceFullCollection: true);
+    }
+
+    /// <summary>
+    /// Measures what the WinForms dependency actually costs the dashboard process, so the
+    /// "drop UseWindowsForms and reimplement the tray" question has a number before anyone
+    /// commits to the reimplementation. WinForms is loaded only for the tray icon and its
+    /// dark context menu; the dashboard is otherwise pure WPF.
+    ///
+    /// The tool itself is WPF-only, so nothing WinForms is loaded until this method touches
+    /// it. It builds exactly what the tray builds — a NotifyIcon, a ContextMenuStrip, a
+    /// menu item, and a System.Drawing font — via reflection (so the tool needs no
+    /// compile-time WinForms reference that would pre-load the framework and spoil the
+    /// baseline), then reports the private-memory growth and the modules newly mapped in.
+    /// This captures the assembly load plus GDI+/native initialization the tray triggers,
+    /// which is the resident cost dropping the dependency would reclaim.
+    /// </summary>
+    private static int RunWinFormsLoadMeasurement()
+    {
+        using System.Diagnostics.Process self = System.Diagnostics.Process.GetCurrentProcess();
+
+        static (long Private, long WorkingSet) Sample(System.Diagnostics.Process p)
+        {
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+            p.Refresh();
+            return (p.PrivateMemorySize64, p.WorkingSet64);
+        }
+
+        HashSet<string> ModuleNames(System.Diagnostics.Process p)
+        {
+            p.Refresh();
+            HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+            foreach (System.Diagnostics.ProcessModule module in p.Modules)
+            {
+                if (module.ModuleName is { } name)
+                {
+                    names.Add(name);
+                }
+            }
+
+            return names;
+        }
+
+        (long Private, long WorkingSet) before = Sample(self);
+        HashSet<string> modulesBefore = ModuleNames(self);
+
+        object? keepAlive = null;
+        try
+        {
+            System.Reflection.Assembly winForms = System.Reflection.Assembly.Load("System.Windows.Forms");
+            object notifyIcon = Activator.CreateInstance(winForms.GetType("System.Windows.Forms.NotifyIcon", throwOnError: true)!)!;
+            object menu = Activator.CreateInstance(winForms.GetType("System.Windows.Forms.ContextMenuStrip", throwOnError: true)!)!;
+            object menuItem = Activator.CreateInstance(
+                winForms.GetType("System.Windows.Forms.ToolStripMenuItem", throwOnError: true)!,
+                ["Measure"])!;
+
+            object? font = null;
+            try
+            {
+                System.Reflection.Assembly drawing = System.Reflection.Assembly.Load("System.Drawing.Common");
+                font = Activator.CreateInstance(
+                    drawing.GetType("System.Drawing.Font", throwOnError: true)!,
+                    ["Segoe UI", 9f])!;
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine($"(System.Drawing font not constructed: {exception.Message})");
+            }
+
+            keepAlive = new[] { notifyIcon, menu, menuItem, font! };
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine(exception);
+            return 1;
+        }
+
+        (long Private, long WorkingSet) after = Sample(self);
+        HashSet<string> modulesAfter = ModuleNames(self);
+        GC.KeepAlive(keepAlive);
+
+        Console.WriteLine("WinForms load cost (private memory the tray dependency adds to the WPF process):");
+        Console.WriteLine($"  private bytes  {before.Private / 1024.0 / 1024.0:0.00} -> {after.Private / 1024.0 / 1024.0:0.00} MB   (+{(after.Private - before.Private) / 1024.0 / 1024.0:0.00} MB)");
+        Console.WriteLine($"  working set    {before.WorkingSet / 1024.0 / 1024.0:0.00} -> {after.WorkingSet / 1024.0 / 1024.0:0.00} MB   (+{(after.WorkingSet - before.WorkingSet) / 1024.0 / 1024.0:0.00} MB)");
+
+        string[] newModules = [.. modulesAfter.Except(modulesBefore).OrderBy(name => name, StringComparer.OrdinalIgnoreCase)];
+        Console.WriteLine($"  modules newly mapped ({newModules.Length}): {(newModules.Length == 0 ? "(none)" : string.Join(", ", newModules))}");
+        return 0;
     }
 
     private static int RunAutomationSmoke(string reportPath)
@@ -398,8 +562,8 @@ internal static class Program
             "Performance.UndervoltStock",
             "Lighting.OpenRgbColour",
             "Lighting.OpenRgbBrightness",
-            "Lighting.SyncAllRgb",
-            "Lighting.SyncAllRgbOff",
+            "Lighting.ApplyAllRgb",
+            "Lighting.ApplyAllRgbOff",
             "Lighting.ApplyKrakenLighting",
             "Lighting.KrakenLightingOff",
             "Lighting.ApplyAura",
@@ -464,7 +628,8 @@ internal static class Program
             "Devices.GrantTakeoverConsent",
             "Devices.ConfirmTakeover",
             "Devices.ExecuteTakeover",
-            "Devices.ReleaseOwnership"
+            "Devices.ReleaseOwnership",
+            "Diagnostics.StartWithWindows"
         ];
         string[] actionableHardwareControlIds =
         [
@@ -485,8 +650,8 @@ internal static class Program
             "Performance.UndervoltQuiet",
             "Performance.UndervoltEfficient",
             "Performance.UndervoltStock",
-            "Lighting.SyncAllRgb",
-            "Lighting.SyncAllRgbOff",
+            "Lighting.ApplyAllRgb",
+            "Lighting.ApplyAllRgbOff",
             "Lighting.ApplyKrakenLighting",
             "Lighting.KrakenLightingOff",
             "Lighting.ApplyAura",

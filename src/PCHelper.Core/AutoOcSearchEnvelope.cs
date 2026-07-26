@@ -1,0 +1,121 @@
+using PCHelper.Contracts;
+
+namespace PCHelper.Core;
+
+/// <summary>
+/// Constrains an Auto OC search to offsets a real card can plausibly survive, instead of
+/// the driver's theoretical range.
+///
+/// NVAPI advertises what the driver will ACCEPT, not what the silicon can run: on an
+/// RTX 3090 that is ±1000 MHz core and +3000 MHz memory. Screening across that range is
+/// what makes an auto-overclocker hang the machine. The candidate ladder divides the range
+/// into steps, so a 0..1000 MHz core search steps in ~83 MHz jumps and reaches offsets no
+/// card in that class runs (typically +100-150 MHz core) within the first few candidates.
+/// At those offsets the GPU does not fail gracefully — it does not render an artifact or
+/// raise a recoverable driver reset that screening could observe. It hard-hangs, and once
+/// the machine stops responding no in-process abort, thermal ceiling, or rollback can run.
+/// The boot sentinel then recovers the card, but the user has already lost the session.
+///
+/// So the envelope is deliberately conservative: it is the range in which a failure is
+/// most likely to present as something screening can DETECT rather than as a dead machine.
+/// It bounds the automatic search only. A user driving the manual slider still has the
+/// controller's full documented range, because that is a deliberate single write with
+/// read-back rather than an unattended climb.
+/// </summary>
+public static class AutoOcSearchEnvelope
+{
+    /// <summary>
+    /// Core-clock offset ceiling for an automatic search. Comfortably above a typical
+    /// good sample's stable offset, far below the range where failure means a hard hang.
+    /// </summary>
+    public const double MaximumCoreOffsetMhz = 200;
+
+    /// <summary>
+    /// Memory-clock offset ceiling. Deliberately lower than the core envelope in proportion
+    /// to the risk: GDDR6X carries on-die error correction, so an unstable module does not
+    /// fail cleanly — it corrects errors, loses throughput, and corrupts what is on screen
+    /// before it ever hangs. Screening cannot see a visual artifact, so the ladder must not
+    /// walk far into that range in the first place. Observed on the reference RTX 3090: a
+    /// memory ladder reaching into the high hundreds of MHz visibly glitched the desktop
+    /// while every candidate still "passed". The throughput-regression rule in
+    /// AutoOcV3Policy.SelectBestCandidate is the other half of this defence.
+    /// </summary>
+    public const double MaximumMemoryOffsetMhz = 600;
+
+    /// <summary>
+    /// How far the core ceiling may be raised when a previous search exhausted it — every
+    /// candidate passed, so the card's real limit is somewhere above the envelope and the
+    /// run measured nothing but the envelope itself. One step, not an open-ended climb.
+    /// </summary>
+    public const double CoreCeilingExtensionMhz = 100;
+
+    /// <summary>
+    /// The core ceiling for the next search, given whether the previous one ran out of room.
+    ///
+    /// Raising it is only correct when the previous search proved it was the binding
+    /// constraint AND the platform is trustworthy. A run on a machine that is throwing
+    /// machine checks may have "passed" every candidate for reasons that have nothing to do
+    /// with the GPU, so extending the range on that evidence would be building on sand — the
+    /// extension is refused unless the platform is clean.
+    /// </summary>
+    public static double CoreCeilingFor(bool previousSearchExhaustedCeiling, bool platformStable) =>
+        previousSearchExhaustedCeiling && platformStable
+            ? MaximumCoreOffsetMhz + CoreCeilingExtensionMhz
+            : MaximumCoreOffsetMhz;
+
+    /// <summary>
+    /// True when a completed search never found a failure — every candidate passed and the
+    /// highest one sat at the ceiling — which means the ceiling, not the silicon, ended the
+    /// search.
+    /// </summary>
+    public static bool SearchExhaustedCeiling(
+        IEnumerable<double> passedValues,
+        IEnumerable<double> failedValues,
+        double ceiling)
+    {
+        ArgumentNullException.ThrowIfNull(passedValues);
+        ArgumentNullException.ThrowIfNull(failedValues);
+        if (failedValues.Any())
+        {
+            return false;
+        }
+
+        double[] passed = [.. passedValues];
+        return passed.Length > 0 && passed.Max() >= ceiling - 1e-6;
+    }
+
+    /// <summary>
+    /// Returns the offset ceiling for a clock capability, or null when the capability is not
+    /// a GPU clock offset and should keep its reported range.
+    /// </summary>
+    public static double? CeilingFor(string capabilityId)
+    {
+        ArgumentNullException.ThrowIfNull(capabilityId);
+        if (capabilityId.StartsWith("gpuclock.core:", StringComparison.Ordinal))
+        {
+            return MaximumCoreOffsetMhz;
+        }
+
+        return capabilityId.StartsWith("gpuclock.memory:", StringComparison.Ordinal)
+            ? MaximumMemoryOffsetMhz
+            : null;
+    }
+
+    /// <summary>
+    /// Builds the search bounds for an automatic run: never below stock (a performance
+    /// search must not undervolt-by-underclock), and never above the smaller of the
+    /// controller's reported maximum and this envelope's ceiling.
+    /// </summary>
+    public static TuneBounds Constrain(string capabilityId, NumericRange range)
+    {
+        ArgumentNullException.ThrowIfNull(capabilityId);
+        ArgumentNullException.ThrowIfNull(range);
+        double floor = Math.Max(0, range.Minimum);
+        double ceiling = CeilingFor(capabilityId) is double envelope
+            ? Math.Min(range.Maximum, envelope)
+            : range.Maximum;
+        // A controller that reports a maximum below the envelope keeps its own smaller
+        // range, and a degenerate range never inverts.
+        return new TuneBounds(floor, Math.Max(floor, ceiling), range.Step);
+    }
+}

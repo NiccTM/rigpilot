@@ -48,8 +48,7 @@ public sealed record OperationTargetDisplay(
             capability.State == CapabilityAccessState.Experimental);
     }
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record AutomationRuleDisplay(
@@ -68,8 +67,7 @@ public sealed record AutomationRuleDisplay(
         rule.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture),
         rule.Enabled ? "Enabled" : "Disabled");
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record SensorDisplay(string Name, string Device, string DisplayValue, string Severity, string Glyph);
@@ -88,14 +86,25 @@ public sealed record ProfileCardDisplay(
     bool IsExperimental,
     bool RequiresManualAcknowledgement)
 {
-    public static ProfileCardDisplay From(ProfileV1 profile, bool active, ProfileV2? suiteProfile = null)
+    public static ProfileCardDisplay From(
+        ProfileV1 profile,
+        bool active,
+        ProfileV2? suiteProfile = null,
+        AutoOcProfileValidationV1? autoOcValidation = null)
     {
-        (string objective, string glyph) = profile.Id.ToLowerInvariant() switch
-        {
-            "quiet" => ("Lower acoustic target", "\uE708"),
-            "performance" => ("Prioritise sustained output", "\uE945"),
-            _ => ("Everyday efficiency", "\uE9D2")
-        };
+        // The objective is a short subtitle under the profile name. Experimental
+        // profiles are direct hardware-control tests (GPU offsets, fan duty, etc.),
+        // so they must not inherit the stock "Everyday efficiency" line; only the
+        // built-in policy profiles carry an efficiency/acoustic/performance intent.
+        (string objective, string glyph) = profile.IsExperimental
+            ? ("Direct hardware control", "\uE7BA")
+            : profile.Id.ToLowerInvariant() switch
+            {
+                "quiet" => ("Lower acoustic target", "\uE708"),
+                "performance" => ("Prioritise sustained output", "\uE945"),
+                "efficiency" => ("Lower power draw", "\uE9D2"),
+                _ => ("Everyday efficiency", "\uE9D2")
+            };
         int manualOnlyCount = suiteProfile?.ManualOnlyActionIds.Count ?? 0;
         bool hasCoolingGraph = !string.IsNullOrWhiteSpace(suiteProfile?.CoolingGraphId);
         List<string> bundleParts = [];
@@ -119,6 +128,11 @@ public sealed record ProfileCardDisplay(
         {
             bundleParts.Add($"{manualOnlyCount} Manual Only");
         }
+        if (autoOcValidation is not null)
+        {
+            double ageDays = Math.Max(0, (DateTimeOffset.UtcNow - autoOcValidation.CreatedAt).TotalDays);
+            bundleParts.Add($"{autoOcValidation.State} · {autoOcValidation.ActiveUse.TotalHours:0.##}/10 h · {Math.Min(7, ageDays):0.##}/7 days · {autoOcValidation.SuccessfulColdBoots}/3 cold boots");
+        }
         string actionSummary = bundleParts.Count == 0
             ? "No hardware or companion actions in this build"
             : string.Join(" · ", bundleParts);
@@ -129,7 +143,11 @@ public sealed record ProfileCardDisplay(
             objective,
             glyph,
             actionSummary,
-            active ? "Active" : manualOnlyCount > 0 ? "Manual only" : profile.IsExperimental ? "Experimental" : "Stock-safe",
+            active
+                ? "Active"
+                : autoOcValidation is not null
+                    ? autoOcValidation.State.ToString()
+                    : manualOnlyCount > 0 ? "Manual only" : profile.IsExperimental ? "Experimental" : "Stock-safe",
             active,
             profile.IsExperimental,
             manualOnlyCount > 0);
@@ -149,8 +167,15 @@ public sealed record DeviceDisplay(
 {
     public static DeviceDisplay From(HardwareDevice device)
     {
-        string manufacturer = string.IsNullOrWhiteSpace(device.Manufacturer) ? "Unknown manufacturer" : device.Manufacturer;
-        string model = string.IsNullOrWhiteSpace(device.Model) ? "Model not reported" : device.Model;
+        // Drive identity strings arrive as fixed-length buffers that some
+        // controllers leave padded with NUL or other control characters. Those
+        // are not whitespace, so IsNullOrWhiteSpace keeps them and the card
+        // renders blank. Sanitise every identity field to null when it carries no
+        // printable text, then fall back to model, then a kind label for the name.
+        string kindLabel = SplitWords(device.Kind.ToString());
+        string manufacturer = Sanitise(device.Manufacturer) ?? "Unknown manufacturer";
+        string model = Sanitise(device.Model) ?? "Model not reported";
+        string name = Sanitise(device.Name) ?? Sanitise(device.Model) ?? $"Unnamed {kindLabel.ToLowerInvariant()}";
         device.Properties.TryGetValue("compatibilityLabel", out string? compatibilityLabel);
         device.Properties.TryGetValue("boardPartnerLabel", out string? boardPartnerLabel);
         string details = string.IsNullOrWhiteSpace(compatibilityLabel)
@@ -175,18 +200,43 @@ public sealed record DeviceDisplay(
         };
         return new DeviceDisplay(
             device.Id,
-            device.Name,
-            SplitWords(device.Kind.ToString()),
+            name,
+            kindLabel,
             manufacturer,
             model,
             details,
             glyph,
             compatibilityLabel,
-            $"{device.Name} {device.Kind} {manufacturer} {model} {compatibilityLabel} {string.Join(' ', device.Properties.Values)}");
+            $"{name} {device.Kind} {manufacturer} {model} {compatibilityLabel} {string.Join(' ', device.Properties.Values)}");
     }
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
+
+    /// <summary>
+    /// Returns the value with control characters removed and trimmed, or null if
+    /// nothing printable remains. Handles NUL-padded identity buffers that
+    /// <see cref="string.IsNullOrWhiteSpace"/> does not treat as empty.
+    /// </summary>
+    private static string? Sanitise(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return null;
+        }
+
+        char[] buffer = new char[value.Length];
+        int length = 0;
+        foreach (char c in value)
+        {
+            if (!char.IsControl(c))
+            {
+                buffer[length++] = c;
+            }
+        }
+
+        string cleaned = new string(buffer, 0, length).Trim();
+        return cleaned.Length == 0 ? null : cleaned;
+    }
 }
 
 public sealed record CapabilityDisplay(
@@ -304,8 +354,7 @@ public sealed record CapabilityDisplay(
         _ => "Review the capability evidence before changing hardware state."
     };
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 /// <summary>
@@ -411,8 +460,7 @@ public sealed record ExperimentalControlDisplay(
             tone);
     }
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record DiagnosticDisplay(string Title, string Message, string Severity, string Remediation, string Glyph)
@@ -580,8 +628,7 @@ public sealed record HealthRuleDisplay(
             $"{rule.ConsecutiveObservations} consecutive observation(s), {rule.Cooldown.TotalSeconds:0} s cooldown{threshold}.");
     }
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record HealthAlertDisplay(
@@ -604,8 +651,7 @@ public sealed record HealthAlertDisplay(
         alert.State == HealthAlertState.Cleared ? "Safe" : "Warning",
         alert.State == HealthAlertState.Active);
 
-    private static string SplitWords(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, "(?<!^)([A-Z])", " $1");
+    private static string SplitWords(string value) => DisplayText.Humanize(value);
 }
 
 public sealed record TimelineEventDisplay(

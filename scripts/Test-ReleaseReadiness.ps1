@@ -2,6 +2,7 @@
 param(
     [string]$QualificationLedger,
     [string]$SigningCertificateThumbprint,
+    [string]$PayloadRoot,
     [switch]$RequireSignedRelease,
     [switch]$RequireVersionOne
 )
@@ -24,6 +25,25 @@ if (Test-Path -LiteralPath $ledgerPath -PathType Leaf) {
     $qualificationExit = $LASTEXITCODE
 }
 
+# Distribution hygiene (publisher metadata, unpacked managed body, non-elevated manifest) is
+# only evaluated when a built payload is supplied; without one it is reported as not-checked
+# rather than assumed pass, and it never blocks on its own unless a signed release is required.
+$hygieneReady = $null
+$hygieneFailures = @()
+if (-not [string]::IsNullOrWhiteSpace($PayloadRoot)) {
+    try {
+        $hygiene = & (Join-Path $PSScriptRoot "Test-DistributionHygiene.ps1") -PayloadRoot $PayloadRoot
+        $hygieneReady = [bool]$hygiene.Ready
+        $hygieneFailures = @($hygiene.Failures)
+    }
+    catch {
+        $hygieneReady = $false
+        $hygieneFailures = @("$_")
+    }
+}
+
+$signedGate = [bool]$signing.Ready -and ($hygieneReady -ne $false)
+
 $result = [pscustomobject]@{
     SigningReady = [bool]$signing.Ready
     SigningMessage = [string]$signing.Message
@@ -31,12 +51,17 @@ $result = [pscustomobject]@{
     QualificationReady = ($qualificationExit -eq 0)
     QualificationExitCode = $qualificationExit
     QualificationOutput = ($qualificationOutput -join [Environment]::NewLine)
-    CanPublishSignedAlpha = [bool]$signing.Ready
-    CanPublishVersionOne = ([bool]$signing.Ready -and $qualificationExit -eq 0)
+    DistributionHygieneReady = $hygieneReady
+    DistributionHygieneFailures = ($hygieneFailures -join [Environment]::NewLine)
+    CanPublishSignedAlpha = $signedGate
+    CanPublishVersionOne = ($signedGate -and $qualificationExit -eq 0)
 }
 
 $result
 if ($RequireSignedRelease -and -not $result.CanPublishSignedAlpha) {
+    if ($hygieneReady -eq $false) {
+        throw "Signed release readiness failed: distribution hygiene failed. $($result.DistributionHygieneFailures)"
+    }
     throw "Signed release readiness failed: $($result.SigningMessage)"
 }
 if ($RequireVersionOne -and -not $result.CanPublishVersionOne) {

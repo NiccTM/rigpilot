@@ -3,6 +3,9 @@ using PCHelper.Core;
 
 namespace PCHelper.Core.Tests;
 
+// FullAutoOcEngine is deprecated in favour of FullAutoOcV3Engine but retained for
+// the legacy StartAutoOc fallback, so its behaviour is still covered here.
+#pragma warning disable CS0618 // Type or member is obsolete
 public sealed class FullAutoOcEngineTests
 {
     [Fact]
@@ -226,3 +229,4 @@ public sealed class FullAutoOcEngineTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
+#pragma warning restore CS0618

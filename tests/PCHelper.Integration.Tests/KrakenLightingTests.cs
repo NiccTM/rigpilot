@@ -18,7 +18,7 @@ public sealed class KrakenLightingTests
 
         Assert.Equal(64, report.Length);
         Assert.Equal([0x2A, 0x04, 0x07, 0x07, 0x00, 0x32, 0x00], report[..7]);   // opcode, sync channel ×2, fixed mode, speed
-        Assert.Equal([0x0A, 0x84, 0xFF], report[7..10]);                          // first colour triplet
+        Assert.Equal([0x84, 0x0A, 0xFF], report[7..10]);                          // first colour triplet in GRB wire order (G, R, B)
         Assert.All(report[10..55], value => Assert.Equal(0, value));              // remaining 15 colour slots empty
         Assert.Equal([0x00, 0x01, 0x00, 40, 0x03], report[55..60]);               // direction, 1 colour, mode byte, static value, LED size
         Assert.All(report[60..], value => Assert.Equal(0, value));                // zero padding to 64

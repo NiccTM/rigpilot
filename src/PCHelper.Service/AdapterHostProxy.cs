@@ -11,6 +11,24 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IHardwareStateVerifie
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Topology discovery gets a longer budget than any other host call.
+    /// Enumerating hardware with elevated access is genuinely slow — measured at
+    /// ~16.5 s on the reference ROG STRIX X570-E, dominated by Super-I/O and
+    /// storage enumeration — and exceeding the timeout was self-perpetuating:
+    /// the probe was killed, the host recycled, the topology cache never
+    /// populated, so the next capture reran the same doomed probe. That cost a
+    /// fixed ~11 s per capture (10 s timeout plus recycle), which made every
+    /// other adapter's sensors look stale to the cooling freshness gate, and it
+    /// hid every motherboard fan control on the system.
+    ///
+    /// This applies to discovery only. Sensor reads, health checks, and above
+    /// all mutations keep <see cref="OperationTimeout"/>: a mutation that
+    /// outlives its timeout leaves hardware state unknown, and that must be
+    /// detected quickly rather than waited out.
+    /// </summary>
+    private static readonly TimeSpan TopologyProbeTimeout = TimeSpan.FromSeconds(45);
     private static readonly Regex StructuredFailurePattern = new(
         @"Adapter-host (?<command>\w+) failed at (?<stage>[^()]+) \((?<type>[^;]+); HResult=0x(?<hresult>[0-9A-Fa-f]{8})(?:; Win32=(?<win32>\d+))?\)",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -40,7 +58,7 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IHardwareStateVerifie
     public TimeSpan TopologyCacheDuration => TimeSpan.FromSeconds(30);
 
     public async Task<AdapterProbeResult> ProbeAsync(CancellationToken cancellationToken) =>
-        await SendReadAsync<AdapterProbeResult>(IpcCommand.AdapterProbe, cancellationToken).ConfigureAwait(false);
+        await SendReadAsync<AdapterProbeResult>(IpcCommand.AdapterProbe, cancellationToken, TopologyProbeTimeout).ConfigureAwait(false);
 
     public async Task<IReadOnlyList<SensorSample>> ReadSensorsAsync(CancellationToken cancellationToken) =>
         await SendReadAsync<IReadOnlyList<SensorSample>>(IpcCommand.AdapterReadSensors, cancellationToken).ConfigureAwait(false);
@@ -178,14 +196,18 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IHardwareStateVerifie
         _startGate.Dispose();
     }
 
-    private async Task<T> SendReadAsync<T>(IpcCommand command, CancellationToken cancellationToken)
+    private async Task<T> SendReadAsync<T>(
+        IpcCommand command,
+        CancellationToken cancellationToken,
+        TimeSpan? operationTimeout = null)
     {
+        TimeSpan budget = operationTimeout ?? OperationTimeout;
         Process? generation = null;
         try
         {
             await EnsureHostAsync(cancellationToken).ConfigureAwait(false);
             generation = _process;
-            NamedPipeRequestClient client = CreateClient(OperationTimeout);
+            NamedPipeRequestClient client = CreateClient(budget);
             IpcResponse response = await client.SendAsync(
                 NamedPipeRequestClient.CreateRequest(
                     command,
@@ -196,7 +218,7 @@ internal sealed class AdapterHostProxy : IHardwareAdapter, IHardwareStateVerifie
         catch (TimeoutException exception)
         {
             await RecycleHostAsync(generation).ConfigureAwait(false);
-            throw new TimeoutException($"Adapter Host {command} did not complete within {OperationTimeout.TotalSeconds:0} s; the host was terminated and will be recycled.", exception);
+            throw new TimeoutException($"Adapter Host {command} did not complete within {budget.TotalSeconds:0} s; the host was terminated and will be recycled.", exception);
         }
         catch (Exception exception) when (exception is IOException or EndOfStreamException)
         {

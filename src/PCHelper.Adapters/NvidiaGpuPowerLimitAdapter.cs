@@ -27,6 +27,7 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter, IHardwareStat
     private readonly string _channelId;
     private readonly Func<bool> _isArmed;
     private readonly Func<CancellationToken, Task<bool>> _isConflicted;
+    private readonly Func<uint?> _committedTargetMilliwatts;
 
     public NvidiaGpuPowerLimitAdapter(
         IGpuPowerLimitTransport transport,
@@ -43,7 +44,8 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter, IHardwareStat
         string deviceId,
         string channelId,
         Func<bool> isArmed,
-        Func<CancellationToken, Task<bool>>? isConflicted = null)
+        Func<CancellationToken, Task<bool>>? isConflicted = null,
+        Func<uint?>? committedTargetMilliwatts = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
@@ -52,6 +54,28 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter, IHardwareStat
         _channelId = channelId;
         _isArmed = isArmed ?? throw new ArgumentNullException(nameof(isArmed));
         _isConflicted = isConflicted ?? (_ => Task.FromResult(false));
+        _committedTargetMilliwatts = committedTargetMilliwatts ?? (() => null);
+    }
+
+    /// <summary>
+    /// True when the observed limit is a legitimate resting state for recovery: either the
+    /// vendor default, or a limit the operator deliberately committed through RigPilot that is
+    /// still within the driver's validated range. Recovery accepts the committed value so a
+    /// raised power ceiling does not require the NVAPI restore write the service is refused —
+    /// the write is only avoided, never forged, and the committed value is always re-validated
+    /// against the live bounds before it is trusted.
+    /// </summary>
+    private bool IsAcceptableRestingLimit(uint observedMilliwatts, GpuPowerLimitBounds bounds)
+    {
+        if (Math.Abs((long)observedMilliwatts - bounds.DefaultMilliwatts) <= VerifyToleranceMilliwatts)
+        {
+            return true;
+        }
+
+        return _committedTargetMilliwatts() is uint committed
+            && committed >= bounds.MinimumMilliwatts
+            && committed <= bounds.MaximumMilliwatts
+            && Math.Abs((long)observedMilliwatts - committed) <= VerifyToleranceMilliwatts;
     }
 
     public string CapabilityId => $"{CapabilityPrefix}{_channelId}";
@@ -59,7 +83,7 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter, IHardwareStat
     public AdapterManifest Manifest { get; } = new(
         AdapterId,
         "NVIDIA GPU power limit (Experimental)",
-        "0.5.5-alpha",
+        "0.6.0-beta.1",
         "NVIDIA display driver",
         "NVIDIA display driver exposing power-management limit constraints",
         AdapterExecutionContext.SystemService,
@@ -193,6 +217,22 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter, IHardwareStat
     {
         EnsureOwnedCapability(capabilityId);
         GpuPowerLimitBounds bounds = await RequireBoundsAsync(cancellationToken).ConfigureAwait(false);
+
+        // Skip the write when the limit already reads as an acceptable resting state — the
+        // vendor default, or an operator-committed limit still within the driver range. Arming
+        // and recovery reset every family from a cold start, so this normally fires against a
+        // card already at rest, and the driver refuses the write outright (NVIDIAApiException)
+        // often enough that issuing it purely to reach the state we are already in is what
+        // fails the arm and hard-locks every family. The predicate is the same one
+        // VerifyDefaultStateAsync uses, so a skip can never disagree with the verification that
+        // immediately follows it. An explicit operator reset clears the committed value first,
+        // so this still forces the vendor default when the operator asks for it.
+        GpuPowerLimitState current = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
+        if (current.CurrentMilliwatts is uint observed && IsAcceptableRestingLimit(observed, bounds))
+        {
+            return;
+        }
+
         await _transport.SetPowerLimitAsync(_channelId, bounds.DefaultMilliwatts, cancellationToken).ConfigureAwait(false);
     }
 
@@ -203,14 +243,13 @@ public sealed class NvidiaGpuPowerLimitAdapter : IHardwareAdapter, IHardwareStat
         EnsureOwnedCapability(capabilityId);
         GpuPowerLimitBounds bounds = await RequireBoundsAsync(cancellationToken).ConfigureAwait(false);
         GpuPowerLimitState state = await _transport.ReadStateAsync(_channelId, cancellationToken).ConfigureAwait(false);
-        bool success = state.CurrentMilliwatts is uint observed
-            && Math.Abs((long)observed - bounds.DefaultMilliwatts) <= VerifyToleranceMilliwatts;
+        bool success = state.CurrentMilliwatts is uint observed && IsAcceptableRestingLimit(observed, bounds);
         return new HardwareStateVerification(
             Manifest.Id,
             capabilityId,
             success,
             state.CurrentMilliwatts is uint value ? ControlValue.FromNumeric(ToWatts(value)) : null,
-            success ? "GPU power-limit read-back matched the vendor default." : "GPU power-limit read-back did not match the vendor default.");
+            success ? "GPU power-limit read-back matched an accepted resting state (vendor default or the committed limit)." : "GPU power-limit read-back did not match the vendor default or a committed limit.");
     }
 
     public async Task<HardwareStateVerification> VerifyRollbackStateAsync(

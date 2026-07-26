@@ -42,8 +42,14 @@ public sealed record GpuFanBounds(
 /// the real NVML/NVAPI transport is introduced separately, still gated, in a later
 /// step. No implementation of this interface is wired to real hardware until then.
 /// </summary>
-public interface IGpuFanCoolerTransport
+public interface IGpuFanCoolerTransport : IDisposable
 {
+    /// <summary>True when the transport exposes callable setters and can issue writes.</summary>
+    bool CanWrite { get; }
+
+    /// <summary>Arms or disarms live writes. Set only after an acknowledged operator action.</summary>
+    void SetArmed(bool armed);
+
     /// <summary>Reads the exact bounds for the channel, or null if unavailable.</summary>
     Task<GpuFanBounds?> ReadBoundsAsync(string channelId, CancellationToken cancellationToken);
 

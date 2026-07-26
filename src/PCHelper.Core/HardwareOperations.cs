@@ -781,28 +781,36 @@ public sealed class FanCalibrationEngine(
         IHardwareAdapter adapter,
         bool operationSucceeded)
     {
+        Exception rollbackError;
         try
         {
-            await adapter.RollbackAsync(original, CancellationToken.None).ConfigureAwait(false);
+            // Restore with read-back proof: a refused restore write with the
+            // control read back at its captured prior value is proven restored,
+            // not unknown — the same rule the Auto OC engines follow. Only a
+            // state that cannot be proven escalates to reset/recovery below.
+            await HardwareRestoreVerification.RestoreAndVerifyAsync(capability, original, adapter).ConfigureAwait(false);
+            return;
         }
-        catch (Exception rollbackError)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            try
-            {
-                await adapter.ResetToDefaultAsync(capability.Id, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception resetError)
-            {
-                throw new HardwareOperationRecoveryException(
-                    $"Rollback and firmware/default reset both failed: {rollbackError.Message}; {resetError.Message}",
-                    new AggregateException(rollbackError, resetError));
-            }
-
-            string prefix = operationSucceeded ? "Calibration measurements completed, but" : "Calibration failed and";
-            throw new HardwareOperationRecoveryException(
-                $"{prefix} the previous control policy could not be restored. Firmware/default control was restored instead.",
-                rollbackError);
+            rollbackError = exception;
         }
+
+        try
+        {
+            await adapter.ResetToDefaultAsync(capability.Id, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception resetError)
+        {
+            throw new HardwareOperationRecoveryException(
+                $"Rollback and firmware/default reset both failed: {rollbackError.Message}; {resetError.Message}",
+                new AggregateException(rollbackError, resetError));
+        }
+
+        string prefix = operationSucceeded ? "Calibration measurements completed, but" : "Calibration failed and";
+        throw new HardwareOperationRecoveryException(
+            $"{prefix} the previous control policy could not be restored. Firmware/default control was restored instead.",
+            rollbackError);
     }
 
     private static async Task RestoreFirmwareControlAsync(
@@ -1000,6 +1008,28 @@ public static class GpuAutoOcSearch
             && double.IsFinite(peak)
             && peak >= ceilingCelsius - headroomCelsius;
     }
+
+    /// <summary>
+    /// Whether a passing candidate is close enough to a thermal limit to stop
+    /// climbing.
+    /// </summary>
+    /// <remarks>
+    /// Prefers the per-sensor margin when the monitor supplied one. Judging the
+    /// PEAK of every bound sensor against the core ceiling stops the search on
+    /// the hottest sensor rather than the closest-to-its-own-limit one: on the
+    /// reference 3090 the GDDR6X memory junction sits near the 83 °C core ceiling
+    /// under load, so the climb halted after the very first candidate and Auto OC
+    /// reported a 0 MHz "result". This is the same max-of-all-sensors-versus-one-
+    /// ceiling error that <see cref="GpuThermalCeilings"/> fixes for the ceiling
+    /// itself. The peak form is retained for callers with no per-sensor data.
+    /// </remarks>
+    public static bool ReachedThermalMargin(
+        TuneScreeningResult screening,
+        double ceilingCelsius,
+        double headroomCelsius) =>
+        screening.SmallestThermalMarginCelsius is double margin
+            ? headroomCelsius > 0 && double.IsFinite(margin) && margin <= headroomCelsius
+            : ReachedThermalHeadroom(screening.MaximumTemperatureCelsius, ceilingCelsius, headroomCelsius);
 }
 
 public static class HardwareTuneEngine
@@ -1085,8 +1115,8 @@ public static class HardwareTuneEngine
                 // Thermal-headroom stop: this candidate is stable but already
                 // near the temperature ceiling, so keep it and stop climbing —
                 // going higher would trade away cooling headroom, not add it.
-                if (GpuAutoOcSearch.ReachedThermalHeadroom(
-                    outcome.Result.Screening.MaximumTemperatureCelsius,
+                if (GpuAutoOcSearch.ReachedThermalMargin(
+                    outcome.Result.Screening,
                     request.Plan.TemperatureCeilingCelsius,
                     request.ThermalHeadroomCelsius))
                 {
@@ -1095,33 +1125,32 @@ public static class HardwareTuneEngine
                 }
             }
 
-            if (selected is null)
-            {
-                operationSucceeded = true;
-                return new TuneResult(
-                    capability.Id,
-                    "No candidate passed screening",
-                    null,
-                    results,
-                    null);
-            }
-
             // Refinement: bisect the gap between the last stable candidate and
             // the first failing one to locate the true stability edge, so the
             // coarse step size no longer caps how close to the limit we get.
             // Skipped when the climb already stopped for thermal headroom.
+            //
+            // When even the FIRST coarse candidate failed there is no measured stable
+            // point — but stock is a known-stable anchor, because it is the value the
+            // controller ships at and the search never goes below it. Bisecting between
+            // stock and that first failure recovers the whole stage instead of abandoning
+            // it: without this, a ladder whose opening step is already too aggressive
+            // reports "no candidate satisfied the constraints" even when the card is
+            // perfectly stable at a lower offset, which is a search artifact rather than a
+            // property of the hardware.
+            double refinementAnchor = selected ?? effectiveMin;
             if (request.RefinementCandidates > 0 && !stoppedForThermalHeadroom && firstFailingValue is double firstFail)
             {
                 IReadOnlyList<double> fine = GpuAutoOcSearch.FineCandidates(
-                    selected.Value, firstFail, request.RefinementCandidates);
+                    refinementAnchor, firstFail, request.RefinementCandidates);
                 TimeSpan refinementTime = GpuAutoOcSearch.RefinementScreeningTime(candidateTime);
                 for (int index = 0; index < fine.Count; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     double candidate = GpuAutoOcSearch.SnapToStep(fine[index], effectiveMin, effectiveMax, effectiveStep);
-                    if (candidate <= selected.Value + 1e-6 && request.Direction == TuneDirection.Maximize)
+                    if (candidate <= refinementAnchor + 1e-6 && request.Direction == TuneDirection.Maximize)
                     {
-                        continue; // snapped back onto an already-passed value
+                        continue; // snapped back onto an already-passed value (or onto stock)
                     }
 
                     reportProgress?.Invoke(
@@ -1136,14 +1165,27 @@ public static class HardwareTuneEngine
                     }
 
                     selected = candidate;
-                    if (GpuAutoOcSearch.ReachedThermalHeadroom(
-                        outcome.Result.Screening.MaximumTemperatureCelsius,
+                    if (GpuAutoOcSearch.ReachedThermalMargin(
+                        outcome.Result.Screening,
                         request.Plan.TemperatureCeilingCelsius,
                         request.ThermalHeadroomCelsius))
                     {
                         break;
                     }
                 }
+            }
+
+            // Checked only after refinement: the stock-anchored bisection above is the
+            // last chance to find a stable offset when the coarse ladder found none.
+            if (selected is null)
+            {
+                operationSucceeded = true;
+                return new TuneResult(
+                    capability.Id,
+                    "No candidate passed screening",
+                    null,
+                    results,
+                    null);
             }
 
             // Safety margin: back off from the edge so the shipped result has
@@ -1281,27 +1323,36 @@ public static class HardwareTuneEngine
         IHardwareAdapter adapter,
         bool operationSucceeded)
     {
+        Exception rollbackError;
         try
         {
-            await adapter.RollbackAsync(original, CancellationToken.None).ConfigureAwait(false);
+            // Restore with read-back proof: a refused restore write with the
+            // control read back at its captured prior value is proven restored,
+            // not unknown — the same rule the Auto OC engines follow. This is
+            // what turned every refused-write tune into RecoveryRequired and a
+            // write lock even though the hardware never moved.
+            await HardwareRestoreVerification.RestoreAndVerifyAsync(capability, original, adapter).ConfigureAwait(false);
+            return;
         }
-        catch (Exception rollbackError)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            try
-            {
-                await adapter.ResetToDefaultAsync(capability.Id, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception resetError)
-            {
-                throw new HardwareOperationRecoveryException(
-                    $"Rollback and firmware/default reset both failed: {rollbackError.Message}; {resetError.Message}",
-                    new AggregateException(rollbackError, resetError));
-            }
-
-            string prefix = operationSucceeded ? "Tuning completed, but" : "Tuning failed and";
-            throw new HardwareOperationRecoveryException(
-                $"{prefix} the previous control state could not be restored. Firmware/default control was restored instead.",
-                rollbackError);
+            rollbackError = exception;
         }
+
+        try
+        {
+            await adapter.ResetToDefaultAsync(capability.Id, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception resetError)
+        {
+            throw new HardwareOperationRecoveryException(
+                $"Rollback and firmware/default reset both failed: {rollbackError.Message}; {resetError.Message}",
+                new AggregateException(rollbackError, resetError));
+        }
+
+        string prefix = operationSucceeded ? "Tuning completed, but" : "Tuning failed and";
+        throw new HardwareOperationRecoveryException(
+            $"{prefix} the previous control state could not be restored. Firmware/default control was restored instead.",
+            rollbackError);
     }
 }

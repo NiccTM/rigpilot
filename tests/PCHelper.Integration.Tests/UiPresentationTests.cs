@@ -179,6 +179,16 @@ public sealed class UiPresentationTests
     }
 
     [Fact]
+    public void BlockedPrimaryHardwareActionsRemainClickableForPrerequisiteGuidance()
+    {
+        using MainViewModel viewModel = new();
+
+        Assert.True(viewModel.ToggleHardwareControlCommand.CanExecute(null));
+        Assert.True(viewModel.ApplyProfileCommand.CanExecute(null));
+        Assert.True(viewModel.ResetVerifiedCommand.CanExecute(null));
+    }
+
+    [Fact]
     public void DeviceCardUsesReadableMetadataWithoutEncodingCorruption()
     {
         HardwareDevice device = new(

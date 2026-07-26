@@ -27,8 +27,14 @@ public sealed record GpuPowerLimitState(uint? CurrentMilliwatts);
 /// real NVML transport is the only implementation that touches hardware and is
 /// separately arm-gated.
 /// </summary>
-public interface IGpuPowerLimitTransport
+public interface IGpuPowerLimitTransport : IDisposable
 {
+    /// <summary>True when the transport exposes a callable setter and can issue writes.</summary>
+    bool CanWrite { get; }
+
+    /// <summary>Arms or disarms live writes. Set only after an acknowledged operator action.</summary>
+    void SetArmed(bool armed);
+
     /// <summary>Reads the vendor constraints and default, or null if unavailable.</summary>
     Task<GpuPowerLimitBounds?> ReadBoundsAsync(string channelId, CancellationToken cancellationToken);
 

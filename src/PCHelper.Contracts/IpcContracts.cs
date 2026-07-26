@@ -14,6 +14,7 @@ public enum IpcCommand
     SaveAutomationRule,
     DeleteAutomationRule,
     ValidateProfile,
+    PreviewProfileV2,
     ApplyProfile,
     ApplyProfileV2,
     ResetHardware,
@@ -32,6 +33,7 @@ public enum IpcCommand
     RecoverFanCommissioning,
     StartTune,
     StartAutoOc,
+    StartAutoOcV3,
     AbortOperation,
     GetOperationStatus,
     GetOperationById,
@@ -60,6 +62,7 @@ public enum IpcCommand
     GetServiceStatus,
     GetCapabilitiesV2,
     GetProfilesV2,
+    GetAutoOcProfileValidations,
     SaveProfileV2,
     GetCoolingGraphs,
     SaveCoolingGraph,
@@ -92,6 +95,7 @@ public enum IpcCommand
     GetMacroRecordingStatus,
     BeginMacroRecording,
     StopMacroRecording,
+    GetGpuFanState,
     CancelMacroRecording,
     RecoverMacroRecording,
     GetScripts,
@@ -149,7 +153,13 @@ public enum IpcCommand
     SetRazerRgb,
     SetHardwareControlArmed,
     AdapterVerifyDefault,
-    AdapterVerifyRollback
+    AdapterVerifyRollback,
+    GpuFanSession,
+    ClearHardwareRecovery,
+    GpuPowerSession,
+    GpuClockSession,
+    SetGpuOcStartupPersistence,
+    GetGpuOcStartupPersistence
 }
 
 public static class ProtocolConstants
@@ -170,6 +180,7 @@ public static class IpcCommandPolicy
         IpcCommand.SubscribeSensors or
         IpcCommand.GetProfiles or
         IpcCommand.GetAutomationRules or
+        IpcCommand.PreviewProfileV2 or
         IpcCommand.GetOperationStatus or
         IpcCommand.GetOperationById or
         IpcCommand.GetServiceStatus or
@@ -182,7 +193,9 @@ public static class IpcCommandPolicy
         IpcCommand.GetDeviceQualificationPlans or
         IpcCommand.GetCapabilitiesV2 or
         IpcCommand.GetProfilesV2 or
+        IpcCommand.GetAutoOcProfileValidations or
         IpcCommand.GetCoolingGraphs or
+        IpcCommand.GetGpuFanState or
         IpcCommand.GetCoolingOutputAssignments or
         IpcCommand.GetFanCommissioningSessions or
         IpcCommand.GetFanCalibrations or
@@ -263,7 +276,32 @@ public sealed record ServiceStatus(
     bool HardwareControlArmed = false,
     CoolingRuntimeStatusV1? Cooling = null,
     bool ReleaseWritesLocked = false,
-    string? WriteLockReason = null);
+    string? WriteLockReason = null,
+    HardwareControlArmStateV1? HardwareControlArm = null);
+
+/// <summary>
+/// Per-family GPU arm state, where null means the family has no transport on this
+/// machine at all.
+///
+/// <see cref="ServiceStatus.HardwareControlArmed"/> is a single composite bool, so arming
+/// one family and reading it back reports false and looks like the arm failed. It did not:
+/// the flag demands every available family. Callers verifying one family should read this
+/// breakdown (or the capability states) instead.
+/// </summary>
+public sealed record HardwareControlArmStateV1(bool? GpuFan, bool? GpuPower, bool? GpuClock)
+{
+    [JsonIgnore]
+    public bool AnyAvailable => GpuFan is not null || GpuPower is not null || GpuClock is not null;
+
+    /// <summary>
+    /// True only when at least one family exists and no available family is disarmed. This
+    /// is the definition <see cref="ServiceStatus.HardwareControlArmed"/> carries, kept in
+    /// one place so the composite and the breakdown cannot drift apart.
+    /// </summary>
+    [JsonIgnore]
+    public bool FullyArmed =>
+        AnyAvailable && GpuFan is not false && GpuPower is not false && GpuClock is not false;
+}
 
 [JsonConverter(typeof(JsonStringEnumConverter<CoolingRuntimeState>))]
 public enum CoolingRuntimeState
@@ -417,6 +455,26 @@ public sealed record GpuClockOffsetStatus(
     string DeviceId,
     string Message);
 
+/// <summary>
+/// Request to save (or clear) a GPU overclock for automatic reapplication at startup.
+/// Enabling requires <see cref="ConfirmRestartRisk"/> and an exact-device confirmation in
+/// <see cref="ConfirmedDeviceIds"/>; the service re-applies and read-back-verifies the
+/// <see cref="Outputs"/> before persisting, so an overclock that does not verify now can
+/// never be saved. Disable (<c>Enable=false</c>) clears the saved profile and its journal.
+/// </summary>
+public sealed record SetGpuOcStartupPersistenceRequest(
+    bool Enable,
+    string DeviceId,
+    IReadOnlyList<GpuOcStartupOutputV1> Outputs,
+    IReadOnlyList<string> ConfirmedDeviceIds,
+    bool ConfirmRestartRisk);
+
+public sealed record GpuOcStartupPersistenceStatus(
+    bool Enabled,
+    string DeviceId,
+    int OutputCount,
+    string Message);
+
 public sealed record SetCpuTuningArmedRequest(
     bool Armed,
     bool ConfirmExperimental,
@@ -504,3 +562,26 @@ public sealed record CompatibilityReportV1(
     IReadOnlyDictionary<string, string> Runtime,
     IReadOnlyList<string> SanitisedLogLines,
     bool UserApproved);
+
+/// <summary>
+/// A read-only view of what the GPU fan is actually doing right now, read through the
+/// service's own privileged NVAPI session. Diagnosing fan faults previously meant loading
+/// NvAPIWrapper by reflection from an outside process, which answers from an unprivileged
+/// session and so reports privilege-gated calls as refused whether or not the service can
+/// make them — a misleading answer for the one question worth asking. This reports what
+/// the service sees. <paramref name="Policy"/> is "Manual" while RigPilot is driving the
+/// fan and "Automatic" once the driver owns it again.
+/// </summary>
+/// <param name="ClientFanCoolerControl">
+/// What the client fan-cooler interface reports, or the NVAPI status that refused it.
+/// Ampere and later cards implement this generation of the cooler API while still exposing
+/// the legacy one, and the two disagree about what is permitted — so whether this reads or
+/// refuses is the fact that decides how a card can be handed back to its driver.
+/// </param>
+public sealed record GpuFanStateV1(
+    bool Available,
+    bool Armed,
+    string Policy,
+    int? CommandedDutyPercent,
+    int? MeasuredDutyPercent,
+    string ClientFanCoolerControl);

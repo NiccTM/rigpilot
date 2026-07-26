@@ -25,13 +25,16 @@ public static class KrakenX3LightingWriter
     private const byte SyncChannelStaticValue = 40; // liquidctl _STATIC_VALUE[0b111]
     private const int MessageLength = 64;
 
-    /// <summary>Builds the 64-byte fixed-colour report for the sync (ring + logo) channel.</summary>
+    /// <summary>Builds the 64-byte fixed-colour report for the sync (ring + logo) channel.
+    /// Kraken X3 firmware expects each triplet in <b>GRB</b> order, not RGB — the
+    /// liquidctl reference converts <c>[r, g, b]</c> to <c>[g, r, b]</c> before writing.
+    /// Sending RGB swaps the red and green channels (e.g. red renders as green).</summary>
     public static byte[] BuildFixedColourReport(byte red, byte green, byte blue)
     {
         byte[] message = new byte[MessageLength];
         WriteHeader(message);
-        message[7] = red;
-        message[8] = green;
+        message[7] = green;   // GRB wire order
+        message[8] = red;
         message[9] = blue;
         WriteFooter(message, colourCount: 1);
         return message;
@@ -74,20 +77,13 @@ public static class KrakenX3LightingWriter
     /// </summary>
     public static KrakenLightingResultV1 Write(string colourHex, bool turnOff)
     {
-        byte red = 0, green = 0, blue = 0;
-        if (!turnOff)
+        RgbColour parsed = RgbColour.Off;
+        if (!turnOff && !RgbColour.TryParse(colourHex, out parsed))
         {
-            string value = colourHex.Trim().TrimStart('#');
-            if (value.Length != 6
-                || !uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint rgb))
-            {
-                return KrakenLightingResultV1.Unavailable(
-                    KrakenLightingOutcome.Failed, "Colour must use #RRGGBB format.");
-            }
-            red = (byte)(rgb >> 16);
-            green = (byte)(rgb >> 8);
-            blue = (byte)rgb;
+            return KrakenLightingResultV1.Unavailable(
+                KrakenLightingOutcome.Failed, "Colour must use #RRGGBB format.");
         }
+        byte red = parsed.Red, green = parsed.Green, blue = parsed.Blue;
 
         HidDevice? device;
         try

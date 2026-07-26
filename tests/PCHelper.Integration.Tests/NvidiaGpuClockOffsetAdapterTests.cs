@@ -235,5 +235,16 @@ public sealed class NvidiaGpuClockOffsetAdapterTests
             _current[domain] = offsetKiloHertz;
             return Task.CompletedTask;
         }
+
+        /// <summary>Records restores separately so tests can prove rollback used the un-gated path.</summary>
+        public Task RestoreOffsetAsync(GpuClockOffsetDomain domain, int offsetKiloHertz, CancellationToken cancellationToken)
+        {
+            RestoreCommands.Add((domain, offsetKiloHertz));
+            OffsetCommands.Add((domain, offsetKiloHertz));
+            _current[domain] = offsetKiloHertz;
+            return Task.CompletedTask;
+        }
+
+        public List<(GpuClockOffsetDomain Domain, int OffsetKiloHertz)> RestoreCommands { get; } = [];
     }
 }

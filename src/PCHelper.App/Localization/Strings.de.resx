@@ -58,22 +58,46 @@
     <value>Schritt {0} von {1}</value>
   </data>
   <data name="Onboarding_Title1" xml:space="preserve">
-    <value>Willkommen bei RigPilot</value>
+    <value>Hardware und Eigentümer prüfen</value>
   </data>
   <data name="Onboarding_Body1" xml:space="preserve">
-    <value>RigPilot steuert Lüfter, Pumpen, GPU-Limits, Beleuchtung und Profile an einem Ort. Jeder Hardware-Schreibvorgang ist transaktional: Der vorherige Zustand wird zuerst gesichert, der angewendete Wert wird zur Überprüfung von der Hardware zurückgelesen, und ein fehlgeschlagener Schreibvorgang wird zurückgerollt. Integrierte Profile bleiben innerhalb der Werksgrenzen.</value>
+    <value>Beginnen Sie mit einer schreibgeschützten Bestandsaufnahme von Geräten, Steuerungsnachweisen, Benutzer-Bridges und konkurrierenden Hardware-Eigentümern. Dieser Schritt ändert keinen Hardwarezustand.</value>
   </data>
   <data name="Onboarding_Title2" xml:space="preserve">
-    <value>Der Schalter „Hardwaresteuerung"</value>
+    <value>Steuerbarkeit verstehen</value>
   </data>
   <data name="Onboarding_Body2" xml:space="preserve">
-    <value>Der Schalter „Hardwaresteuerung" in der Kopfzeile ist die Hauptfreigabe für alle schreibfähigen Steuerungen. Solange er aktiviert ist, darf RigPilot die von Ihnen eingestellten Werte anwenden, stets innerhalb der Herstellergrenzen. Beim Deaktivieren werden alle Steuerungen entwaffnet und die Herstellerstandards wiederhergestellt; das Beenden des Dienstes bewirkt dasselbe. Die Spannung wird niemals automatisch erhöht.</value>
+    <value>Verifizierte Steuerungen besitzen Nachweise für Anwenden, Rücklesen und Zurücksetzen. Experimentelle Steuerungen erfordern eine ausdrückliche Bestätigung. Schreibgeschützte und blockierte Endpunkte bleiben mit ihrem Nachweisproblem oder Konflikt sichtbar.</value>
   </data>
   <data name="Onboarding_Title3" xml:space="preserve">
-    <value>Evidenzlabels, keine Versprechen</value>
+    <value>Täglichen Modus wählen</value>
   </data>
   <data name="Onboarding_Body3" xml:space="preserve">
-    <value>Jede Steuerung trägt ein Evidenzlabel. „Verified" bedeutet: Anwenden, Rücklesen und Zurücksetzen wurden auf echter Hardware nachgewiesen. „Experimental" bedeutet: Es funktioniert, aber mit begrenzter Evidenz — bewusst verwenden. „Read Only"- und „Blocked"-Steuerungen können gar nicht schreiben. Die Seite „Geräte" zeigt die Evidenz und den nächsten sicheren Schritt für jede Steuerung.</value>
+    <value>Leise reduziert die Hintergrundleistung, Effizienz bevorzugt Nutzarbeit pro Watt und Leistung bevorzugt Reaktionsfähigkeit ohne automatische Spannungserhöhung. Die Auswahl allein schreibt keine Hardware.</value>
+  </data>
+  <data name="Onboarding_Title4" xml:space="preserve">
+    <value>Ausgangszustand messen</value>
+  </data>
+  <data name="Onboarding_Body4" xml:space="preserve">
+    <value>Erfassen Sie drei schreibgeschützte Telemetrieproben als Vorher-Zustand. Fehlende Sensoren werden als fehlend gemeldet und nicht geschätzt.</value>
+  </data>
+  <data name="Onboarding_Title5" xml:space="preserve">
+    <value>Eignung und Auslassungen prüfen</value>
+  </data>
+  <data name="Onboarding_Body5" xml:space="preserve">
+    <value>Der Probelauf nennt die genaue anwendbare Aktion und erklärt ausgelassene Kühlungs-, Tuning- oder Beleuchtungsaktionen. Inbetriebnahme und Advanced Lab bleiben optional.</value>
+  </data>
+  <data name="Onboarding_Title6" xml:space="preserve">
+    <value>Eine verifizierte Transaktion anwenden</value>
+  </data>
+  <data name="Onboarding_Body6" xml:space="preserve">
+    <value>Der Dienst sichert den vorherigen Zustand, wendet die zulässige Modusaktion an, liest sie zurück und bestätigt sie erst nach erfolgreicher Prüfung. Fehler führen zu verifiziertem Rollback oder Wiederherstellung erforderlich.</value>
+  </data>
+  <data name="Onboarding_Title7" xml:space="preserve">
+    <value>Nachweis und Wiederherstellung prüfen</value>
+  </data>
+  <data name="Onboarding_Body7" xml:space="preserve">
+    <value>Prüfen Sie den Transaktionsnachweis. Der Windows-Standard Ausbalanciert kann unabhängig wiederhergestellt werden; der Abschluss erfordert ein erfolgreiches Rücklesen des Standardzustands.</value>
   </data>
   <data name="Onboarding_Back" xml:space="preserve">
     <value>Zurück</value>
@@ -85,7 +109,19 @@
     <value>Verstanden — Dashboard öffnen</value>
   </data>
   <data name="Onboarding_Skip" xml:space="preserve">
-    <value>Tour überspringen</value>
+    <value>Einrichtung überspringen</value>
+  </data>
+  <data name="Onboarding_Scan" xml:space="preserve">
+    <value>Schreibgeschützte Prüfung starten</value>
+  </data>
+  <data name="Onboarding_CaptureBaseline" xml:space="preserve">
+    <value>Ausgangszustand erfassen</value>
+  </data>
+  <data name="Onboarding_ApplyMode" xml:space="preserve">
+    <value>Gewählten Modus anwenden</value>
+  </data>
+  <data name="Onboarding_RestoreDefault" xml:space="preserve">
+    <value>Windows-Standard wiederherstellen</value>
   </data>
   <data name="Updates_CardTitle" xml:space="preserve">
     <value>Updates</value>

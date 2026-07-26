@@ -3,8 +3,10 @@ using PCHelper.Contracts;
 
 namespace PCHelper.Adapters;
 
-/// <summary>One running process the terminator may consider.</summary>
-public sealed record RunningProcessInfo(int ProcessId, string ProcessName);
+/// <summary>One running process the terminator may consider. <paramref name="ModulePath"/> is
+/// the executable path when it could be read (best-effort), used to match controllers that run
+/// under a generic process name but a distinctive install path.</summary>
+public sealed record RunningProcessInfo(int ProcessId, string ProcessName, string? ModulePath = null);
 
 /// <summary>
 /// Seam over process enumeration and termination so the terminator can be
@@ -55,15 +57,20 @@ public sealed class ConflictProcessTerminator(IProcessControl processControl)
             ? request.ConflictIds
             : ConflictDetector.KnownControllerIds;
         HashSet<string> allowedNames = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> allowedPathHints = new(StringComparer.OrdinalIgnoreCase);
         foreach (string conflictId in conflictIds)
         {
             foreach (string name in ConflictDetector.ProcessNamesFor(conflictId))
             {
                 allowedNames.Add(name);
             }
+            foreach (string hint in ConflictDetector.PathHintsFor(conflictId))
+            {
+                allowedPathHints.Add(hint);
+            }
         }
 
-        if (allowedNames.Count == 0)
+        if (allowedNames.Count == 0 && allowedPathHints.Count == 0)
         {
             return StopConflictingProcessesResultV1.Empty("No known competing controller matched the request.");
         }
@@ -75,7 +82,15 @@ public sealed class ConflictProcessTerminator(IProcessControl processControl)
             {
                 continue; // never terminate RigPilot's own processes
             }
-            if (!allowedNames.Contains(process.ProcessName))
+
+            // A process is eligible if its name is on the curated allowlist, OR its executable
+            // path contains a curated install-path hint — the latter reaches controllers like
+            // NZXT CAM whose background service runs as a generic "service.exe". Both sets come
+            // only from ConflictDetector's allowlist, never from caller-supplied values.
+            bool byName = allowedNames.Contains(process.ProcessName);
+            bool byPath = process.ModulePath is { Length: > 0 } modulePath
+                && allowedPathHints.Any(hint => modulePath.Contains(hint, StringComparison.OrdinalIgnoreCase));
+            if (!byName && !byPath)
             {
                 continue; // only curated conflict processes are eligible
             }
@@ -109,7 +124,20 @@ public sealed class WindowsProcessControl : IProcessControl
             {
                 try
                 {
-                    running.Add(new RunningProcessInfo(process.Id, process.ProcessName));
+                    // Best-effort executable path so a controller with a generic process name
+                    // but a distinctive install path (e.g. NZXT CAM's service.exe) is matchable.
+                    // Reading another process's module can fail (access denied, bitness
+                    // mismatch, exit); fall back to name-only for that process.
+                    string? modulePath = null;
+                    try
+                    {
+                        modulePath = process.MainModule?.FileName;
+                    }
+                    catch (Exception exception) when (exception is not OutOfMemoryException)
+                    {
+                    }
+
+                    running.Add(new RunningProcessInfo(process.Id, process.ProcessName, modulePath));
                 }
                 catch (InvalidOperationException)
                 {

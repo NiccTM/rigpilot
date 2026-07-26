@@ -479,6 +479,48 @@ public sealed class HardwareOperationsTests
     }
 
     [Fact]
+    public async Task RefusedWritesWithProvenReadBackFailHonestlyWithoutRecovery()
+    {
+        // The live LocalSystem shape: every write is refused by the driver, so
+        // the control never moves. The tune fails with the driver's refusal —
+        // but the refused restore write is proven safe by read-back, so it must
+        // NOT escalate to HardwareOperationRecoveryException, which is what
+        // locked all service writes until an elevated restart.
+        FakeNumericAdapter adapter = new(initialValue: 100, rpmForDuty: duty => duty * 20)
+        {
+            ApplyThrows = true,
+            RollbackThrows = true
+        };
+        CapabilityDescriptor capability = Capability(CapabilityAccessState.Experimental);
+        TunePlan plan = Plan(capability) with
+        {
+            Bounds = new Dictionary<string, TuneBounds> { [capability.Id] = new(50, 100, 25) },
+            ScreeningDuration = TimeSpan.FromMinutes(10)
+        };
+        StartTuneRequest request = new(
+            plan,
+            capability.Id,
+            TuneDirection.Minimize,
+            ConfirmExperimental: true,
+            ConfirmDevice: true,
+            CandidateScreeningTime: TimeSpan.Zero,
+            MaximumCandidates: 3);
+        QueueScreeningMonitor monitor = new(Pass("never reached"));
+
+        InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            HardwareTuneEngine.RunAsync(
+                request, capability, adapter, monitor, reportProgress: null, CancellationToken.None));
+
+        Assert.IsNotType<HardwareOperationRecoveryException>(failure);
+        Assert.Contains("NVAPI_INVALID_USER_PRIVILEGE", failure.Message, StringComparison.Ordinal);
+        Assert.Equal(100, adapter.CurrentValue);
+        Assert.True(adapter.RollbackCalled);
+        // The reset fallback is for unproven state only; a proven restore must
+        // not touch firmware defaults.
+        Assert.False(adapter.ResetCalled);
+    }
+
+    [Fact]
     public async Task InvalidRpmSourceForcesFirmwareDefaultRecovery()
     {
         FakeNumericAdapter adapter = new(initialValue: 40, rpmForDuty: _ => double.NaN);
@@ -517,6 +559,22 @@ public sealed class HardwareOperationsTests
     {
         Assert.Empty(GpuAutoOcSearch.FineCandidates(90, 90, 5));
         Assert.Empty(GpuAutoOcSearch.FineCandidates(80, 100, 0));
+    }
+
+    [Fact]
+    public void FineCandidatesSearchDownwardFromStockWhenTheFirstCoarseStepFails()
+    {
+        // The memory ladder's opening step can already be too aggressive (observed live:
+        // the first candidate at +182 MHz failed, so the stage reported no candidate at all
+        // even though the card was stable lower down). Anchoring the bisection at stock —
+        // known stable, since the search never goes below it — produces real candidates
+        // between stock and that first failure instead of abandoning the stage.
+        double[] candidates = [.. GpuAutoOcSearch.FineCandidates(lastStable: 0, firstFail: 182, count: 5)];
+
+        Assert.Equal(5, candidates.Length);
+        Assert.All(candidates, candidate => Assert.InRange(candidate, 0.1, 181.9));
+        // Ascending, so the loop keeps the highest value that still passes.
+        Assert.Equal(candidates.OrderBy(value => value), candidates);
     }
 
     [Fact]
@@ -797,8 +855,18 @@ public sealed class HardwareOperationsTests
         double initialValue,
         Func<double, double> rpmForDuty,
         Func<double, int, double>? rpmForDutyAndRead = null,
-        Func<double, double>? temperatureForDuty = null) : IHardwareAdapter
+        Func<double, double>? temperatureForDuty = null) : IHardwareAdapter, IHardwareStateVerifier
     {
+        // Every production tunable adapter implements the state verifier, and
+        // the restore paths now demand read-back proof — so the fake must
+        // answer reads too or every tune/calibration test would end in a false
+        // recovery. ApplyThrows + RollbackThrows together model the live
+        // LocalSystem refusal: every write bounces off the driver, so the
+        // control never leaves its prior value and the read-back can prove it.
+        public bool ApplyThrows { get; set; }
+
+        public bool RollbackThrows { get; set; }
+
         public const string RpmSensorId = "sensor:rpm";
         public const string TemperatureSensorId = "sensor:temperature";
         private readonly Func<double, double> _rpmForDuty = rpmForDuty;
@@ -869,6 +937,11 @@ public sealed class HardwareOperationsTests
         public Task ApplyAsync(PreparedAction action, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (ApplyThrows)
+            {
+                throw new InvalidOperationException("NVAPI_INVALID_USER_PRIVILEGE");
+            }
+
             CurrentValue = action.Action.Value.Numeric!.Value;
             _readsAtCurrentDuty = 0;
             return Task.CompletedTask;
@@ -888,6 +961,14 @@ public sealed class HardwareOperationsTests
         public Task RollbackAsync(PreparedAction action, CancellationToken cancellationToken)
         {
             RollbackCalled = true;
+            if (RollbackThrows)
+            {
+                // The restore write is refused; CurrentValue is left wherever
+                // the (also refused) applies left it — at the captured prior
+                // value — so the read-back can prove the hardware never moved.
+                throw new InvalidOperationException("NVAPI_INVALID_USER_PRIVILEGE");
+            }
+
             CurrentValue = action.PreviousValue?.Numeric ?? _initialValue;
             return Task.CompletedTask;
         }
@@ -897,6 +978,31 @@ public sealed class HardwareOperationsTests
             ResetCalled = true;
             CurrentValue = _initialValue;
             return Task.CompletedTask;
+        }
+
+        public Task<HardwareStateVerification> VerifyDefaultStateAsync(string capabilityId, CancellationToken cancellationToken)
+        {
+            bool atDefault = Math.Abs(CurrentValue - _initialValue) < 0.001;
+            return Task.FromResult(new HardwareStateVerification(
+                Manifest.Id,
+                capabilityId,
+                atDefault,
+                ControlValue.FromNumeric(CurrentValue),
+                atDefault ? "Default state was read back." : "Default-state read-back did not match."));
+        }
+
+        public Task<HardwareStateVerification> VerifyRollbackStateAsync(PreparedAction action, CancellationToken cancellationToken)
+        {
+            double prior = action.PreviousValue?.Numeric ?? _initialValue;
+            bool matches = Math.Abs(CurrentValue - prior) < 0.001;
+            return Task.FromResult(new HardwareStateVerification(
+                Manifest.Id,
+                action.Action.CapabilityId,
+                matches,
+                ControlValue.FromNumeric(CurrentValue),
+                matches
+                    ? "Rollback state was read back."
+                    : "Rollback read-back did not match the captured state."));
         }
 
         public Task<AdapterHealth> GetHealthAsync(CancellationToken cancellationToken) =>

@@ -113,10 +113,24 @@ internal sealed class WorkloadHostSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Locates the workload host, preferring a genuinely runnable co-located
+    /// copy and otherwise the published <c>workload-host</c> component.
+    ///
+    /// <para>The co-located check must confirm the managed assembly, not just
+    /// the apphost. A framework-dependent <c>.exe</c> is only a launcher for the
+    /// <c>.dll</c> beside it, and the dashboard's own directory receives a stray
+    /// <c>PCHelper.WorkloadHost.exe</c> as a project-reference build side-effect
+    /// <b>without</b> that <c>.dll</c>. Testing the apphost alone therefore
+    /// resolved to a launcher that cannot start — "The application to execute
+    /// does not exist: …\app\PCHelper.WorkloadHost.dll" — while the correct
+    /// sibling component was never reached, leaving Auto OC V3 unable to run on
+    /// any deployed payload.</para>
+    /// </summary>
     private static string ResolveExecutablePath()
     {
         string colocated = Path.Combine(AppContext.BaseDirectory, "PCHelper.WorkloadHost.exe");
-        if (File.Exists(colocated))
+        if (IsLaunchable(colocated))
         {
             return colocated;
         }
@@ -127,6 +141,14 @@ internal sealed class WorkloadHostSession : IAsyncDisposable
             "workload-host",
             "PCHelper.WorkloadHost.exe"));
     }
+
+    /// <summary>
+    /// True only when both the apphost and the managed assembly it loads are
+    /// present, so a partial build output is never mistaken for a usable host.
+    /// </summary>
+    internal static bool IsLaunchable(string executablePath) =>
+        File.Exists(executablePath)
+        && File.Exists(Path.ChangeExtension(executablePath, ".dll"));
 
     public async ValueTask DisposeAsync()
     {

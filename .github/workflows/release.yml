@@ -8,7 +8,7 @@ on:
       version:
         description: SemVer without a leading v
         required: true
-        default: 0.5.5-preview.1
+        default: 0.6.0-beta.1
       channel:
         description: Release channel
         required: true

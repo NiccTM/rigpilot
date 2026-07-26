@@ -31,18 +31,25 @@ internal static class Cli
                 "calibrate-case-fan" => await CalibrateCaseFanAsync(args, json),
                 "operation" => await OperationAsync(args, json),
                 "cooling-reports" => await ServiceCommandAsync<IReadOnlyList<CoolingQualificationReportV1>>(IpcCommand.GetCoolingQualificationReports, json),
+                "cooling-graphs" => await ServiceCommandAsync<IReadOnlyList<CoolingGraphV1>>(IpcCommand.GetCoolingGraphs, json),
                 "discover-controllers" => await ServiceCommandAsync<ControllerDiscoveryResultV1>(IpcCommand.DiscoverControllers, json),
                 "discover-hid" => await DiscoverHidAsync(json),
                 "ryzen-smu-feasibility" => await ReadRyzenSmuFeasibilityAsync(json),
                 "close-blockers" => await StopConflictingProcessesAsync(args, json),
                 "kraken-rgb" => await SetKrakenLightingAsync(args, json),
+                "razer-rgb" => await SetRazerLightingAsync(args, json),
                 "kraken-pump" => await SetKrakenPumpAsync(args, json),
+                "gpu-fan-state" => await ServiceCommandAsync<GpuFanStateV1>(IpcCommand.GetGpuFanState, json),
                 "gpu-fan-arm" => await SetGpuFanArmedAsync(args, json, arm: true),
                 "gpu-fan-disarm" => await SetGpuFanArmedAsync(args, json, arm: false),
+                "clear-recovery" => await ClearHardwareRecoveryAsync(args, json),
                 "gpu-power-arm" => await SetGpuPowerArmedAsync(args, json, arm: true),
                 "gpu-power-disarm" => await SetGpuPowerArmedAsync(args, json, arm: false),
                 "gpu-clock-arm" => await SetGpuClockArmedAsync(args, json, arm: true),
                 "gpu-clock-disarm" => await SetGpuClockArmedAsync(args, json, arm: false),
+                "gpu-oc-save" => await SetGpuOcStartupPersistenceAsync(args, json),
+                "gpu-oc-clear" => await ClearGpuOcStartupPersistenceAsync(args, json),
+                "gpu-oc-state" => await ServiceCommandAsync<GpuOcStartupPersistenceStatus>(IpcCommand.GetGpuOcStartupPersistence, json),
                 "cpu-tuning-arm" => await SetCpuTuningArmedAsync(args, json, arm: true),
                 "cpu-tuning-disarm" => await SetCpuTuningArmedAsync(args, json, arm: false),
                 "trace" => await TraceAsync(json),
@@ -592,6 +599,27 @@ internal static class Cli
         return result.Outcome == KrakenLightingOutcome.WriteIssued ? 0 : 3;
     }
 
+    private static async Task<int> SetRazerLightingAsync(string[] args, bool json)
+    {
+        // Drives the same service IPC path the App's "Apply to all lighting" uses for the
+        // Razer O11 (IpcCommand.SetRazerRgb -> SetRazerRgbAsync -> contained --set-razer-custom),
+        // so the full round-trip can be exercised from the command line.
+        bool off = HasFlag(args, "--off");
+        string colour = Option(args, "--colour") ?? string.Empty;
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetRazerRgb,
+            new RazerRgbRequestV1(
+                RazerRgbRequestV1.CurrentSchemaVersion,
+                colour,
+                off,
+                HasFlag(args, "--confirm-experimental"),
+                Option(args, "--confirm-device")));
+        RazerRgbResultV1 result = IpcJson.FromElement<RazerRgbResultV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(result, json, value => Console.WriteLine($"Razer lighting: {value.Outcome}. {value.Message}"));
+        return result.Outcome == KrakenLightingOutcome.WriteIssued ? 0 : 3;
+    }
+
     private static async Task<int> SetGpuFanArmedAsync(string[] args, bool json, bool arm)
     {
         bool confirmExperimental = HasFlag(args, "--confirm-experimental");
@@ -607,6 +635,27 @@ internal static class Cli
         return status.Available ? 0 : 3;
     }
 
+    private static async Task<int> ClearHardwareRecoveryAsync(string[] args, bool json)
+    {
+        if (!HasFlag(args, "--confirm"))
+        {
+            Console.Error.WriteLine("clear-recovery requires --confirm.");
+            return 2;
+        }
+
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.ClearHardwareRecovery,
+            new ClearHardwareRecoveryRequestV1(
+                ClearHardwareRecoveryRequestV1.CurrentSchemaVersion,
+                true,
+                "Operator cleared the hardware write lock from the CLI."));
+        SafetyRecoveryStatusV1 status = IpcJson.FromElement<SafetyRecoveryStatusV1>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(status, json, value => Console.WriteLine(
+            $"Hardware write lock: rollbackBlocked={value.RollbackBlocked}. {value.Guidance}"));
+        return status.RollbackBlocked ? 3 : 0;
+    }
+
     private static async Task<int> SetGpuPowerArmedAsync(string[] args, bool json, bool arm)
     {
         bool confirmExperimental = HasFlag(args, "--confirm-experimental");
@@ -620,6 +669,66 @@ internal static class Cli
         Write(status, json, value => Console.WriteLine(
             $"GPU power limit: available={value.Available} armed={value.Armed} device={value.DeviceId}. {value.Message}"));
         return status.Available ? 0 : 3;
+    }
+
+    private static async Task<int> SetGpuOcStartupPersistenceAsync(string[] args, bool json)
+    {
+        string? device = Option(args, "--confirm-device");
+        if (string.IsNullOrWhiteSpace(device))
+        {
+            Console.Error.WriteLine("gpu-oc-save requires --confirm-device DEVICE_ID.");
+            return 3;
+        }
+
+        if (!HasFlag(args, "--accept-restart-risk"))
+        {
+            Console.Error.WriteLine(
+                "gpu-oc-save requires --accept-restart-risk: a saved overclock is reapplied at every boot, and a bad "
+                + "overclock can prevent a clean boot until the boot-recovery sentinel reverts it.");
+            return 3;
+        }
+
+        // Only the values explicitly supplied are saved; each maps to the documented OC control.
+        List<GpuOcStartupOutputV1> outputs = [];
+        if (Option(args, "--core") is string core && double.TryParse(core, out double coreValue))
+        {
+            outputs.Add(new GpuOcStartupOutputV1("gpuclock.core:0", coreValue));
+        }
+        if (Option(args, "--memory") is string memory && double.TryParse(memory, out double memoryValue))
+        {
+            outputs.Add(new GpuOcStartupOutputV1("gpuclock.memory:0", memoryValue));
+        }
+        if (Option(args, "--power") is string power && double.TryParse(power, out double powerValue))
+        {
+            outputs.Add(new GpuOcStartupOutputV1("gpupower.limit:0", powerValue));
+        }
+
+        if (outputs.Count == 0)
+        {
+            Console.Error.WriteLine("gpu-oc-save needs at least one of --core MHZ, --memory MHZ, or --power MILLIWATTS.");
+            return 3;
+        }
+
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetGpuOcStartupPersistence,
+            new SetGpuOcStartupPersistenceRequest(Enable: true, device, outputs, [device], ConfirmRestartRisk: true));
+        GpuOcStartupPersistenceStatus status = IpcJson.FromElement<GpuOcStartupPersistenceStatus>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(status, json, value => Console.WriteLine(
+            $"GPU OC startup: enabled={value.Enabled} device={value.DeviceId} outputs={value.OutputCount}. {value.Message}"));
+        return status.Enabled ? 0 : 3;
+    }
+
+    private static async Task<int> ClearGpuOcStartupPersistenceAsync(string[] args, bool json)
+    {
+        string device = Option(args, "--confirm-device") ?? string.Empty;
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetGpuOcStartupPersistence,
+            new SetGpuOcStartupPersistenceRequest(Enable: false, device, [], [], ConfirmRestartRisk: false));
+        GpuOcStartupPersistenceStatus status = IpcJson.FromElement<GpuOcStartupPersistenceStatus>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(status, json, value => Console.WriteLine($"GPU OC startup cleared. {value.Message}"));
+        return 0;
     }
 
     private static async Task<int> SetGpuClockArmedAsync(string[] args, bool json, bool arm)
@@ -706,7 +815,7 @@ internal static class Cli
             HardwareSnapshot snapshot = await coordinator.CaptureAsync(CancellationToken.None);
             report = CompatibilityReportBuilder.Build(
                 snapshot,
-                "0.5.5-alpha",
+                "0.6.0-beta.1",
                 new Dictionary<string, string>
                 {
                     ["framework"] = Environment.Version.ToString(),
@@ -1384,17 +1493,27 @@ internal static class Cli
                                                  Terminate the running processes of detected conflicting controllers (Afterburner, CAM, Fan Control, Armoury Crate, ...) so they release device ownership. Curated allowlist only; takes over no hardware.
             pchelper-cli kraken-rgb (--colour RRGGBB | --off) --confirm-experimental --confirm-device nzxt:kraken-x3 [--json]
                                                  Write a fixed colour (or off) to the Kraken X3 ring+logo via RigPilot's native adapter. Lighting only; no read-back, confirm visually.
+            pchelper-cli razer-rgb (--colour RRGGBB | --off) --confirm-experimental --confirm-device razer:lianli-o11-dynamic [--json]
+                                                 Write a fixed colour (or off) to the Lian Li O11 Dynamic Razer Edition case via RigPilot's native extended-matrix custom-frame path. Lighting only; confirm visually.
             pchelper-cli kraken-pump --duty 60..100 --confirm-experimental --confirm-device nzxt:kraken-x3 [--json]
                                                  Set a fixed Kraken X3 pump duty (hard floor 60%, never stopped) with firmware status read-back.
             pchelper-cli gpu-fan-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU fan control after exact-device acknowledgement.
+            pchelper-cli gpu-fan-state [--json] Read live GPU fan policy and duty through the service. Read-only.
             pchelper-cli gpu-fan-disarm [--json] Disarm GPU fan control and restore the automatic curve.
+            pchelper-cli clear-recovery --confirm [--json]
+                                     Re-prove default hardware state and lift the failed-rollback write lock. The lock is cleared only if every leased control reads back at its default.
             pchelper-cli gpu-power-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU power-limit control after exact-device acknowledgement.
             pchelper-cli gpu-power-disarm [--json] Disarm GPU power-limit control and restore the vendor default limit.
             pchelper-cli gpu-clock-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Arm Experimental GPU core/memory clock-offset control after exact-device acknowledgement.
             pchelper-cli gpu-clock-disarm [--json] Disarm GPU clock-offset control and return both domains to stock clocks.
+            pchelper-cli gpu-oc-save --confirm-device DEVICE_ID --accept-restart-risk [--core MHZ] [--memory MHZ] [--power MILLIWATTS] [--json]
+                                                 Save an applied overclock for automatic reapplication at every service start. The values are re-applied and read-back verified before saving, then reapplied behind a boot-recovery sentinel that reverts them if a boot does not survive them. Requires accepting the restart risk.
+            pchelper-cli gpu-oc-clear [--confirm-device DEVICE_ID] [--json]
+                                                 Clear the saved overclock so it is no longer reapplied at startup.
+            pchelper-cli gpu-oc-state [--json] Report whether an overclock is saved for startup and its output count. Read-only.
             pchelper-cli cpu-tuning-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Request arming of CPU PBO tuning. Refused by the qualification gate on every system today.
             pchelper-cli cpu-tuning-disarm [--json] Confirm CPU PBO tuning is disarmed and report the boot-recovery sentinel state.

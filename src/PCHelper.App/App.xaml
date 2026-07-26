@@ -405,12 +405,11 @@
       </Setter>
     </Style>
 
-    <!-- Hardware choices remain visibly actionable even when they are not the
-         card's primary recommendation. Actual write eligibility is enforced
-         by the command and service safety gates. -->
+    <!-- Action buttons are neutral. Blue is reserved for a confirmed selected
+         mode, never for hover, capability, or a command that has not run. -->
     <Style x:Key="HardwareActionButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Background" Value="{StaticResource AccentSoftBrush}" />
-      <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+      <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+      <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 
@@ -426,7 +425,7 @@
                     Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}"
                     BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="18"
+                    CornerRadius="{StaticResource RadiusButton}"
                     Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}"

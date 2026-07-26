@@ -50,6 +50,27 @@ public static class UndervoltPresets
             : null;
     }
 
+    /// <summary>
+    /// Computes an arbitrary custom power target from a percentage of the same
+    /// reference the presets use (vendor default, or the range maximum when the
+    /// driver reports no default). Always clamped into the driver's documented
+    /// range. This shares the presets' documented-power-limit path exactly — it is
+    /// still not a voltage-frequency curve.
+    /// </summary>
+    public static double? ComputeCustomTargetWatts(double minimumWatts, double maximumWatts, double? vendorDefaultWatts, double percentOfReference)
+    {
+        if (minimumWatts <= 0 || maximumWatts <= minimumWatts || percentOfReference <= 0)
+        {
+            return null;
+        }
+
+        double reference = vendorDefaultWatts is double defaultWatts && defaultWatts >= minimumWatts && defaultWatts <= maximumWatts
+            ? defaultWatts
+            : maximumWatts;
+
+        return Math.Round(Math.Clamp(reference * (percentOfReference / 100.0), minimumWatts, maximumWatts));
+    }
+
     /// <summary>Human label for the applied preset, for status text.</summary>
     public static string Describe(string preset) => preset switch
     {

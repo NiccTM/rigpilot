@@ -24,7 +24,18 @@ public sealed class SystemMacroDelay : IMacroDelay
     public Task WaitAsync(TimeSpan delay, CancellationToken cancellationToken) => Task.Delay(delay, cancellationToken);
 }
 
-public sealed class MacroPlaybackEngine(IMacroInputSink input, IMacroDelay delay)
+/// <summary>
+/// Reports whether an input-synthesizing action must be refused right now. Kept as a seam
+/// so the playback engine stays testable and the real, process-enumerating implementation
+/// lives in the app layer.
+/// </summary>
+public interface IInputSynthesisGuard
+{
+    /// <summary>The active anti-cheat to refuse on, or null when synthesis is allowed.</summary>
+    string? BlockingProtection();
+}
+
+public sealed class MacroPlaybackEngine(IMacroInputSink input, IMacroDelay delay, IInputSynthesisGuard? guard = null)
 {
     public async Task<MacroExecutionResultV1> ExecuteAsync(MacroV1 macro, CancellationToken cancellationToken)
     {
@@ -32,6 +43,21 @@ public sealed class MacroPlaybackEngine(IMacroInputSink input, IMacroDelay delay
         if (!validation.IsValid)
         {
             return new MacroExecutionResultV1(1, macro.Id, false, 0, TimeSpan.Zero, string.Join(" ", validation.Errors));
+        }
+
+        // Never synthesize input while anti-cheat software is running. RigPilot does not
+        // touch games, but a hardware suite injecting keystrokes on a protected machine is
+        // exactly what an anti-cheat action or a behavioural AV flag looks for, so refuse
+        // before the first event rather than risk the user.
+        if (guard?.BlockingProtection() is string activeProtection)
+        {
+            return new MacroExecutionResultV1(
+                MacroExecutionResultV1.CurrentSchemaVersion,
+                macro.Id,
+                false,
+                0,
+                TimeSpan.Zero,
+                $"Macro playback is blocked while anti-cheat software ({activeProtection}) is running. Close the protected game or its anti-cheat client and try again.");
         }
 
         Stopwatch stopwatch = Stopwatch.StartNew();

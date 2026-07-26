@@ -16,6 +16,7 @@
     <ProjectReference Include="..\..\src\PCHelper.Contracts\PCHelper.Contracts.csproj" />
     <ProjectReference Include="..\..\src\PCHelper.Ipc\PCHelper.Ipc.csproj" />
     <ProjectReference Include="..\..\src\PCHelper.Service\PCHelper.Service.csproj" />
+    <ProjectReference Include="..\..\src\PCHelper.WorkloadHost\PCHelper.WorkloadHost.csproj" />
     <ProjectReference Include="..\..\src\PCHelper.EffectHost\PCHelper.EffectHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>

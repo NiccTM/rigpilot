@@ -1,7 +1,7 @@
 # RigPilot adapter-pack SDK (.pcha) — format, containment, and signing
 
 Status: **public draft, 2026-07-16.** The verifier described here has shipped since
-0.5.5-alpha (`pchelper-cli pack-inspect` / `pack-install` / `pack-list` / `pack-remove`).
+0.6.0-beta.1 (`pchelper-cli pack-inspect` / `pack-install` / `pack-list` / `pack-remove`).
 Production publisher-key enrolment and the community signing service are part of the
 0.9 rollout; until a production Ed25519 publisher key is enrolled, only the explicit
 development-trust route can install a pack (see "Trust routes" below).
@@ -35,6 +35,7 @@ my-pack.pcha (ZIP)
 ```
 
 Rules the verifier enforces:
+
 - `manifest.json` is mandatory; `signature.ed25519` holds a raw 64-byte or base64
   Ed25519 signature **over the manifest bytes exactly as stored in the archive**.
 - Every file other than the manifest and signature MUST appear in
@@ -68,6 +69,7 @@ JSON is parsed web-style (camelCase, case-insensitive); enums are strings.
 ```
 
 Field rules:
+
 - `id`: lower-case letters, digits, dots, hyphens only. `id`+`version` becomes the
   install directory under the service data root (`AdapterPacks/<id>/<version>`),
   path-containment-checked.
@@ -113,6 +115,7 @@ Field rules:
 ## 6. Safety contract for pack authors
 
 Same rules as the core suite; violations fail review:
+
 - No WinRing0 or any blocklisted/vulnerable driver. Privileged access is signed
   PawnIO modules or documented vendor APIs only.
 - Never construct a voltage increase. Never write automatically or at startup;
