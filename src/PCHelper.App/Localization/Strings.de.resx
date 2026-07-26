@@ -237,4 +237,19 @@
   <data name="ColourPicker_SelectName" xml:space="preserve">
     <value>Farbauswahl bestätigen</value>
   </data>
+  <data name="Nav_ShortcutTooltipFormat" xml:space="preserve">
+    <value>{0} ({1}+{2})</value>
+  </data>
+  <data name="Shell_ModifierCtrl" xml:space="preserve">
+    <value>Strg</value>
+  </data>
+  <data name="Nav_ListName" xml:space="preserve">
+    <value>RigPilot-Seiten</value>
+  </data>
+  <data name="Nav_GamesToolsLong" xml:space="preserve">
+    <value>Spiele und Sitzungswerkzeuge</value>
+  </data>
+  <data name="Nav_DiagnosticsLong" xml:space="preserve">
+    <value>Diagnose und Einstellungen</value>
+  </data>
 </root>

@@ -56,6 +56,33 @@ public sealed class LocalizationTests : IDisposable
     }
 
     [Fact]
+    public void AShortcutTooltipComposesTheTranslatedPageNameWithTheTranslatedModifier()
+    {
+        // The nav tooltip is composed rather than stored whole so a page name exists once.
+        // That only pays off if BOTH halves follow the culture: an English "Ctrl" beside a
+        // German page name would name a key a German keyboard does not have ("Strg").
+        Assert.Equal("Overview (Ctrl+1)", (string)new LocShortcutExtension("Nav_Overview", "1").ProvideValue(null!));
+
+        L10n.CultureOverride = CultureInfo.GetCultureInfo("de-DE");
+        Assert.Equal("Übersicht (Strg+1)", (string)new LocShortcutExtension("Nav_Overview", "1").ProvideValue(null!));
+    }
+
+    [Fact]
+    public void AFormatCachedUnderOneCultureDoesNotLeakIntoAnother()
+    {
+        // Composite formats are cached, and caching them by KEY would pin whichever language
+        // loaded first — every later culture would then render the first one's word order.
+        Assert.Equal("Overview (Ctrl+1)", L10n.Format("Nav_ShortcutTooltipFormat", "Overview", "Ctrl", "1"));
+
+        L10n.CultureOverride = CultureInfo.GetCultureInfo("de-DE");
+        Assert.Equal("Übersicht (Strg+2)", L10n.Format(
+            "Nav_ShortcutTooltipFormat",
+            L10n.Get("Nav_Overview"),
+            L10n.Get("Shell_ModifierCtrl"),
+            "2"));
+    }
+
+    [Fact]
     public void ApplyCultureSetsTheOverrideAndIgnoresUnknownNames()
     {
         L10n.ApplyCulture("de");

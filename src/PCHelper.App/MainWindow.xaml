@@ -258,57 +258,57 @@
                      SelectionChanged="Navigation_SelectionChanged"
                      SelectedIndex="0"
                      ItemContainerStyle="{StaticResource NavigationItemStyle}"
-                     automation:AutomationProperties.Name="RigPilot pages"
+                     automation:AutomationProperties.Name="{loc:Loc Nav_ListName}"
                      automation:AutomationProperties.AutomationId="Navigation.Pages">
-              <ListBoxItem ToolTip="Overview (Ctrl+1)" automation:AutomationProperties.Name="Overview" automation:AutomationProperties.AutomationId="Navigation.Overview">
+              <ListBoxItem ToolTip="{loc:LocShortcut Nav_Overview, 1}" automation:AutomationProperties.Name="{loc:Loc Nav_Overview}" automation:AutomationProperties.AutomationId="Navigation.Overview">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE80F;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Overview}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Profiles (Ctrl+2)" automation:AutomationProperties.Name="Profiles" automation:AutomationProperties.AutomationId="Navigation.Profiles">
+              <ListBoxItem ToolTip="{loc:LocShortcut Nav_Profiles, 2}" automation:AutomationProperties.Name="{loc:Loc Nav_Profiles}" automation:AutomationProperties.AutomationId="Navigation.Profiles">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE771;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Profiles}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Cooling (Ctrl+3)" automation:AutomationProperties.Name="Cooling" automation:AutomationProperties.AutomationId="Navigation.Cooling">
+              <ListBoxItem ToolTip="{loc:LocShortcut Nav_Cooling, 3}" automation:AutomationProperties.Name="{loc:Loc Nav_Cooling}" automation:AutomationProperties.AutomationId="Navigation.Cooling">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE9CA;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Cooling}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Performance (Ctrl+4)" automation:AutomationProperties.Name="Performance" automation:AutomationProperties.AutomationId="Navigation.Performance">
+              <ListBoxItem ToolTip="{loc:LocShortcut Nav_Performance, 4}" automation:AutomationProperties.Name="{loc:Loc Nav_Performance}" automation:AutomationProperties.AutomationId="Navigation.Performance">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE945;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Performance}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Lighting (Ctrl+5)" automation:AutomationProperties.Name="Lighting" automation:AutomationProperties.AutomationId="Navigation.Lighting">
+              <ListBoxItem ToolTip="{loc:LocShortcut Nav_Lighting, 5}" automation:AutomationProperties.Name="{loc:Loc Nav_Lighting}" automation:AutomationProperties.AutomationId="Navigation.Lighting">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE706;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Lighting}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem Tag="{loc:Loc Shell_SectionAutomation}" ToolTip="Automation (Ctrl+6)" automation:AutomationProperties.Name="Automation" automation:AutomationProperties.AutomationId="Navigation.Automation">
+              <ListBoxItem Tag="{loc:Loc Shell_SectionAutomation}" ToolTip="{loc:LocShortcut Nav_Automation, 6}" automation:AutomationProperties.Name="{loc:Loc Nav_Automation}" automation:AutomationProperties.AutomationId="Navigation.Automation">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE823;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Automation}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Games and user-session tools (Ctrl+7)" automation:AutomationProperties.Name="Games and tools" automation:AutomationProperties.AutomationId="Navigation.GamesTools">
+              <ListBoxItem ToolTip="{loc:LocShortcut Nav_GamesToolsLong, 7}" automation:AutomationProperties.Name="{loc:Loc Nav_GamesTools}" automation:AutomationProperties.AutomationId="Navigation.GamesTools">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE7FC;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_GamesTools}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem Tag="{loc:Loc Shell_SectionSystem}" ToolTip="Devices (Ctrl+8)" automation:AutomationProperties.Name="Devices" automation:AutomationProperties.AutomationId="Navigation.Devices">
+              <ListBoxItem Tag="{loc:Loc Shell_SectionSystem}" ToolTip="{loc:LocShortcut Nav_Devices, 8}" automation:AutomationProperties.Name="{loc:Loc Nav_Devices}" automation:AutomationProperties.AutomationId="Navigation.Devices">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE772;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Devices}" />
                 </StackPanel>
               </ListBoxItem>
-              <ListBoxItem ToolTip="Diagnostics and settings (Ctrl+9)" automation:AutomationProperties.Name="Diagnostics and settings" automation:AutomationProperties.AutomationId="Navigation.Diagnostics">
+              <ListBoxItem ToolTip="{loc:LocShortcut Nav_DiagnosticsLong, 9}" automation:AutomationProperties.Name="{loc:Loc Nav_DiagnosticsLong}" automation:AutomationProperties.AutomationId="Navigation.Diagnostics">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="&#xE9D9;" FontFamily="{StaticResource IconFont}" FontSize="15" Width="22" />
                   <TextBlock Text="{loc:Loc Nav_Diagnostics}" />

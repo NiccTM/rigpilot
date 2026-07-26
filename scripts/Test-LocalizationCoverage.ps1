@@ -69,10 +69,16 @@ foreach ($file in Get-ChildItem -LiteralPath $appRoot -Recurse -File |
     # An empty file yields $null from -Raw, which Matches() rejects.
     $text = Get-Content -LiteralPath $file.FullName -Raw
     if ([string]::IsNullOrEmpty($text)) { continue }
-    foreach ($match in [regex]::Matches($text, '\{loc:Loc\s+([A-Za-z0-9_.]+)\s*\}')) {
+    # Every loc: extension, not only the bare one. {loc:LocShortcut Key, 7} references its
+    # key just as really; missing it reported live keys as orphans, and acting on that
+    # would have deleted strings the navigation rail resolves at load.
+    foreach ($match in [regex]::Matches($text, '\{loc:Loc[A-Za-z]*\s+([A-Za-z0-9_.]+)')) {
         [void]$referenced.Add($match.Groups[1].Value)
     }
-    foreach ($match in [regex]::Matches($text, 'L10n\.Get\(\s*"([^"]+)"\s*\)')) {
+    # Get and Format both take the key first. Scanning only Get reported every composed
+    # string's format as an orphan, which is the shape of finding that gets a live resource
+    # deleted because the tool called it dead.
+    foreach ($match in [regex]::Matches($text, 'L10n\.(?:Get|Format)\(\s*"([^"]+)"')) {
         [void]$referenced.Add($match.Groups[1].Value)
     }
     # Keys built by interpolation — L10n.Get($"Onboarding_Title{step}") — are real
@@ -116,7 +122,11 @@ foreach ($file in Get-ChildItem -LiteralPath $appRoot -Recurse -File |
             $pattern = '(?<!\w)' + [regex]::Escape($attribute) + '\s*=\s*"([^"]*)"'
             foreach ($match in [regex]::Matches($lines[$index], $pattern)) {
                 $value = $match.Groups[1].Value
-                if ($value -match '^\{loc:Loc\b') { $localizedCount++; continue }
+                # Matches every loc: extension, not just the bare one — {loc:LocShortcut …}
+                # composes a translated name with a translated modifier and is as localized
+                # as {loc:Loc …} is. Requiring a word boundary here counted it as neither
+                # localized nor hardcoded, so the composed tooltips vanished from the total.
+                if ($value -match '^\{loc:Loc') { $localizedCount++; continue }
                 # Markup, not prose: bindings, resources, glyphs, and trivia.
                 if ($value -match '^\s*\{') { continue }
                 if ($value.Trim().Length -le 1) { continue }

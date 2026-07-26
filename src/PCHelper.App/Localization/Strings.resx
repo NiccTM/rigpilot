@@ -243,4 +243,23 @@
   <data name="ColourPicker_SelectName" xml:space="preserve">
     <value>Confirm colour selection</value>
   </data>
+  <!-- Navigation rail. The tooltip is composed from the page name plus the shortcut rather
+       than stored whole, so a page name exists exactly once and cannot read differently in
+       the menu than in its own tooltip. "Ctrl" is a resource because German Windows labels
+       that key "Strg" — the key is the same, its printed name is not. -->
+  <data name="Nav_ShortcutTooltipFormat" xml:space="preserve">
+    <value>{0} ({1}+{2})</value>
+  </data>
+  <data name="Shell_ModifierCtrl" xml:space="preserve">
+    <value>Ctrl</value>
+  </data>
+  <data name="Nav_ListName" xml:space="preserve">
+    <value>RigPilot pages</value>
+  </data>
+  <data name="Nav_GamesToolsLong" xml:space="preserve">
+    <value>Games and user-session tools</value>
+  </data>
+  <data name="Nav_DiagnosticsLong" xml:space="preserve">
+    <value>Diagnostics and settings</value>
+  </data>
 </root>
