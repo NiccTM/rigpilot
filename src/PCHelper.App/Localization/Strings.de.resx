@@ -357,4 +357,37 @@
   <data name="Experimental_AcknowledgeBody" xml:space="preserve">
     <value>Mir ist bewusst, dass experimentelle Steuerungen nicht unterstützte Hardware fehlerhaft konfigurieren können. Diese nur für die Sitzung geltende Bestätigung umgeht weder die Bestätigung des exakten Geräts noch die Inbetriebnahme oder den Schutz von CPU und Pumpe.</value>
   </data>
+  <data name="Overview_OpenCoolingCommissioning" xml:space="preserve">
+    <value>Kühlungs-Inbetriebnahme öffnen</value>
+  </data>
+  <data name="Overview_OpenDeviceEvidence" xml:space="preserve">
+    <value>Gerätenachweise öffnen</value>
+  </data>
+  <data name="Overview_OpenCooling" xml:space="preserve">
+    <value>Kühlung öffnen</value>
+  </data>
+  <data name="Overview_OpenCoolingTooltip" xml:space="preserve">
+    <value>Leitet ausschließlich begrenzte, nicht geschützte Mainboard-Lüftersteuerungen in den bestehenden Inbetriebnahme-Assistenten. Es wird kein Hardware-Befehl gesendet.</value>
+  </data>
+  <data name="Overview_ImportantSensors" xml:space="preserve">
+    <value>Wichtige Sensoren</value>
+  </data>
+  <data name="Overview_ImportantSensorsCaption" xml:space="preserve">
+    <value>Ausgewählte Temperaturen, Lüfterdrehzahlen und Leistung</value>
+  </data>
+  <data name="Overview_LiveBadge" xml:space="preserve">
+    <value>LIVE</value>
+  </data>
+  <data name="Overview_NoReadings" xml:space="preserve">
+    <value>Noch keine zuverlässigen Live-Messwerte</value>
+  </data>
+  <data name="Overview_NoReadingsHint" xml:space="preserve">
+    <value>Aktualisieren Sie, sobald die Hardware-Erkennung abgeschlossen ist.</value>
+  </data>
+  <data name="Overview_SafetyState" xml:space="preserve">
+    <value>Sicherheitsstatus</value>
+  </data>
+  <data name="Overview_SafetyStateCaption" xml:space="preserve">
+    <value>Schreibrichtlinie und Rollback-Bereitschaft</value>
+  </data>
 </root>

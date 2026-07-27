@@ -369,4 +369,37 @@
   <data name="Experimental_AcknowledgeBody" xml:space="preserve">
     <value>I understand Experimental controls can misconfigure unsupported hardware. This session-only acknowledgement does not bypass exact-device confirmation, commissioning, or CPU/pump protection.</value>
   </data>
+  <data name="Overview_OpenCoolingCommissioning" xml:space="preserve">
+    <value>Open Cooling commissioning</value>
+  </data>
+  <data name="Overview_OpenDeviceEvidence" xml:space="preserve">
+    <value>Open device evidence</value>
+  </data>
+  <data name="Overview_OpenCooling" xml:space="preserve">
+    <value>Open Cooling</value>
+  </data>
+  <data name="Overview_OpenCoolingTooltip" xml:space="preserve">
+    <value>Routes only bounded, non-protected motherboard fan controls into the existing commissioning wizard. No hardware command is sent.</value>
+  </data>
+  <data name="Overview_ImportantSensors" xml:space="preserve">
+    <value>Important sensors</value>
+  </data>
+  <data name="Overview_ImportantSensorsCaption" xml:space="preserve">
+    <value>Curated temperatures, fan speeds, and power</value>
+  </data>
+  <data name="Overview_LiveBadge" xml:space="preserve">
+    <value>LIVE</value>
+  </data>
+  <data name="Overview_NoReadings" xml:space="preserve">
+    <value>No reliable live readings yet</value>
+  </data>
+  <data name="Overview_NoReadingsHint" xml:space="preserve">
+    <value>Refresh after hardware discovery completes.</value>
+  </data>
+  <data name="Overview_SafetyState" xml:space="preserve">
+    <value>Safety state</value>
+  </data>
+  <data name="Overview_SafetyStateCaption" xml:space="preserve">
+    <value>Write policy and rollback readiness</value>
+  </data>
 </root>

@@ -563,8 +563,8 @@
                   <TextBlock Text="{Binding ExperimentalAcknowledgementDetail}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,5,0,0" />
 
                   <WrapPanel Margin="0,12,0,3">
-                    <Button Content="Open Cooling commissioning" Click="OpenExperimentalCooling_Click" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" automation:AutomationProperties.Name="Open Cooling commissioning" automation:AutomationProperties.AutomationId="Overview.OpenCoolingCommissioning" />
-                    <Button Content="Open device evidence" Click="OpenExperimentalDevices_Click" Margin="0,0,8,8" automation:AutomationProperties.Name="Open device evidence" automation:AutomationProperties.AutomationId="Overview.OpenDeviceEvidence" />
+                    <Button Content="{loc:Loc Overview_OpenCoolingCommissioning}" Click="OpenExperimentalCooling_Click" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,8" automation:AutomationProperties.Name="{loc:Loc Overview_OpenCoolingCommissioning}" automation:AutomationProperties.AutomationId="Overview.OpenCoolingCommissioning" />
+                    <Button Content="{loc:Loc Overview_OpenDeviceEvidence}" Click="OpenExperimentalDevices_Click" Margin="0,0,8,8" automation:AutomationProperties.Name="{loc:Loc Overview_OpenDeviceEvidence}" automation:AutomationProperties.AutomationId="Overview.OpenDeviceEvidence" />
                   </WrapPanel>
 
                   <Border Style="{StaticResource InsetCardStyle}" Margin="0,8,0,0" Padding="0">
@@ -588,7 +588,7 @@
                                   <TextBlock Text="{Binding Readiness}" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" Margin="0,6,0,0" />
                                   <TextBlock Text="{Binding NextSafeStep}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,4,0,0" />
                                 </StackPanel>
-                                <Button Grid.Column="1" Content="Open Cooling" Click="OpenExperimentalCooling_Click" IsEnabled="{Binding CanOpenCoolingCommissioning}" VerticalAlignment="Center" ToolTip="Routes only bounded, non-protected motherboard fan controls into the existing commissioning wizard. No hardware command is sent." automation:AutomationProperties.Name="{Binding Name, StringFormat=Open cooling commissioning for {0}}" />
+                                <Button Grid.Column="1" Content="{loc:Loc Overview_OpenCooling}" Click="OpenExperimentalCooling_Click" IsEnabled="{Binding CanOpenCoolingCommissioning}" VerticalAlignment="Center" ToolTip="{loc:Loc Overview_OpenCoolingTooltip}" automation:AutomationProperties.Name="{Binding Name, StringFormat=Open cooling commissioning for {0}}" />
                               </Grid>
                             </Border>
                           </DataTemplate>
@@ -608,11 +608,11 @@
                 <StackPanel>
                   <Grid Margin="0,0,0,8">
                     <StackPanel>
-                      <TextBlock Text="Important sensors" Style="{StaticResource CardTitleStyle}" />
-                      <TextBlock Text="Curated temperatures, fan speeds, and power" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
+                      <TextBlock Text="{loc:Loc Overview_ImportantSensors}" Style="{StaticResource CardTitleStyle}" />
+                      <TextBlock Text="{loc:Loc Overview_ImportantSensorsCaption}" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
                     </StackPanel>
                     <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
-                      <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
+                      <TextBlock Text="{loc:Loc Overview_LiveBadge}" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
                     </Border>
                   </Grid>
                   <ItemsControl ItemsSource="{Binding ImportantSensors}" ItemTemplate="{StaticResource SensorRowTemplate}" />
@@ -629,8 +629,8 @@
                     </Border.Style>
                     <StackPanel HorizontalAlignment="Center">
                       <TextBlock Text="&#xE9D9;" FontFamily="{StaticResource IconFont}" FontSize="22" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" />
-                      <TextBlock Text="No reliable live readings yet" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,0" />
-                      <TextBlock Text="Refresh after hardware discovery completes." Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
+                      <TextBlock Text="{loc:Loc Overview_NoReadings}" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,0" />
+                      <TextBlock Text="{loc:Loc Overview_NoReadingsHint}" Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
                     </StackPanel>
                   </Border>
                 </StackPanel>
@@ -641,8 +641,8 @@
                   <StackPanel>
                     <Grid>
                       <StackPanel>
-                        <TextBlock Text="Safety state" Style="{StaticResource CardTitleStyle}" />
-                        <TextBlock Text="Write policy and rollback readiness" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
+                        <TextBlock Text="{loc:Loc Overview_SafetyState}" Style="{StaticResource CardTitleStyle}" />
+                        <TextBlock Text="{loc:Loc Overview_SafetyStateCaption}" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
                       </StackPanel>
                       <Border HorizontalAlignment="Right" VerticalAlignment="Top" CornerRadius="12" Padding="9,4">
                         <Border.Style>
@@ -1079,7 +1079,7 @@
                       <TextBlock Text="Read-only live readings; nothing in this card writes hardware" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
                     </StackPanel>
                     <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="{StaticResource RadiusBadge}" Padding="{StaticResource BadgePadding}">
-                      <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
+                      <TextBlock Text="{loc:Loc Overview_LiveBadge}" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
                     </Border>
                   </Grid>
                   <ItemsControl ItemsSource="{Binding CoolingSensors}" ItemTemplate="{StaticResource SensorRowTemplate}" automation:AutomationProperties.Name="Live fan, pump, and liquid readings" automation:AutomationProperties.AutomationId="Cooling.LiveReadings" />
@@ -1097,7 +1097,7 @@
                     <StackPanel HorizontalAlignment="Center">
                       <TextBlock Text="&#xE9CA;" FontFamily="{StaticResource IconFont}" FontSize="22" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" />
                       <TextBlock Text="No fan or pump readings yet" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,0" />
-                      <TextBlock Text="Refresh after hardware discovery completes." Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
+                      <TextBlock Text="{loc:Loc Overview_NoReadingsHint}" Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
                     </StackPanel>
                   </Border>
                 </StackPanel>
@@ -1745,7 +1745,7 @@
                       <TextBlock Text="Read-only live readings; nothing on this page writes hardware" Style="{StaticResource MutedStyle}" Margin="0,3,0,0" />
                     </StackPanel>
                     <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
-                      <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
+                      <TextBlock Text="{loc:Loc Overview_LiveBadge}" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
                     </Border>
                   </Grid>
                   <ItemsControl automation:AutomationProperties.Name="Live utilisation, clock, and power readings" automation:AutomationProperties.AutomationId="Performance.LiveReadings">
@@ -1804,7 +1804,7 @@
                     <StackPanel HorizontalAlignment="Center">
                       <TextBlock Text="&#xE945;" FontFamily="{StaticResource IconFont}" FontSize="22" Foreground="{StaticResource MutedTextBrush}" HorizontalAlignment="Center" />
                       <TextBlock Text="No utilisation or clock readings yet" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,8,0,0" />
-                      <TextBlock Text="Refresh after hardware discovery completes." Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
+                      <TextBlock Text="{loc:Loc Overview_NoReadingsHint}" Style="{StaticResource MutedStyle}" HorizontalAlignment="Center" Margin="0,3,0,0" />
                     </StackPanel>
                   </Border>
                 </StackPanel>
@@ -3414,7 +3414,7 @@
                     <TextBlock Text="Exactly what the suite costs to run — local processes only, measured live." Style="{StaticResource MutedStyle}" Margin="0,4,0,0" />
                   </StackPanel>
                   <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="12" Padding="9,4">
-                    <TextBlock Text="LIVE" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
+                    <TextBlock Text="{loc:Loc Overview_LiveBadge}" Style="{StaticResource BadgeTextStyle}" Foreground="{StaticResource SafeBrush}" />
                   </Border>
                 </Grid>
                 <TextBlock Text="{Binding FootprintSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,13,0,0"
