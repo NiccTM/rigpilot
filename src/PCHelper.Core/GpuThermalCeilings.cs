@@ -42,8 +42,29 @@ public static class GpuThermalCeilings
     /// <summary>Below the ~105 °C Ampere hot-spot throttle point.</summary>
     public const double HotSpotCeilingCelsius = 100;
 
-    /// <summary>Below the ~110 °C GDDR6X throttle point, with margin.</summary>
-    public const double MemoryJunctionCeilingCelsius = 95;
+    /// <summary>
+    /// Below the ~110 °C GDDR6X throttle point, with margin — but ABOVE the band a healthy
+    /// card occupies at stock, which 95 °C was not.
+    /// </summary>
+    /// <remarks>
+    /// This was 95 °C, and 2026-07-27 showed why that is not a safety limit at all. On the
+    /// reference RTX 3090 the memory stage failed its very first rung — the STOCK one, no
+    /// offset applied — at 96.0 °C observed against 95.0 °C allowed. A ceiling that rejects
+    /// the configuration the card ships in cannot protect anything: it makes the memory stage
+    /// unreachable on the exact hardware class the feature exists for, and it trains an
+    /// operator to read thermal rejections as noise.
+    ///
+    /// The contradiction was already written down. This file's own remarks note that GDDR6X
+    /// junction "sits in the 80-100 °C band under sustained load", and the ceiling was set at
+    /// 95 — inside that band, below its upper half. Double-sided 3090 memory routinely runs
+    /// 95-105 °C under load and is specified to throttle near 110 °C.
+    ///
+    /// 102 °C keeps a genuine 8 °C margin to the throttle point, which is the number that
+    /// matters for screening: once memory throttles, the throughput measurement the search
+    /// depends on becomes meaningless, so the ceiling's job is to abort before that — not to
+    /// enforce a temperature the hardware never agreed to.
+    /// </remarks>
+    public const double MemoryJunctionCeilingCelsius = 102;
 
     public static GpuTemperatureClass Classify(string sensorName)
     {

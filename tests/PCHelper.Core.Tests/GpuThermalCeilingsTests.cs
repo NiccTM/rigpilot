@@ -65,12 +65,34 @@ public sealed class GpuThermalCeilingsTests
     [Fact]
     public void ARaisedOperatorCeilingIsNeverSilentlyLowered()
     {
-        // An operator who deliberately allows 100 °C must not have the memory
-        // junction quietly clamped back to 95 °C behind their back.
-        const double raised = 100;
+        // An operator who deliberately allows a high limit must not have it quietly
+        // clamped back to a class default behind their back. The value has to sit ABOVE
+        // every class default or the test stops exercising its own property — it was 100,
+        // which silently became meaningless the moment the memory-junction default moved
+        // to 102 and is what caught this.
+        const double raised = 106;
 
+        Assert.True(raised > GpuThermalCeilings.MemoryJunctionCeilingCelsius);
+        Assert.True(raised > GpuThermalCeilings.HotSpotCeilingCelsius);
         Assert.Equal(raised, GpuThermalCeilings.CeilingForSensor("GPU Memory Junction", raised));
         Assert.Equal(raised, GpuThermalCeilings.CeilingForSensor("GPU Hot Spot", raised));
+    }
+
+    [Fact]
+    public void TheMemoryJunctionCeilingClearsTheBandAHealthyCardOccupiesAtStock()
+    {
+        // The defect this pins: at 95 °C the reference RTX 3090 failed the memory stage's
+        // STOCK rung at 96.0 °C, with no offset applied. A ceiling inside the normal
+        // operating band rejects the configuration the card ships in, which protects
+        // nothing and makes the stage unreachable. Double-sided GDDR6X routinely runs
+        // 95-105 °C under load, so the ceiling must clear that band while still aborting
+        // before the ~110 °C throttle point.
+        Assert.True(
+            GpuThermalCeilings.MemoryJunctionCeilingCelsius > 100,
+            "The ceiling must sit above the band a healthy GDDR6X card occupies under load.");
+        Assert.True(
+            GpuThermalCeilings.MemoryJunctionCeilingCelsius <= 105,
+            "The ceiling must still abort before GDDR6X throttles, or the run measures throttled clocks.");
     }
 
     [Fact]

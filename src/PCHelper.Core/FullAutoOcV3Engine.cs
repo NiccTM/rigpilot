@@ -169,7 +169,7 @@ public static class FullAutoOcV3Engine
                         cancellationToken).ConfigureAwait(false);
                     if (coreValue is null)
                     {
-                        message = "No core candidate satisfied the selected objective and safety constraints.";
+                        message = AutoOcV3Policy.DescribeStageFailure("core", coreResult);
                     }
                     else
                     {
@@ -190,7 +190,7 @@ public static class FullAutoOcV3Engine
                             cancellationToken).ConfigureAwait(false);
                         if (memoryValue is null)
                         {
-                            message = "No memory candidate satisfied the selected objective and safety constraints.";
+                            message = AutoOcV3Policy.DescribeStageFailure("memory", memoryResult);
                         }
                         else
                         {
@@ -363,7 +363,7 @@ public static class FullAutoOcV3Engine
             HardwareStateKnown: true,
             DateTimeOffset.UtcNow,
             restorationVerifications,
-            $"Prior state for {restorationVerifications.Count} requested control{(restorationVerifications.Count == 1 ? " was" : "s were")} restored and read back.");
+            $"Prior state for {restorationVerifications.Count} requested control{(restorationVerifications.Count == 1 ? "" : "s")} was restored and read back.");
         return new AutoOcResultV3(
             AutoOcResultV3.CurrentSchemaVersion,
             deviceId,

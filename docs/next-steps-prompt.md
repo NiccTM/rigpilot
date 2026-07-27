@@ -9,7 +9,7 @@ You are continuing RigPilot (internal name PCHelper), a GPL-3.0 Windows hardware
 suite. Before doing anything, read `AI_CONTEXT.md` end to end (the safety rules are
 non-negotiable) and the "Status ledger" section of `docs/beta-roadmap.md`.
 
-**Current state:** the source line is `0.7.0`; the deployed LocalAlpha service runs
+**Current state:** the source line is `0.8.0-beta.1`; the deployed LocalAlpha service runs
 `0.7.0-alpha-20260724-130458`. The full suite passes (477 core + 568 integration, 0
 warnings) and the UI automation smoke is green. The repository is public at
 <https://github.com/NiccTM/rigpilot>, which satisfied the SignPath Foundation
@@ -107,9 +107,18 @@ auto-update delivery.
 
 ## Traps recorded from live sessions — do not re-derive these
 
-- **Deploying needs `-ServiceTimeoutSeconds 90` on this machine.** `state.db` is ~247 MiB
-  and the pre-start backup copies it, so the default 45-second handshake window expires.
-  That message is not a payload defect, and the auto-rollback that follows it is correct.
+- **A first-install "did not become pipe-ready" failure is expected — retry once.** The
+  auto-rollback that follows it is correct and the payload is not at fault. The database
+  explanation this note used to give was measured and disproved on 2026-07-26: a timed
+  stop/start against the same 239.5 MiB `state.db` was pipe-ready in **17.1 s** (stop 0.3 s),
+  and the staged service logs "Service started successfully" while simply never accepting a
+  connection. A byte-identical retry then succeeds, so the cause is transient and first-run
+  only — most plausibly real-time scanning of a freshly written, unsigned ~100 MB payload.
+  Note `-ServiceTimeoutSeconds` is range-validated at 90, so a longer window is not
+  available as a workaround.
+- **Verify a deploy by hashing the live binary, not by reading the ImagePath.** A failed
+  install rolls back by re-staging the OLD payload into a NEW timestamped folder, so the
+  registry path looks freshly updated while the previous binary is what actually runs.
 - **Wait ~15 s before judging cooling state after a mode switch.** `status` legitimately
   reports the previous `cooling.graphId` while `activeProfileId` already shows the new
   profile; the apply holds the cooling gate through the fan read-back settle window.

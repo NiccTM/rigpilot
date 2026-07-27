@@ -34,6 +34,9 @@ internal sealed class GpuSessionHost : IDisposable
     private readonly SemaphoreSlim _startGate = new(1, 1);
     private readonly ChildProcessJob _job = new();
     private readonly object _gate = new();
+    private static readonly string ServiceVersion =
+        RuntimeVersion.Get(typeof(GpuSessionHost).Assembly);
+
     private readonly TimeSpan? _idleTimeout;
     private readonly Timer? _idleTimer;
     private long _lastActivityTimestamp = Stopwatch.GetTimestamp();
@@ -286,7 +289,10 @@ internal sealed class GpuSessionHost : IDisposable
                             IpcCommand.Handshake,
                             new AdapterHostEnvelope<HandshakeRequest>(
                                 _sessionToken,
-                                new HandshakeRequest("PCHelper.Service", "0.7.0"))),
+                                // Read from the assembly rather than a literal. This was hardcoded
+                                // "0.7.0" and went stale the moment the product version moved; the
+                                // helper discards the value today, so the drift was silent.
+                                new HandshakeRequest("PCHelper.Service", ServiceVersion))),
                         cancellationToken).ConfigureAwait(false);
                     if (handshake.Success)
                     {

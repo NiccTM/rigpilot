@@ -94,6 +94,43 @@ public static class AutoOcV3Policy
     /// "failed on cycle 5 of 6" is materially different evidence from "failed immediately":
     /// the first is a marginal candidate, the second is plainly unstable.
     /// </summary>
+    /// <summary>
+    /// Marks a stage that was abandoned before it tested a single overclock, because the
+    /// ladder's opening rung — the stock anchor — failed screening on its own.
+    /// </summary>
+    public const string BaselineFailedLabel = "Baseline failed screening";
+
+    /// <summary>
+    /// Explains why a stage produced no value. The distinction it draws is the reason it
+    /// exists: "the search found no stable overclock" and "the stage never got to try one"
+    /// are opposite findings that were previously reported with identical wording.
+    ///
+    /// Observed live on 2026-07-27: the core stage settled at +145 MHz with 5-6 °C of
+    /// thermal margin left, and the memory stage then failed its stock rung outright at
+    /// 96 °C memory junction. The owner was told "no memory candidate satisfied the
+    /// selected objective and safety constraints", which reads as "your memory will not
+    /// overclock" — sending them to hunt for a tuning problem when the card was simply too
+    /// hot to test. No offset can fix a card that fails screening at the setting it ships
+    /// with, so the message has to say that, and say what to do instead.
+    /// </summary>
+    public static string DescribeStageFailure(string stageName, TuneResult? result)
+    {
+        TuneCandidateResult? opening = result?.Candidates is { Count: > 0 } candidates
+            ? candidates[0]
+            : null;
+        if (opening is { Passed: false }
+            && result!.StatusLabel.StartsWith(BaselineFailedLabel, StringComparison.Ordinal))
+        {
+            return $"The {stageName} stage was abandoned before any overclock was tested: the card "
+                + $"did not pass screening at its stock {stageName} setting. {opening.Message} "
+                + "Nothing was overclocked and prior state was restored. This is not a limit of "
+                + "the card's tuning headroom — clear the reported condition (cooling, airflow, or "
+                + "ambient temperature if it is thermal) and run again.";
+        }
+
+        return $"No {stageName} candidate satisfied the selected objective and safety constraints.";
+    }
+
     public static string DescribeTransientFailure(int cycle, int totalCycles, string? detail) =>
         $"The candidate passed the steady screen but failed transient (game-like) validation on "
         + $"load cycle {cycle} of {totalCycles}: {detail ?? "the screening monitor reported a failure"}. "

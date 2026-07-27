@@ -1181,9 +1181,19 @@ public static class HardwareTuneEngine
             if (selected is null)
             {
                 operationSucceeded = true;
+                // The ladder always opens on the stock anchor, so a failure THERE means the
+                // card did not pass screening at the configuration it ships in — nothing was
+                // overclocked and no offset could have helped. Reporting that as a search
+                // outcome tells the owner their hardware has no tuning headroom when the real
+                // cause is usually thermal, which is the opposite of actionable.
+                TuneCandidateResult? opening = results.Count > 0 ? results[0] : null;
+                bool baselineFailed = opening is { Passed: false }
+                    && Math.Abs(opening.Value - effectiveMin) < 1e-6;
                 return new TuneResult(
                     capability.Id,
-                    "No candidate passed screening",
+                    baselineFailed
+                        ? AutoOcV3Policy.BaselineFailedLabel
+                        : "No candidate passed screening",
                     null,
                     results,
                     null);
