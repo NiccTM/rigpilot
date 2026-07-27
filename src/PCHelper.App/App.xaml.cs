@@ -33,9 +33,64 @@ public partial class App : System.Windows.Application, IDisposable, IAsyncDispos
     /// </summary>
     public bool SuppressProductStartup { get; init; }
 
+    /// <summary>
+    /// <c>UCEERR_RENDERTHREADFAILURE</c>. WPF surfaces a lost or reset Direct3D device as
+    /// this HRESULT from the composition channel, and it arrives on the dispatcher as an
+    /// unhandled <see cref="System.Runtime.InteropServices.COMException"/>.
+    /// </summary>
+    private const int RenderThreadFailureHResult = unchecked((int)0x88980406);
+
+    /// <summary>
+    /// After this many render-thread failures the dashboard stops trusting the GPU for its
+    /// own compositing and finishes the session in software.
+    /// </summary>
+    private const int SoftwareFallbackThreshold = 2;
+
+    private int _renderThreadFailures;
+
+    /// <summary>
+    /// Survives a display-driver reset instead of dying with it.
+    ///
+    /// Observed 2026-07-26: an Auto OC memory run triggered a driver reset, which killed the
+    /// compute workload host AND the dashboard's WPF render thread. The service handled it
+    /// exactly as designed — it detected the stalled workload host, restored prior state, and
+    /// reported the stage cleanly — but the dashboard terminated with
+    /// UCEERR_RENDERTHREADFAILURE, so the operator watching the run lost the window that was
+    /// about to show them the result.
+    ///
+    /// A display reset is not an exceptional condition here. It is one of the signals Auto OC
+    /// screening explicitly watches for, on the same GPU that draws this UI. The window that
+    /// STARTS the run must therefore outlive it. WPF can rebuild its render target after this
+    /// failure, so marking it handled lets compositing resume; if it happens repeatedly the
+    /// GPU is not fit to composite and the session finishes in software rather than looping.
+    ///
+    /// Deliberately narrow: only this HRESULT is handled. Every other unhandled dispatcher
+    /// exception still terminates the process, because swallowing those would hide real bugs.
+    /// </summary>
+    private void OnDispatcherUnhandledException(
+        object sender,
+        System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+    {
+        if (e.Exception is not System.Runtime.InteropServices.COMException com
+            || com.HResult != RenderThreadFailureHResult)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (++_renderThreadFailures >= SoftwareFallbackThreshold
+            && System.Windows.Media.RenderOptions.ProcessRenderMode != System.Windows.Interop.RenderMode.SoftwareOnly)
+        {
+            System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+        }
+
+        _viewModel?.ReportRenderThreadRecovered(_renderThreadFailures);
+    }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
         if (InteractiveFanPreflightHost.IsInvocation(e.Args))
         {
             // This one-shot mode is launched only by the user-agent after an

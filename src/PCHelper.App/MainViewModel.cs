@@ -4142,6 +4142,26 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             $"Safety: {SafetySummary}");
     }
 
+    /// <summary>
+    /// Reports that the dashboard survived a display-driver reset. The operator has to be
+    /// told: the window they are watching an Auto OC run in just lost and rebuilt its
+    /// rendering, and a driver reset is itself evidence about the run — silently recovering
+    /// would hide the single most diagnostic thing that happened.
+    /// </summary>
+    public void ReportRenderThreadRecovered(int failureCount)
+    {
+        string suffix = failureCount >= 2
+            ? " This has now happened more than once, so the dashboard has switched to software "
+                + "rendering for the rest of this session to stay responsive."
+            : string.Empty;
+        ShowNotice(
+            "The display driver reset and the dashboard recovered its rendering. Nothing was "
+            + "written to hardware by this. If an Auto OC run was in progress, treat the reset "
+            + "as a result: the service records it as a screening rejection."
+            + suffix,
+            "Warning");
+    }
+
     public void ShowNotice(string message, string tone = "Info", bool clearsWhenRecovered = false)
     {
         NoticeText = message;
