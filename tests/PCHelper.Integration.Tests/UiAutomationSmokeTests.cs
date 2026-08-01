@@ -8,18 +8,17 @@ public sealed class UiAutomationSmokeTests
     [Fact]
     public async Task RepositoryOwnedUiSmokeVisitsEveryPageAndValidatesCriticalAutomationIds()
     {
-        string repoRoot = FindRepositoryRoot();
-        string colocatedTool = Path.Combine(AppContext.BaseDirectory, "PCHelper.UiSnapshot.exe");
-        string defaultTool = Path.Combine(
-            repoRoot,
-            "tools",
-            "PCHelper.UiSnapshot",
-            "bin",
-            "Release",
-            "net10.0-windows10.0.19041.0",
-            "PCHelper.UiSnapshot.exe");
-        string tool = File.Exists(colocatedTool) ? colocatedTool : defaultTool;
-        Assert.True(File.Exists(tool), $"Build the solution before running the UI smoke test: {tool}");
+        const string toolProject = @"tools\PCHelper.UiSnapshot";
+        const string toolFramework = "net10.0-windows10.0.19041.0";
+        const string toolExecutable = "PCHelper.UiSnapshot.exe";
+        string repoRoot = RepositoryBuildOutput.FindRepositoryRoot();
+        string? resolvedTool = RepositoryBuildOutput.TryResolveExecutable(toolProject, toolFramework, toolExecutable);
+        Assert.True(
+            resolvedTool is not null && File.Exists(resolvedTool),
+            "Build the solution before running the UI smoke test; searched:"
+                + Environment.NewLine
+                + RepositoryBuildOutput.DescribeSearchedLocations(toolProject, toolFramework, toolExecutable));
+        string tool = resolvedTool!;
         string reportPath = Path.Combine(Path.GetTempPath(), $"pchelper-ui-smoke-{Guid.NewGuid():N}.json");
 
         try
@@ -74,19 +73,4 @@ public sealed class UiAutomationSmokeTests
         }
     }
 
-    private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "PCHelper.sln")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate the PC Helper repository root.");
-    }
 }

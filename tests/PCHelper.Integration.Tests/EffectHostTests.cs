@@ -93,14 +93,19 @@ public sealed class EffectHostTests
             string requestPath = Path.Combine(directory, "request.json");
             string responsePath = Path.Combine(directory, "response.json");
             await File.WriteAllTextAsync(requestPath, JsonSerializer.Serialize(request, JsonDefaults.Options));
+            const string hostProject = @"src\PCHelper.EffectHost";
+            const string hostFramework = "net10.0-windows10.0.19041.0";
+            const string hostExecutable = "PCHelper.EffectHost.exe";
             string? configuredHost = Environment.GetEnvironmentVariable("PCHELPER_EFFECT_HOST_PATH");
-            string host = string.IsNullOrWhiteSpace(configuredHost)
-                ? Path.GetFullPath(Path.Combine(
-                    AppContext.BaseDirectory,
-                    "..", "..", "..", "..", "..",
-                    "src", "PCHelper.EffectHost", "bin", "Release", "net10.0-windows10.0.19041.0", "PCHelper.EffectHost.exe"))
+            string? resolved = string.IsNullOrWhiteSpace(configuredHost)
+                ? RepositoryBuildOutput.TryResolveExecutable(hostProject, hostFramework, hostExecutable)
                 : Path.GetFullPath(configuredHost);
-            Assert.True(File.Exists(host), $"Effect Host build output is missing: {host}");
+            Assert.True(
+                resolved is not null && File.Exists(resolved),
+                "Effect Host build output is missing. Build the solution first; searched:"
+                    + Environment.NewLine
+                    + RepositoryBuildOutput.DescribeSearchedLocations(hostProject, hostFramework, hostExecutable));
+            string host = resolved!;
             using Process process = Process.Start(new ProcessStartInfo
             {
                 FileName = host,

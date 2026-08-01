@@ -7,24 +7,20 @@ namespace PCHelper.Integration.Tests;
 
 public sealed class WorkloadHostTests
 {
-    [Fact]
+    [LiveHardwareFact("PCHELPER_LIVE_WORKLOAD_HOST_TEST", "a GPU that can accept the fenced workload probe")]
     [Trait("Category", "LiveHardware")]
     public async Task AuthenticatedHostRunsAndFencesExactGpuWork()
     {
-        if (!string.Equals(
-                Environment.GetEnvironmentVariable("PCHELPER_LIVE_WORKLOAD_HOST_TEST"),
-                "1",
-                StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        string host = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..", "..", "..", "..", "..",
-            "src", "PCHelper.WorkloadHost", "bin", "Release", "net10.0-windows10.0.19041.0",
-            "PCHelper.WorkloadHost.exe"));
-        Assert.True(File.Exists(host), $"Workload Host build output is missing: {host}");
+        const string hostProject = @"src\PCHelper.WorkloadHost";
+        const string hostFramework = "net10.0-windows10.0.19041.0";
+        const string hostExecutable = "PCHelper.WorkloadHost.exe";
+        string? resolvedHost = RepositoryBuildOutput.TryResolveExecutable(hostProject, hostFramework, hostExecutable);
+        Assert.True(
+            resolvedHost is not null && File.Exists(resolvedHost),
+            "Workload Host build output is missing. Build the solution first; searched:"
+                + Environment.NewLine
+                + RepositoryBuildOutput.DescribeSearchedLocations(hostProject, hostFramework, hostExecutable));
+        string host = resolvedHost!;
         string sessionId = Guid.NewGuid().ToString("N");
         string pipeName = $"pchelper.workload.{sessionId}";
         string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));

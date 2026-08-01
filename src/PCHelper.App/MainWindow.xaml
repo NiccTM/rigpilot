@@ -114,6 +114,7 @@
 
     <local:HexColourToBrushConverter x:Key="HexColourToBrush" />
     <local:SliderValueLabelConverter x:Key="SliderValueLabel" />
+    <local:HeaderHintVisibilityConverter x:Key="HeaderHintVisibility" />
     <DataTemplate x:Key="SensorRowTemplate">
       <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
         <Grid>
@@ -329,14 +330,25 @@
         <RowDefinition Height="Auto" />
       </Grid.RowDefinitions>
 
-      <Grid Grid.Row="0" Margin="28,22,28,17">
+      <Grid x:Name="PageHeader" Grid.Row="0" Margin="28,22,28,17">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
+        <!-- The star column shrinks to whatever the fixed-width action strip leaves,
+             but a TextBlock renders at its desired width regardless and a Grid does
+             not clip, so at the 960px minimum window width the page title drew
+             straight under the mode toggle. Trimming keeps it inside its column;
+             the tooltip keeps the full text reachable once it is trimmed. -->
         <StackPanel>
-          <TextBlock Text="{Binding CurrentPageTitle}" Style="{StaticResource PageHeaderStyle}" />
-          <TextBlock Text="{Binding CurrentPageSubtitle}" Style="{StaticResource MutedStyle}" />
+          <TextBlock Text="{Binding CurrentPageTitle}"
+                     Style="{StaticResource PageHeaderStyle}"
+                     TextTrimming="CharacterEllipsis"
+                     ToolTip="{Binding CurrentPageTitle}" />
+          <TextBlock Text="{Binding CurrentPageSubtitle}"
+                     Style="{StaticResource MutedStyle}"
+                     TextTrimming="CharacterEllipsis"
+                     ToolTip="{Binding CurrentPageSubtitle}" />
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
           <Border Background="{StaticResource SurfaceRaisedBrush}"
@@ -369,7 +381,9 @@
               <TextBlock Text="{Binding InterfaceModeActionLabel}" FontWeight="SemiBold" />
             </StackPanel>
           </Button>
-          <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+          <StackPanel VerticalAlignment="Center"
+                      Margin="0,0,12,0"
+                      Visibility="{Binding ActualWidth, ElementName=PageHeader, Converter={StaticResource HeaderHintVisibility}}">
             <TextBlock Text="{Binding LastUpdatedText}" Style="{StaticResource SubtleStyle}" HorizontalAlignment="Right" />
             <TextBlock Text="{loc:Loc Header_RefreshHint}" Style="{StaticResource SubtleStyle}" HorizontalAlignment="Right" Margin="0,2,0,0" />
           </StackPanel>

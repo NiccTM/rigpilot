@@ -9,18 +9,10 @@ namespace PCHelper.Integration.Tests;
 
 public sealed class LiveHardwareQualificationTests
 {
-    [Fact]
+    [LiveHardwareFact("PCHELPER_LIVE_HARDWARE_TEST", "an operator-observed reference system with the target cooling hardware present")]
     [Trait("Category", "LiveHardware")]
     public async Task RepeatedProbesRetainPreviouslyDiscoveredCoolingControls()
     {
-        if (!string.Equals(
-                Environment.GetEnvironmentVariable("PCHELPER_LIVE_HARDWARE_TEST"),
-                "1",
-                StringComparison.Ordinal))
-        {
-            return;
-        }
-
         await using AdapterHostProxy proxy = new();
         AdapterProbeResult initial = await proxy.ProbeAsync(CancellationToken.None);
         string[] initialControlIds = initial.Capabilities
@@ -47,18 +39,10 @@ public sealed class LiveHardwareQualificationTests
         }
     }
 
-    [Fact]
+    [LiveHardwareFact("PCHELPER_LIVE_NO_WRITE_PREPARE_TEST", "an elevated session on a system with the named LibreHardwareMonitor control")]
     [Trait("Category", "LiveHardware")]
     public async Task DirectLibreHardwareMonitorPrepareDoesNotWriteSelectedController()
     {
-        if (!string.Equals(
-                Environment.GetEnvironmentVariable("PCHELPER_LIVE_NO_WRITE_PREPARE_TEST"),
-                "1",
-                StringComparison.Ordinal))
-        {
-            return;
-        }
-
         using WindowsIdentity identity = WindowsIdentity.GetCurrent();
         Assert.True(new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator));
         string capabilityId = Environment.GetEnvironmentVariable("PCHELPER_LIVE_NO_WRITE_CAPABILITY")
@@ -112,18 +96,10 @@ public sealed class LiveHardwareQualificationTests
         }
     }
 
-    [Fact]
+    [LiveHardwareFact("PCHELPER_LIVE_HARDWARE_TEST", "an operator-observed reference system with the target cooling hardware present")]
     [Trait("Category", "LiveHardware")]
     public async Task ResetHighDutyReadBackAndFirmwareReturnOnExplicitlyAuthorisedMachine()
     {
-        if (!string.Equals(
-                Environment.GetEnvironmentVariable("PCHELPER_LIVE_HARDWARE_TEST"),
-                "1",
-                StringComparison.Ordinal))
-        {
-            return;
-        }
-
         using WindowsIdentity identity = WindowsIdentity.GetCurrent();
         Assert.True(new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator));
         string reportPath = Environment.GetEnvironmentVariable("PCHELPER_LIVE_HARDWARE_REPORT")
@@ -243,18 +219,10 @@ public sealed class LiveHardwareQualificationTests
         }
     }
 
-    [Fact]
+    [LiveHardwareFact("PCHELPER_LIVE_HARDWARE_TEST", "an operator-observed reference system with the target cooling hardware present")]
     [Trait("Category", "LiveHardware")]
     public async Task CalibratesBothRtx3090FansWithinAdapterBoundsAndRestoresFirmwareMode()
     {
-        if (!string.Equals(
-                Environment.GetEnvironmentVariable("PCHELPER_LIVE_HARDWARE_TEST"),
-                "1",
-                StringComparison.Ordinal))
-        {
-            return;
-        }
-
         string baseReportPath = Environment.GetEnvironmentVariable("PCHELPER_LIVE_HARDWARE_REPORT")
             ?? throw new InvalidOperationException("PCHELPER_LIVE_HARDWARE_REPORT is required.");
         string reportPath = Path.ChangeExtension(baseReportPath, ".gpu-calibration.json");
@@ -343,18 +311,10 @@ public sealed class LiveHardwareQualificationTests
         }, JsonDefaults.Options));
     }
 
-    [Fact]
+    [LiveHardwareFact("PCHELPER_LIVE_HARDWARE_TEST", "an operator-observed reference system with the target cooling hardware present")]
     [Trait("Category", "LiveHardware")]
     public async Task AppliesReadsBackAndRollsBackWindowsPowerScheme()
     {
-        if (!string.Equals(
-                Environment.GetEnvironmentVariable("PCHELPER_LIVE_HARDWARE_TEST"),
-                "1",
-                StringComparison.Ordinal))
-        {
-            return;
-        }
-
         string baseReportPath = Environment.GetEnvironmentVariable("PCHELPER_LIVE_HARDWARE_REPORT")
             ?? throw new InvalidOperationException("PCHELPER_LIVE_HARDWARE_REPORT is required.");
         string reportPath = Path.ChangeExtension(baseReportPath, ".power.json");
