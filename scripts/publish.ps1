@@ -116,10 +116,7 @@ if ($RequireSigning -or -not [string]::IsNullOrWhiteSpace($SigningCertificateThu
     }
 }
 
-if (Test-Path -LiteralPath $outputRoot) {
-    Remove-Item -LiteralPath $outputRoot -Recurse -Force
-}
-New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+. (Join-Path $PSScriptRoot "PayloadPromotion.ps1")
 
 $projects = [ordered]@{
     "app" = "src\PCHelper.App\PCHelper.App.csproj"
@@ -141,117 +138,166 @@ $runtimeExecutables = [ordered]@{
     "cli" = "cli\pchelper-cli.exe"
 }
 
-foreach ($entry in $projects.GetEnumerator()) {
-    $projectPath = Join-Path $repoRoot $entry.Value
-    $destination = Join-Path $outputRoot $entry.Key
-    & $dotnet restore $projectPath `
-        --runtime $Runtime `
-        --locked-mode
-    if ($LASTEXITCODE -ne 0) {
-        throw "Locked restore failed for $($entry.Value)."
+
+# The payload is built into a staging directory and promoted over the destination
+# only once it is complete and validated. Building straight into the destination
+# meant clearing the last known-good payload first, which destroyed it outright
+# whenever a RigPilot process was running from that directory: the delete stopped
+# on the locked file and left a half-removed tree behind. Nothing here touches the
+# destination until Invoke-PayloadReplacement has proven it replaceable.
+$buildStaging = {
+    param([string]$stagingRoot)
+
+    foreach ($entry in $projects.GetEnumerator()) {
+        $projectPath = Join-Path $repoRoot $entry.Value
+        $projectOutput = Join-Path $stagingRoot $entry.Key
+        & $dotnet restore $projectPath `
+            --runtime $Runtime `
+            --locked-mode
+        if ($LASTEXITCODE -ne 0) {
+            throw "Locked restore failed for $($entry.Value)."
+        }
+
+        $writeLockProperty = if ($LockServiceWrites -and $entry.Key -eq "service") { "true" } else { "false" }
+        & $dotnet publish $projectPath `
+            --configuration $Configuration `
+            --runtime $Runtime `
+            --self-contained false `
+            --no-restore `
+            --output $projectOutput `
+            -p:Version=$Version `
+            -p:RigPilotPublicUnsignedPreview=$writeLockProperty `
+            -p:ContinuousIntegrationBuild=true
+        if ($LASTEXITCODE -ne 0) {
+            throw "dotnet publish failed for $($entry.Value)."
+        }
     }
 
-    $writeLockProperty = if ($LockServiceWrites -and $entry.Key -eq "service") { "true" } else { "false" }
-    & $dotnet publish $projectPath `
-        --configuration $Configuration `
-        --runtime $Runtime `
-        --self-contained false `
-        --no-restore `
-        --output $destination `
-        -p:Version=$Version `
-        -p:RigPilotPublicUnsignedPreview=$writeLockProperty `
-        -p:ContinuousIntegrationBuild=true
-    if ($LASTEXITCODE -ne 0) {
-        throw "dotnet publish failed for $($entry.Value)."
-    }
-}
+    # Reject links before anything walks the tree. Signing and hashing below both
+    # use Get-ChildItem -Recurse, which follows a junction or directory symbolic
+    # link; a stray link in a project output would put signtool and Get-FileHash
+    # on files outside the payload. The shared validator from PayloadPromotion.ps1
+    # is used so this is the same rule the promotion step enforces, not a second
+    # implementation that could drift from it.
+    Assert-PayloadFreeOfReparsePoint -Root $stagingRoot -Stage "in the staged payload after the build"
 
-if ($null -ne $signingCertificate) {
-    $signingTargets = Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
-        Where-Object {
-            $_.Extension -in ".exe", ".dll" -and
-            ($_.Name -like "PCHelper.*" -or $_.Name -like "pchelper-cli.*")
+    if ($null -ne $signingCertificate) {
+        $signingTargets = Get-ChildItem -LiteralPath $stagingRoot -Recurse -File |
+            Where-Object {
+                $_.Extension -in ".exe", ".dll" -and
+                ($_.Name -like "PCHelper.*" -or $_.Name -like "pchelper-cli.*")
+            } |
+            Sort-Object FullName
+        if ($signingTargets.Count -eq 0) {
+            throw "No RigPilot binaries were found to sign."
+        }
+
+        foreach ($target in $signingTargets) {
+            & $signTool sign /fd SHA256 /sha $signingCertificate.Thumbprint /tr $TimestampServer /td SHA256 /v $target.FullName
+            if ($LASTEXITCODE -ne 0) {
+                throw "Authenticode signing failed for $($target.FullName)."
+            }
+            & $signTool verify /pa /tw /v $target.FullName
+            if ($LASTEXITCODE -ne 0) {
+                throw "Authenticode verification failed for $($target.FullName)."
+            }
+        }
+    }
+
+    Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $stagingRoot
+    Copy-Item -LiteralPath (Join-Path $repoRoot "THIRD_PARTY_NOTICES.md") -Destination $stagingRoot
+    Copy-Item -LiteralPath (Join-Path $repoRoot "COMPATIBILITY.md") -Destination $stagingRoot
+
+    # Re-checked after signing and the licence copies, because the contract and
+    # SHA256SUMS.txt below are generated by walking this tree and must describe
+    # only files that are genuinely inside the payload.
+    Assert-PayloadFreeOfReparsePoint -Root $stagingRoot -Stage "in the staged payload before the runtime contract is generated"
+
+    $expectedMajorMinor = Get-MajorMinor $Version
+    $runtimeComponents = foreach ($entry in $runtimeExecutables.GetEnumerator()) {
+        $relativePath = $entry.Value
+        $fullPath = Join-Path $stagingRoot $relativePath
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            throw "Published runtime component is missing: $relativePath"
+        }
+
+        $fileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($fullPath).FileVersion
+        if ([string]::IsNullOrWhiteSpace($fileVersion)) {
+            throw "Published runtime component has no file version: $relativePath"
+        }
+        if ((Get-MajorMinor $fileVersion) -ne $expectedMajorMinor) {
+            throw "Published runtime component version does not match ${Version}: $relativePath ($fileVersion)"
+        }
+
+        [ordered]@{
+            id = $entry.Key
+            relativePath = $relativePath.Replace('\', '/')
+            fileVersion = $fileVersion
+            sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    }
+
+    $runtimeContract = [ordered]@{
+        schemaVersion = 1
+        product = "RigPilot"
+        productVersion = $Version
+        protocolVersion = 2
+        releaseTrust = [ordered]@{
+            signed = $null -ne $signingCertificate
+            serviceWritesLocked = [bool]$LockServiceWrites
+            policy = if ($LockServiceWrites) { "PublicUnsignedPreview" } elseif ($null -ne $signingCertificate) { "SignedRelease" } else { "UnsignedDevelopment" }
+        }
+        requiredServiceFeatures = @(
+            "service-status",
+            "capability-v2",
+            "fan-commissioning",
+            "fan-calibrations",
+            "auto-oc-workload-v1",
+            "reliability",
+            "adapter-trace",
+            "cooling-output-roles",
+            "release-write-policy",
+            "auto-oc-v3",
+            "profile-dry-run-v1",
+            "auto-oc-validation-v1"
+        )
+        components = @($runtimeComponents)
+    }
+    $runtimeContract | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $stagingRoot "runtime-contract.json") -Encoding UTF8
+
+    Get-ChildItem -LiteralPath $stagingRoot -Recurse -File |
+        Get-FileHash -Algorithm SHA256 |
+        ForEach-Object {
+            $relativePath = $_.Path.Substring($stagingRoot.Length).TrimStart('\')
+            "{0} *{1}" -f $_.Hash.ToLowerInvariant(), $relativePath
         } |
-        Sort-Object FullName
-    if ($signingTargets.Count -eq 0) {
-        throw "No RigPilot binaries were found to sign."
-    }
+        Set-Content -LiteralPath (Join-Path $stagingRoot "SHA256SUMS.txt") -Encoding UTF8
+}
 
-    foreach ($target in $signingTargets) {
-        & $signTool sign /fd SHA256 /sha $signingCertificate.Thumbprint /tr $TimestampServer /td SHA256 /v $target.FullName
-        if ($LASTEXITCODE -ne 0) {
-            throw "Authenticode signing failed for $($target.FullName)."
-        }
-        & $signTool verify /pa /tw /v $target.FullName
-        if ($LASTEXITCODE -ne 0) {
-            throw "Authenticode verification failed for $($target.FullName)."
-        }
+# Validation runs against staging, so a payload that fails it is discarded with the
+# previous one still in place. A payload that never passed these checks must never
+# become the published payload.
+$validateStaging = {
+    param([string]$stagingRoot)
+
+    & (Join-Path $PSScriptRoot "Test-RuntimePayload.ps1") `
+        -PayloadRoot $stagingRoot `
+        -ExpectedProductVersion $Version `
+        -RequireServiceWritesLocked:$LockServiceWrites | Out-Null
+
+    $hygiene = & (Join-Path $PSScriptRoot "Test-DistributionHygiene.ps1") -PayloadRoot $stagingRoot
+    if ($null -eq $hygiene) {
+        throw "Distribution hygiene produced no result for the staged payload."
+    }
+    if (-not $hygiene.Ready) {
+        throw "Distribution hygiene failed for the staged payload: $(@($hygiene.Failures) -join '; ')"
     }
 }
 
-Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $outputRoot
-Copy-Item -LiteralPath (Join-Path $repoRoot "THIRD_PARTY_NOTICES.md") -Destination $outputRoot
-Copy-Item -LiteralPath (Join-Path $repoRoot "COMPATIBILITY.md") -Destination $outputRoot
-
-$expectedMajorMinor = Get-MajorMinor $Version
-$runtimeComponents = foreach ($entry in $runtimeExecutables.GetEnumerator()) {
-    $relativePath = $entry.Value
-    $fullPath = Join-Path $outputRoot $relativePath
-    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-        throw "Published runtime component is missing: $relativePath"
-    }
-
-    $fileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($fullPath).FileVersion
-    if ([string]::IsNullOrWhiteSpace($fileVersion)) {
-        throw "Published runtime component has no file version: $relativePath"
-    }
-    if ((Get-MajorMinor $fileVersion) -ne $expectedMajorMinor) {
-        throw "Published runtime component version does not match ${Version}: $relativePath ($fileVersion)"
-    }
-
-    [ordered]@{
-        id = $entry.Key
-        relativePath = $relativePath.Replace('\', '/')
-        fileVersion = $fileVersion
-        sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-}
-
-$runtimeContract = [ordered]@{
-    schemaVersion = 1
-    product = "RigPilot"
-    productVersion = $Version
-    protocolVersion = 2
-    releaseTrust = [ordered]@{
-        signed = $null -ne $signingCertificate
-        serviceWritesLocked = [bool]$LockServiceWrites
-        policy = if ($LockServiceWrites) { "PublicUnsignedPreview" } elseif ($null -ne $signingCertificate) { "SignedRelease" } else { "UnsignedDevelopment" }
-    }
-    requiredServiceFeatures = @(
-        "service-status",
-        "capability-v2",
-        "fan-commissioning",
-        "fan-calibrations",
-        "auto-oc-workload-v1",
-        "reliability",
-        "adapter-trace",
-        "cooling-output-roles"
-        "release-write-policy"
-        "auto-oc-v3"
-        "profile-dry-run-v1"
-        "auto-oc-validation-v1"
-    )
-    components = @($runtimeComponents)
-}
-$runtimeContract | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $outputRoot "runtime-contract.json") -Encoding UTF8
-
-Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
-    Get-FileHash -Algorithm SHA256 |
-    ForEach-Object {
-        $relativePath = $_.Path.Substring($outputRoot.Length).TrimStart('\')
-        "{0} *{1}" -f $_.Hash.ToLowerInvariant(), $relativePath
-    } |
-    Set-Content -LiteralPath (Join-Path $outputRoot "SHA256SUMS.txt") -Encoding UTF8
+Invoke-PayloadReplacement `
+    -DestinationRoot $outputRoot `
+    -BuildStaging $buildStaging `
+    -ValidateStaging $validateStaging | Out-Null
 
 if ($null -ne $signingCertificate) {
     Write-Host "Published signed RigPilot $Version to $outputRoot"

@@ -32,7 +32,26 @@ jobs:
       - name: Test
         run: dotnet test PCHelper.sln --configuration Release --no-build --logger "trx;LogFilePrefix=pchelper"
       - name: Audit NuGet dependencies
-        run: dotnet package list --project PCHelper.sln --vulnerable --include-transitive
+        shell: pwsh
+        # `dotnet package list --vulnerable` reports findings on stdout and still
+        # exits 0, so running it alone audited nothing: a vulnerable transitive
+        # package would have gone green. The report is what has to be inspected.
+        run: |
+          $report = dotnet package list --project PCHelper.sln --vulnerable --include-transitive 2>&1
+          $report | Write-Host
+          if ($LASTEXITCODE -ne 0) { throw "The NuGet vulnerability audit did not run (exit $LASTEXITCODE)." }
+          $findings = @($report | Where-Object { $_ -match 'has the following vulnerable packages' })
+          if ($findings.Count -gt 0) {
+            throw "Vulnerable NuGet packages were reported by $($findings.Count) project(s). Update or replace them before merging."
+          }
+          # Rejecting the failure phrase is only half the check: if the CLI ever
+          # changes its wording, no line would match it and the audit would pass
+          # silently having proven nothing. Requiring the clean marker as well
+          # means an unrecognised report fails loudly instead of going green.
+          $clean = @($report | Where-Object { $_ -match 'has no vulnerable packages' })
+          if ($clean.Count -eq 0) {
+            throw "The audit produced no recognisable per-project result, so nothing was actually verified. The 'dotnet package list' output format has probably changed; update this check rather than trusting a silent pass."
+          }
       - name: Publish framework-dependent x64 payload
         shell: pwsh
         run: ./scripts/publish.ps1 -Version $env:PRODUCT_VERSION

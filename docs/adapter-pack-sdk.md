@@ -1,7 +1,8 @@
 # RigPilot adapter-pack SDK (.pcha) — format, containment, and signing
 
-Status: **public draft, 2026-07-16.** The verifier described here has shipped since
-0.6.0-beta.1 (`pchelper-cli pack-inspect` / `pack-install` / `pack-list` / `pack-remove`).
+Status: **public draft, 2026-07-16.** The verifier described here has shipped since the
+`0.4.0-alpha` line and is current in `0.8.0-beta.1`
+(`pchelper-cli pack-inspect` / `pack-install` / `pack-list` / `pack-remove`).
 Production publisher-key enrolment and the community signing service are part of the
 0.9 rollout; until a production Ed25519 publisher key is enrolled, only the explicit
 development-trust route can install a pack (see "Trust routes" below).

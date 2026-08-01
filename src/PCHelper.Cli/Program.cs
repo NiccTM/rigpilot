@@ -813,9 +813,12 @@ internal static class Cli
                 new LibreHardwareMonitorAdapter()
             ]);
             HardwareSnapshot snapshot = await coordinator.CaptureAsync(CancellationToken.None);
+            // The report's app version is evidence a reviewer reads back. A literal
+            // goes stale silently and would attribute the findings to a build that
+            // did not produce them, so it comes from the running assembly.
             report = CompatibilityReportBuilder.Build(
                 snapshot,
-                "0.6.0-beta.1",
+                RuntimeVersion.Get(typeof(Cli).Assembly),
                 new Dictionary<string, string>
                 {
                     ["framework"] = Environment.Version.ToString(),
@@ -1462,8 +1465,10 @@ internal static class Cli
 
     private static int PrintHelp()
     {
+        // Read from the assembly rather than repeating a literal: the banner had
+        // drifted four minor versions behind the build it was printed by.
+        Console.WriteLine($"RigPilot CLI {RuntimeVersion.Get(typeof(Cli).Assembly)}");
         Console.WriteLine("""
-            RigPilot CLI 0.4 alpha
 
             pchelper-cli probe [--local] [--json]   Run a read-only hardware and conflict probe.
             pchelper-cli runtime-preflight [--json] Verify that the installed service and client share the write-capable runtime contract.
