@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using PCHelper.App;
 
 namespace PCHelper.Integration.Tests;
@@ -90,6 +93,100 @@ public sealed class UpdateCheckTests
 
         Assert.False(result.Succeeded);
         Assert.False(result.UpdateAvailable);
+    }
+
+    [Fact]
+    public async Task CheckReadsAWellFormedFeed()
+    {
+        using StubHandler handler = new(
+            HttpStatusCode.OK,
+            """{"tag_name":"v9.9.9","html_url":"https://github.com/NiccTM/rigpilot/releases/tag/v9.9.9"}""");
+        GitHubUpdateCheck check = new(handler);
+
+        UpdateCheckResult result = await check.CheckAsync("0.8.0-beta.1", CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.True(result.UpdateAvailable);
+        Assert.Equal("v9.9.9", result.LatestVersion);
+    }
+
+    /// <summary>
+    /// The response body is remote input. Buffering it whole means whatever the
+    /// endpoint sends is what gets allocated in the dashboard process, so the
+    /// read is bounded and an oversized body is refused rather than consumed.
+    /// </summary>
+    [Fact]
+    public async Task CheckRefusesAnOversizedFeedInsteadOfBufferingIt()
+    {
+        using StubHandler handler = new(HttpStatusCode.OK, new string('a', 2 * 1024 * 1024));
+        GitHubUpdateCheck check = new(handler);
+
+        UpdateCheckResult result = await check.CheckAsync("0.8.0-beta.1", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.False(result.UpdateAvailable);
+        Assert.Contains("large", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(GitHubUpdateCheck.ReleasesPageUri, result.ReleaseUrl);
+    }
+
+    [Fact]
+    public async Task CheckReportsAnUnsuccessfulStatusWithoutFailing()
+    {
+        using StubHandler handler = new(HttpStatusCode.TooManyRequests, "rate limited");
+        GitHubUpdateCheck check = new(handler);
+
+        UpdateCheckResult result = await check.CheckAsync("0.8.0-beta.1", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("429", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CheckDegradesToAnOfflineMessageWhenTheHostIsUnreachable()
+    {
+        using StubHandler handler = new(new HttpRequestException("No such host is known."));
+        GitHubUpdateCheck check = new(handler);
+
+        UpdateCheckResult result = await check.CheckAsync("0.8.0-beta.1", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("offline", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Answers one request from memory; no socket is opened.</summary>
+    private sealed class StubHandler : HttpMessageHandler
+    {
+        private readonly HttpStatusCode _status;
+        private readonly string _body;
+        private readonly Exception? _failure;
+
+        public StubHandler(HttpStatusCode status, string body)
+        {
+            _status = status;
+            _body = body;
+        }
+
+        public StubHandler(Exception failure)
+        {
+            _status = HttpStatusCode.OK;
+            _body = string.Empty;
+            _failure = failure;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (_failure is not null)
+            {
+                return Task.FromException<HttpResponseMessage>(_failure);
+            }
+
+            return Task.FromResult(new HttpResponseMessage(_status)
+            {
+                Content = new StringContent(_body, Encoding.UTF8, "application/json")
+            });
+        }
     }
 }
 

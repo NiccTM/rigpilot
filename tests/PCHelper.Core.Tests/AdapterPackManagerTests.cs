@@ -121,6 +121,108 @@ public sealed class AdapterPackManagerTests
         Assert.Throws<InvalidDataException>(() => manager.Remove("org.pchelper.test", ".."));
     }
 
+    /// <summary>
+    /// Inspection runs inside the privileged service, before any signature is
+    /// trusted, on a file path the caller chose — so a forged ZIP directory is an
+    /// attacker-controlled input to it. The expanded-size gate reads the declared
+    /// uncompressed size, which the archive controls; this pins down that
+    /// understating it cannot smuggle a payload through. .NET stops the entry
+    /// stream at the declared length, so the content that reaches the hash check
+    /// is truncated and fails it: the pack is rejected and never extracted.
+    /// </summary>
+    [Fact]
+    public async Task PayloadWithAForgedUncompressedSizeCannotBeValidatedOrInstalled()
+    {
+        using TemporaryDirectory temporary = new();
+        string packagePath = CreateUnderstatedSizePack(temporary.Path);
+        string installRoot = System.IO.Path.Combine(temporary.Path, "installed");
+        AdapterPackManager manager = new(installRoot, new Dictionary<string, byte[]>());
+
+        AdapterPackInspection inspection = await manager.InspectAsync(packagePath, CancellationToken.None);
+
+        Assert.False(inspection.Valid);
+        Assert.Contains(
+            inspection.Errors,
+            error => error.Contains("hash mismatch", StringComparison.OrdinalIgnoreCase));
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => manager.InstallAsync(packagePath, CancellationToken.None));
+        Assert.False(Directory.Exists(System.IO.Path.Combine(installRoot, "org.pchelper.test")));
+    }
+
+    /// <summary>
+    /// Builds a pack whose payload really contains 1 MiB but whose ZIP directory
+    /// claims a single byte. The payload hash is the hash of the real content, so
+    /// nothing else can fail first and mask the size check.
+    /// </summary>
+    private static string CreateUnderstatedSizePack(string root)
+    {
+        byte[] payload = new byte[1024 * 1024];
+        AdapterPackManifestV1 manifest = new(
+            AdapterPackManifestV1.CurrentSchemaVersion,
+            "org.pchelper.test",
+            "Test adapter",
+            "1.0.0",
+            "PC Helper tests",
+            "test-key",
+            "GPL-3.0-only",
+            ProtocolConstants.Version,
+            ProtocolConstants.Version,
+            "adapter.dll",
+            ["PCI\\VEN_1234&DEV_5678"],
+            AdapterPackAccess.Telemetry,
+            new Dictionary<string, string>
+            {
+                ["adapter.dll"] = Convert.ToHexStringLower(SHA256.HashData(payload))
+            });
+        byte[] manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
+
+        byte[] archiveBytes;
+        using (MemoryStream buffer = new())
+        {
+            using (ZipArchive archive = new(buffer, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                Write(archive, "manifest.json", manifestBytes);
+                Write(archive, "adapter.dll", payload, CompressionLevel.SmallestSize);
+            }
+
+            archiveBytes = buffer.ToArray();
+        }
+
+        OverwriteCentralDirectoryUncompressedSize(archiveBytes, "adapter.dll", 1);
+        string packagePath = System.IO.Path.Combine(root, $"{Guid.NewGuid():N}.pcha");
+        File.WriteAllBytes(packagePath, archiveBytes);
+        return packagePath;
+    }
+
+    /// <summary>
+    /// Rewrites the uncompressed-size field of one central-directory record, which
+    /// is what <see cref="ZipArchiveEntry.Length"/> reports.
+    /// </summary>
+    private static void OverwriteCentralDirectoryUncompressedSize(byte[] archive, string entryName, uint size)
+    {
+        ReadOnlySpan<byte> signature = [0x50, 0x4B, 0x01, 0x02];
+        byte[] name = System.Text.Encoding.UTF8.GetBytes(entryName);
+        for (int index = 0; index + 46 <= archive.Length; index++)
+        {
+            if (!archive.AsSpan(index, 4).SequenceEqual(signature))
+            {
+                continue;
+            }
+
+            int nameLength = BitConverter.ToUInt16(archive, index + 28);
+            if (nameLength != name.Length
+                || !archive.AsSpan(index + 46, nameLength).SequenceEqual(name))
+            {
+                continue;
+            }
+
+            BitConverter.GetBytes(size).CopyTo(archive, index + 24);
+            return;
+        }
+
+        throw new InvalidOperationException($"Central-directory record for '{entryName}' was not found.");
+    }
+
     private static string CreatePack(string root, Key? signingKey, bool tamperPayload)
     {
         byte[] declaredPayload = [1, 2, 3, 4];
@@ -155,9 +257,13 @@ public sealed class AdapterPackManagerTests
         return packagePath;
     }
 
-    private static void Write(ZipArchive archive, string name, byte[] value)
+    private static void Write(
+        ZipArchive archive,
+        string name,
+        byte[] value,
+        CompressionLevel compression = CompressionLevel.NoCompression)
     {
-        ZipArchiveEntry entry = archive.CreateEntry(name, CompressionLevel.NoCompression);
+        ZipArchiveEntry entry = archive.CreateEntry(name, compression);
         using Stream output = entry.Open();
         output.Write(value);
     }

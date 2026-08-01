@@ -50,7 +50,28 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private string? _dataDirectory;
     private long _suiteRevision;
     private HardwareSnapshot _snapshot = EmptySnapshot();
-    private bool _rollbackBlocked;
+    /// <summary>
+    /// The failed-rollback write lock. Volatile because it is read and written from
+    /// threads that share no common lock, and a stale read is the one outcome that
+    /// must not happen: it would admit a hardware mutation the service has already
+    /// decided to refuse.
+    ///
+    /// <para>Three separate synchronisation domains touch it. Readers on IPC handler
+    /// threads take no lock at all (<see cref="HandleRequestAsync"/>, one thread per
+    /// pipe connection); <see cref="GetStatus"/> reads it under <c>_snapshotGate</c>;
+    /// the hardware paths write it under <c>_hardwareMutationGate</c>; and boot
+    /// recovery and <see cref="DisposeAsync"/> write it outside both. No single lock
+    /// spans a writer and the IPC reader, so ordinary field access gives the reader
+    /// no guarantee of seeing the write.</para>
+    ///
+    /// <para>Volatile is sufficient here and a lock is not needed: writers that
+    /// matter are already serialised by <c>_hardwareMutationGate</c>, and the flag is
+    /// a latch — set true by any failure path, cleared only by the explicit operator
+    /// recovery command after default state is re-proven. What was missing was the
+    /// acquire/release ordering that makes a writer's decision visible to the next
+    /// request, which is exactly what <c>volatile</c> supplies.</para>
+    /// </summary>
+    private volatile bool _rollbackBlocked;
     private int _disposeState;
     private HardwareOperationStatus? _operationStatus;
     private CancellationTokenSource? _operationCancellation;
@@ -416,7 +437,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 "Hardware writes are locked because the service could not prove a default state during recovery. Run 'pchelper-cli clear-recovery --confirm' to re-prove default state, or restart after correcting the adapter or driver fault; read-only IPC remains available.");
         }
 
-        if (request.IdempotencyKey is string key && _idempotentResponses.TryGetValue(key, out IpcResponse? cached))
+        if (IdempotencyCacheKey(request) is string key && _idempotentResponses.TryGetValue(key, out IpcResponse? cached))
         {
             return cached with { RequestId = request.RequestId };
         }
@@ -547,7 +568,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             response = Failure(request, "COMMAND_FAILED", exception.Message);
         }
 
-        if (request.IdempotencyKey is string idempotencyKey && response.Success)
+        if (IdempotencyCacheKey(request) is string idempotencyKey && response.Success)
         {
             if (_idempotentResponses.Count > 256)
             {
@@ -7205,6 +7226,19 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         null,
         null,
         IpcJson.ToElement(payload));
+
+    /// <summary>
+    /// Scopes a replayed idempotency key to the command that produced it.
+    /// Idempotency means "this exact request was already carried out", so a key
+    /// alone is not enough to identify one: replaying a key under a different
+    /// command would return the earlier command's success and the new command
+    /// would never run, which is a success the caller's UI would show for work
+    /// that did not happen.
+    /// </summary>
+    internal static string? IdempotencyCacheKey(IpcRequest request) =>
+        request.IdempotencyKey is string key && !string.IsNullOrWhiteSpace(key)
+            ? $"{(int)request.Command}:{key}"
+            : null;
 
     private static bool IsMutatingCommand(IpcCommand command) => IpcCommandPolicy.IsMutation(command);
 

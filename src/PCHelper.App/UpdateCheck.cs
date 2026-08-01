@@ -1,5 +1,7 @@
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace PCHelper.App;
@@ -27,6 +29,15 @@ public sealed class GitHubUpdateCheck(HttpMessageHandler? handler = null)
     public const string ReleasesPageUri = "https://github.com/NiccTM/rigpilot/releases";
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(6);
+
+    /// <summary>
+    /// Ceiling on the response body. A GitHub release object is a few kilobytes;
+    /// this leaves generous room for one while keeping the amount of remote data
+    /// the dashboard will hold in memory a decision made here rather than by
+    /// whatever answers the request.
+    /// </summary>
+    private const int MaximumResponseBytes = 512 * 1024;
+
     private readonly HttpMessageHandler? _handler = handler;
 
     /// <summary>
@@ -128,19 +139,58 @@ public sealed class GitHubUpdateCheck(HttpMessageHandler? handler = null)
         http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         try
         {
-            using HttpResponseMessage response = await http.GetAsync(new Uri(ReleasesApiUri), cancellationToken).ConfigureAwait(false);
+            using HttpResponseMessage response = await http
+                .GetAsync(new Uri(ReleasesApiUri), HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 return Failure($"The release feed answered {(int)response.StatusCode}; try again later.");
             }
 
-            string json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (await ReadBoundedBodyAsync(response, cancellationToken).ConfigureAwait(false) is not string json)
+            {
+                return Failure("The release feed returned an unexpectedly large payload; nothing was read.");
+            }
+
             return Evaluate(currentVersion, json);
         }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or OperationCanceledException)
         {
             return Failure("The update check could not reach github.com. RigPilot works fully offline; check again when online.");
         }
+    }
+
+    /// <summary>
+    /// Reads at most <see cref="MaximumResponseBytes"/>, returning null the moment
+    /// the body proves longer. A declared Content-Length is checked first so an
+    /// oversized body is usually refused before a byte of it is read, but the
+    /// streaming loop is the guarantee: the header is remote input too, and a
+    /// chunked response does not carry one at all.
+    /// </summary>
+    private static async Task<string?> ReadBoundedBodyAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.Content.Headers.ContentLength is long declared && declared > MaximumResponseBytes)
+        {
+            return null;
+        }
+
+        using Stream body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        byte[] buffer = new byte[MaximumResponseBytes + 1];
+        int total = 0;
+        while (total < buffer.Length)
+        {
+            int read = await body.ReadAsync(buffer.AsMemory(total), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return Encoding.UTF8.GetString(buffer, 0, total);
+            }
+
+            total += read;
+        }
+
+        return null;
     }
 
     private static UpdateCheckResult Failure(string message) =>

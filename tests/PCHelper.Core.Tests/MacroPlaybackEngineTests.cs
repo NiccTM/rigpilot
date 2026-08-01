@@ -9,7 +9,7 @@ public sealed class MacroPlaybackEngineTests
     public async Task PlaysValidatedStepsInOrder()
     {
         FakeSink sink = new();
-        MacroPlaybackEngine engine = new(sink, new ImmediateDelay());
+        MacroPlaybackEngine engine = new(sink, new ImmediateDelay(), new BlockingGuard(null));
         MacroV1 macro = Macro(
         [
             new MacroStepV1(MacroStepKind.KeyDown, 65, 0, 0, 0, TimeSpan.Zero),
@@ -29,7 +29,7 @@ public sealed class MacroPlaybackEngineTests
     public async Task SinkFailureReleasesPressedInputs()
     {
         FakeSink sink = new() { FailMove = true };
-        MacroPlaybackEngine engine = new(sink, new ImmediateDelay());
+        MacroPlaybackEngine engine = new(sink, new ImmediateDelay(), new BlockingGuard(null));
         MacroV1 macro = Macro(
         [
             new MacroStepV1(MacroStepKind.KeyDown, 65, 0, 0, 0, TimeSpan.Zero),
@@ -67,7 +67,7 @@ public sealed class MacroPlaybackEngineTests
     [Fact]
     public async Task PlaysNormallyWhenTheGuardReportsNoAntiCheat()
     {
-        // A guard that returns null must not change behaviour from the no-guard path.
+        // A guard that reports nothing running must not block playback.
         FakeSink sink = new();
         MacroPlaybackEngine engine = new(sink, new ImmediateDelay(), new BlockingGuard(null));
         MacroV1 macro = Macro([new MacroStepV1(MacroStepKind.KeyDown, 65, 0, 0, 0, TimeSpan.Zero), new MacroStepV1(MacroStepKind.KeyUp, 65, 0, 0, 0, TimeSpan.Zero)]);
@@ -76,6 +76,27 @@ public sealed class MacroPlaybackEngineTests
 
         Assert.True(result.Completed);
         Assert.Equal(["key-down:65", "key-up:65"], sink.Events);
+    }
+
+    /// <summary>
+    /// The anti-cheat guard is the one safety property RigPilot states to
+    /// anti-cheat vendors, so it must not be droppable at a construction site.
+    /// A nullable optional parameter made omitting it a silent choice; this
+    /// pins down that the type will not compile without one.
+    /// </summary>
+    [Fact]
+    public void PlaybackEngineCannotBeConstructedWithoutAnAntiCheatGuard()
+    {
+        System.Reflection.ParameterInfo[] parameters = typeof(MacroPlaybackEngine)
+            .GetConstructors()
+            .Single()
+            .GetParameters();
+
+        System.Reflection.ParameterInfo guard = Assert.Single(
+            parameters,
+            parameter => parameter.ParameterType == typeof(IInputSynthesisGuard));
+        Assert.False(guard.IsOptional);
+        Assert.False(guard.HasDefaultValue);
     }
 
     private static MacroV1 Macro(IReadOnlyList<MacroStepV1> steps) => new(

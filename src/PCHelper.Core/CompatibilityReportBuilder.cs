@@ -33,7 +33,8 @@ public static partial class CompatibilityReportBuilder
             Sensors = snapshot.Sensors
                 .Where(sensor => !excludedDeviceIds.Contains(sensor.DeviceId))
                 .ToArray(),
-            Warnings = snapshot.Warnings.Select(RedactWarning).ToArray()
+            Warnings = snapshot.Warnings.Select(RedactWarning).ToArray(),
+            AdapterHealth = snapshot.AdapterHealth.Select(RedactAdapterHealth).ToArray()
         };
 
         Dictionary<string, string> safeRuntime = runtime
@@ -67,6 +68,17 @@ public static partial class CompatibilityReportBuilder
             .ToDictionary(pair => pair.Key, pair => RedactText(pair.Value), StringComparer.OrdinalIgnoreCase);
         return device with { Properties = properties };
     }
+
+    /// <summary>
+    /// Adapter health carries adapter-authored free text: load failures, declared
+    /// file-sensor locations, and raw exception messages, any of which can hold a
+    /// full user path. It gets the same treatment as a diagnostic warning.
+    /// </summary>
+    private static AdapterHealth RedactAdapterHealth(AdapterHealth health) => health with
+    {
+        Message = RedactText(health.Message),
+        Errors = health.Errors.Select(RedactText).ToArray()
+    };
 
     private static DiagnosticWarning RedactWarning(DiagnosticWarning warning) => warning with
     {

@@ -35,7 +35,16 @@ public interface IInputSynthesisGuard
     string? BlockingProtection();
 }
 
-public sealed class MacroPlaybackEngine(IMacroInputSink input, IMacroDelay delay, IInputSynthesisGuard? guard = null)
+/// <summary>
+/// Replays a validated macro through an input sink.
+///
+/// <para><paramref name="guard"/> is required and not nullable. Refusing to
+/// synthesize input while anti-cheat software is running is the one safety
+/// property RigPilot states to anti-cheat vendors (see ANTICHEAT.md), and an
+/// optional guard makes it something a future construction site can drop
+/// silently. Requiring it makes the check impossible to omit by accident.</para>
+/// </summary>
+public sealed class MacroPlaybackEngine(IMacroInputSink input, IMacroDelay delay, IInputSynthesisGuard guard)
 {
     public async Task<MacroExecutionResultV1> ExecuteAsync(MacroV1 macro, CancellationToken cancellationToken)
     {
@@ -49,7 +58,7 @@ public sealed class MacroPlaybackEngine(IMacroInputSink input, IMacroDelay delay
         // touch games, but a hardware suite injecting keystrokes on a protected machine is
         // exactly what an anti-cheat action or a behavioural AV flag looks for, so refuse
         // before the first event rather than risk the user.
-        if (guard?.BlockingProtection() is string activeProtection)
+        if (guard.BlockingProtection() is string activeProtection)
         {
             return new MacroExecutionResultV1(
                 MacroExecutionResultV1.CurrentSchemaVersion,
