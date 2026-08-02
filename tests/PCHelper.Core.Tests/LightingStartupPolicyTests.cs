@@ -89,30 +89,6 @@ public sealed class LightingStartupPolicyTests
     }
 
     /// <summary>
-    /// Architecture invariant 6: Experimental profiles are not automatically restored after
-    /// an unclean shutdown. Every native RGB route is Experimental, and the DIMM route writes
-    /// the system SMBus, so the startup reapply has to honour it. The GPU overclock path
-    /// satisfies the same invariant with a boot sentinel; lighting has nothing to revert, so
-    /// it simply does not write until a clean start.
-    /// </summary>
-    [Fact]
-    public void RestoreIsRefusedAfterAnUncleanShutdown()
-    {
-        string? reason = LightingStartupPolicy.BlockRestoreReason(previousShutdownWasClean: false);
-
-        Assert.NotNull(reason);
-        Assert.Contains("unclean", reason, StringComparison.OrdinalIgnoreCase);
-        // The operator has to learn the colour is still saved, or they will assume it was lost.
-        Assert.Contains("kept", reason, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void RestoreIsAllowedAfterACleanShutdown()
-    {
-        Assert.Null(LightingStartupPolicy.BlockRestoreReason(previousShutdownWasClean: true));
-    }
-
-    /// <summary>
     /// Black stays a legal colour here: the CLI can deliberately persist "off", and the
     /// policy has no way to tell a chosen black from an accidental one. The dashboard
     /// carries that judgement instead, because only it knows the brightness slider was at

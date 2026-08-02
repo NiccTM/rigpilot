@@ -27,12 +27,11 @@ Sensor history uses normalised SQLite metadata. Operational samples are retained
 3. Profile mutations are typed and revision-checked.
 4. A pending transaction is durable before the first write.
 5. Failure rolls back applied actions in reverse order.
-6. Experimental profiles are not automatically restored after an unclean shutdown.
-7. Stale critical sensors cause an emergency cooling decision and an attempted return to firmware control.
-8. Calibration and tuning operate on one bounded capability at a time and restore the previous state on success, failure, or cancellation.
-9. A pending operation is durable before its first write and is never reapplied after an unclean boot.
-10. Automatic voltage adjustment is rejected before adapter preparation.
-11. Competing writers convert only overlapping write capabilities to `Blocked`. Takeover coordination must revalidate stored consent across normalized path, product, publisher, signer, and SHA-256 immediately before any platform executor mutates state.
-12. Protocol-1 clients remain read-only. Protocol-mismatched clients cannot mutate.
-13. Adapter packs are bounded archives whose manifest signature and every declared payload hash verify before staging.
-14. User scripts and effects never execute in LocalSystem or inside the hardware service.
+6. Stale critical sensors cause an emergency cooling decision and an attempted return to firmware control.
+7. Calibration and tuning operate on one bounded capability at a time and restore the previous state on success, failure, or cancellation.
+8. A pending operation is durable before its first write and is never reapplied after an unclean boot.
+9. Automatic voltage adjustment is rejected before adapter preparation.
+10. Competing writers convert only overlapping write capabilities to `Blocked`. Takeover coordination must revalidate stored consent across normalized path, product, publisher, signer, and SHA-256 immediately before any platform executor mutates state.
+11. Protocol-1 clients remain read-only. Protocol-mismatched clients cannot mutate.
+12. Adapter packs are bounded archives whose manifest signature and every declared payload hash verify before staging.
+13. User scripts and effects never execute in LocalSystem or inside the hardware service.

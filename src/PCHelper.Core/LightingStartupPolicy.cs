@@ -21,29 +21,6 @@ namespace PCHelper.Core;
 /// </summary>
 public static class LightingStartupPolicy
 {
-    /// <summary>
-    /// Whether a saved colour may be re-driven at this start, or the reason it may not.
-    ///
-    /// <para>Architecture invariant 6: "Experimental profiles are not automatically restored
-    /// after an unclean shutdown." Every native RGB route is Experimental and exact-device
-    /// confirmed, and the DIMM route reaches its controllers over the system SMBus through a
-    /// signed PawnIO transport — a shared bus, not merely a private lighting register. After
-    /// an unclean shutdown the machine's state is by definition unverified, and that is
-    /// exactly the condition the invariant exists to refuse writing into.</para>
-    ///
-    /// <para>This is a narrower rule than the one the GPU overclock path uses. That path
-    /// reapplies through a boot sentinel which reverts an overclock a boot did not survive.
-    /// Lighting has no such journal because it has no failure to recover from, so the
-    /// equivalent protection is simply to not write at all until a clean start proves the
-    /// machine came up normally. The saved profile is kept either way: one bad shutdown must
-    /// not silently discard what the operator chose.</para>
-    /// </summary>
-    public static string? BlockRestoreReason(bool previousShutdownWasClean) =>
-        previousShutdownWasClean
-            ? null
-            : "the previous shutdown was unclean, so Experimental lighting is not restored automatically (architecture invariant 6). "
-                + "The saved colour is kept and will be restored after the next clean start, or immediately if you apply it yourself.";
-
     /// <summary>The native RGB routes that can be re-driven without a signed-in user.</summary>
     public static readonly IReadOnlyList<string> KnownRouteIds =
     [
