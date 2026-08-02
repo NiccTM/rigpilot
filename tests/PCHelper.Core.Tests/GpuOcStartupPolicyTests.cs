@@ -64,4 +64,42 @@ public sealed class GpuOcStartupPolicyTests
             DeviceId, [new GpuOcStartupOutputV1("gpuclock.core:0", double.NaN)], [DeviceId], confirmRestartRisk: true);
         Assert.Contains("finite", error, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Theory]
+    [InlineData("gpuclock.core:0", true)]
+    [InlineData("gpuclock.memory:0", true)]
+    [InlineData("gpupower.limit:0", true)]
+    [InlineData("gpufan.duty:0", false)]
+    [InlineData("gpu.voltage:0", false)]
+    [InlineData("lhm.control:/gpu-nvidia/0/control/1", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IdentifiesExactlyTheSaveableControls(string? capabilityId, bool expected)
+    {
+        Assert.Equal(expected, GpuOcStartupPolicy.IsPersistableCapability(capabilityId));
+    }
+
+    /// <summary>
+    /// The dashboard filters the controls it offers to save with
+    /// <see cref="GpuOcStartupPolicy.IsPersistableCapability"/> while the service validates the
+    /// request with <see cref="GpuOcStartupPolicy.ValidateEnable"/>. If those two ever disagreed,
+    /// the UI would build a request the service is bound to reject — so the agreement is the
+    /// property worth pinning, not either rule on its own.
+    /// </summary>
+    [Theory]
+    [InlineData("gpuclock.core:0")]
+    [InlineData("gpuclock.memory:0")]
+    [InlineData("gpupower.limit:0")]
+    [InlineData("gpufan.duty:0")]
+    [InlineData("gpu.voltage:0")]
+    [InlineData("cooling.pump:0")]
+    [InlineData("lhm.control:/gpu-nvidia/0/control/1")]
+    public void TheUiFilterAgreesWithTheServiceValidator(string capabilityId)
+    {
+        bool offeredByTheUi = GpuOcStartupPolicy.IsPersistableCapability(capabilityId);
+        string? error = GpuOcStartupPolicy.ValidateEnable(
+            DeviceId, [new GpuOcStartupOutputV1(capabilityId, 10)], [DeviceId], confirmRestartRisk: true);
+
+        Assert.Equal(offeredByTheUi, error is null);
+    }
 }

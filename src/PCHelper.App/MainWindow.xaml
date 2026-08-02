@@ -1956,6 +1956,22 @@
                   <TextBlock Text="Run Auto OC even though this machine reported hardware errors (not recommended — fix the cause first)" TextWrapping="Wrap" />
                 </CheckBox>
                 <TextBlock Text="{Binding FullAutoOcStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" />
+                <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="{StaticResource RadiusBadge}" Padding="12" Margin="0,4,0,0">
+                  <StackPanel>
+                    <!-- OneWay + command, like the master hardware-control switch: the box shows
+                         what the service actually holds, so a refused save cannot leave it ticked. -->
+                    <CheckBox IsChecked="{Binding GpuOcStartupSaved, Mode=OneWay}"
+                              Command="{Binding ToggleGpuOcStartupCommand}"
+                              ToolTip="Saves the clock offsets and power limit currently shown above and reapplies them at every service start. The service re-applies and read-back verifies them before saving, so an overclock that will not verify now is never saved. If a boot does not survive the reapply, the boot sentinel reverts to stock and switches this off instead of trying again. Fan duty and voltage are never saved. The sliders reset to stock when the dashboard restarts, so set the offsets you want before ticking this."
+                              automation:AutomationProperties.Name="Reapply this overclock automatically at startup"
+                              automation:AutomationProperties.AutomationId="Performance.GpuOcStartupPersistence">
+                      <TextBlock Text="Reapply this overclock automatically when the PC starts" TextWrapping="Wrap" FontWeight="SemiBold" />
+                    </CheckBox>
+                    <TextBlock Text="{Binding GpuOcStartupStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,6,0,0"
+                               automation:AutomationProperties.LiveSetting="Polite"
+                               automation:AutomationProperties.AutomationId="Performance.GpuOcStartupStatus" />
+                  </StackPanel>
+                </Border>
                 <TextBlock Text="AUTOMATIC GPU FAN CURVE" Style="{StaticResource EyebrowStyle}" Margin="0,12,0,5" />
                 <TextBlock Text="Binds the armed GPU fan to GPU temperature through the service graph engine, with a 20% minimum (or the controller's higher reported minimum), full speed at the mode's critical temperature, and stale-sensor maximum cooling." Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" />
                 <WrapPanel>

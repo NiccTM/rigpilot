@@ -20,6 +20,19 @@ public static class GpuOcStartupPolicy
     ];
 
     /// <summary>
+    /// True when a control may be saved for startup reapplication: the documented GPU OC
+    /// controls only, which is the clock offsets and the power limit.
+    ///
+    /// <para>The UI needs the same answer as the service — a dashboard that offered to save a
+    /// fan duty or a voltage would build a request the service is bound to reject. Exposing the
+    /// decision here rather than restating the prefixes at the call site keeps the two ends
+    /// agreeing by construction instead of by coincidence.</para>
+    /// </summary>
+    public static bool IsPersistableCapability(string? capabilityId) =>
+        !string.IsNullOrWhiteSpace(capabilityId)
+        && AllowedCapabilityPrefixes.Any(prefix => capabilityId.StartsWith(prefix, StringComparison.Ordinal));
+
+    /// <summary>
     /// Validates an enable request. Returns null when persistence may proceed, or a specific
     /// reason to refuse. Disable requests are always allowed and do not come through here.
     /// </summary>
@@ -51,8 +64,7 @@ public static class GpuOcStartupPolicy
 
         foreach (GpuOcStartupOutputV1 output in outputs)
         {
-            if (string.IsNullOrWhiteSpace(output.CapabilityId)
-                || !AllowedCapabilityPrefixes.Any(prefix => output.CapabilityId.StartsWith(prefix, StringComparison.Ordinal)))
+            if (!IsPersistableCapability(output.CapabilityId))
             {
                 return $"Only GPU clock offsets and the power limit can be saved; '{output.CapabilityId}' is not one of them.";
             }
