@@ -53,6 +53,7 @@ internal static class Cli
                 "lighting-startup-save" => await SetLightingStartupPersistenceAsync(args, json),
                 "lighting-startup-clear" => await ClearLightingStartupPersistenceAsync(json),
                 "lighting-startup-state" => await ServiceCommandAsync<LightingStartupPersistenceStatus>(IpcCommand.GetLightingStartupPersistence, json),
+                "gpu-oc-live" => await ServiceCommandAsync<GpuOcLiveStateV1>(IpcCommand.GetGpuOcState, json),
                 "cpu-tuning-arm" => await SetCpuTuningArmedAsync(args, json, arm: true),
                 "cpu-tuning-disarm" => await SetCpuTuningArmedAsync(args, json, arm: false),
                 "trace" => await TraceAsync(json),
