@@ -54,6 +54,51 @@ public sealed class GpuSessionIdleReleaseTests
             IdleTimeout));
     }
 
+    /// <summary>
+    /// The clock helper's exemption, and the reason it exists.
+    ///
+    /// <para>An NVAPI pstates20 clock delta lives with the session that set it. Releasing an
+    /// idle helper therefore reverted a verified overclock to stock: on an RTX 3090 a saved
+    /// +49/+126 MHz applied and read-back verified at service start, then read back as 0/0
+    /// once the two-minute timeout dropped the child, while the NVML power limit applied in
+    /// the same transaction survived. Nothing was logged, because releasing an idle child is
+    /// routine.</para>
+    ///
+    /// <para>Idle release still applies to a resting session; it is only suppressed while a
+    /// non-stock offset is actually being held.</para>
+    /// </summary>
+    [Fact]
+    public void ASessionHoldingLiveStateIsNeverReleasedHoweverLongItIsIdle()
+    {
+        Assert.False(GpuSessionHost.ShouldReleaseIdleSession(
+            inFlight: 0,
+            idleFor: TimeSpan.FromHours(1),
+            IdleTimeout,
+            holdsLiveState: true));
+    }
+
+    [Fact]
+    public void ASessionHoldingNothingIsStillReleasedOnTime()
+    {
+        // Stock is not "held" state, so an untouched service still ends up with no session.
+        Assert.True(GpuSessionHost.ShouldReleaseIdleSession(
+            inFlight: 0,
+            idleFor: IdleTimeout + TimeSpan.FromSeconds(1),
+            IdleTimeout,
+            holdsLiveState: false));
+    }
+
+    /// <summary>Holding state must not override the in-flight protection either way.</summary>
+    [Fact]
+    public void HoldingLiveStateDoesNotWeakenTheInFlightGuard()
+    {
+        Assert.False(GpuSessionHost.ShouldReleaseIdleSession(
+            inFlight: 1,
+            idleFor: IdleTimeout * 10,
+            IdleTimeout,
+            holdsLiveState: true));
+    }
+
     [Fact]
     public void AHostWithNoIdleTimeoutIsNeverReleased()
     {

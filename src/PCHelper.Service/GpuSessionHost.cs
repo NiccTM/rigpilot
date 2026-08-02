@@ -38,6 +38,7 @@ internal sealed class GpuSessionHost : IDisposable
         RuntimeVersion.Get(typeof(GpuSessionHost).Assembly);
 
     private readonly TimeSpan? _idleTimeout;
+    private readonly Func<bool>? _holdsLiveState;
     private readonly Timer? _idleTimer;
     private long _lastActivityTimestamp = Stopwatch.GetTimestamp();
     private int _inFlight;
@@ -59,16 +60,22 @@ internal sealed class GpuSessionHost : IDisposable
     /// cooler back to firmware, which is correct on disarm but would silently abandon an
     /// applied manual duty or a running cooling graph.
     /// </param>
+    /// <param name="holdsLiveState">
+    /// Asked before each idle release. Return true while the family is holding hardware
+    /// state that does not outlive the session, which suppresses the release.
+    /// </param>
     public GpuSessionHost(
         string modeArgument,
         string label,
         Func<GpuSessionHost, CancellationToken, Task>? onSessionStarted = null,
-        TimeSpan? idleTimeout = null)
+        TimeSpan? idleTimeout = null,
+        Func<bool>? holdsLiveState = null)
     {
         _modeArgument = modeArgument;
         _label = label;
         _onSessionStarted = onSessionStarted;
         _idleTimeout = idleTimeout;
+        _holdsLiveState = holdsLiveState;
         _pipeName = $"{ProtocolConstants.AdapterHostPipeName}.{modeArgument.TrimStart('-')}.{Environment.ProcessId}.{Guid.NewGuid():N}";
         if (idleTimeout is TimeSpan timeout)
         {
@@ -83,9 +90,22 @@ internal sealed class GpuSessionHost : IDisposable
     /// Whether an idle session may be dropped right now. Kept pure and separate from the
     /// process work so the rule that protects an in-flight operation is directly testable.
     /// </summary>
-    internal static bool ShouldReleaseIdleSession(int inFlight, TimeSpan idleFor, TimeSpan? idleTimeout) =>
+    /// <param name="holdsLiveState">
+    /// True when the family is currently holding hardware state that only lasts as long as
+    /// the session does. Measured on an RTX 3090: an NVAPI pstates20 clock delta is dropped
+    /// when the session that set it exits, so a released helper silently reverted a verified
+    /// overclock to stock about two minutes after it was applied, while the NVML power limit
+    /// beside it survived. Idle release stays for the resting case; it is suppressed while
+    /// state is actually being held.
+    /// </param>
+    internal static bool ShouldReleaseIdleSession(
+        int inFlight,
+        TimeSpan idleFor,
+        TimeSpan? idleTimeout,
+        bool holdsLiveState = false) =>
         idleTimeout is TimeSpan timeout
         && inFlight == 0
+        && !holdsLiveState
         && idleFor >= timeout;
 
     public bool IsDisposed => _disposed;
@@ -136,7 +156,11 @@ internal sealed class GpuSessionHost : IDisposable
         }
 
         TimeSpan idleFor = Stopwatch.GetElapsedTime(Volatile.Read(ref _lastActivityTimestamp));
-        if (!ShouldReleaseIdleSession(Volatile.Read(ref _inFlight), idleFor, _idleTimeout))
+        if (!ShouldReleaseIdleSession(
+            Volatile.Read(ref _inFlight),
+            idleFor,
+            _idleTimeout,
+            _holdsLiveState?.Invoke() == true))
         {
             return;
         }

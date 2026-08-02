@@ -47,16 +47,32 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
                         cancellationToken).ConfigureAwait(false);
                 }
             },
-            IdleSessionTimeout);
+            IdleSessionTimeout,
+            HoldsAppliedOffset);
     }
 
     /// <summary>
-    /// Same reasoning as the power helper: release-on-disarm assumed disarmed was the
-    /// resting state, and automatic arming made it permanently resident instead. Clock
-    /// offsets persist in the driver, so dropping an armed-but-idle session changes no
-    /// hardware state and the next write brings it back with the armed flag re-applied.
-    /// The fan helper deliberately has no idle timeout — releasing it returns the cooler
-    /// to firmware.
+    /// The offset last written per domain, in kilohertz. An NVAPI pstates20 delta lives with
+    /// the session that set it, so this is what decides whether the helper may be released.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<GpuClockOffsetDomain, int> _appliedOffsets = new();
+
+    private bool HoldsAppliedOffset() => _appliedOffsets.Values.Any(offset => offset != 0);
+
+    /// <summary>
+    /// Releases an idle helper so an untouched service holds no NVAPI session.
+    ///
+    /// <para>This used to fire unconditionally, on the belief that clock offsets persist in
+    /// the driver the way the NVML power limit does. They do not. Measured on an RTX 3090: a
+    /// saved +49/+126 MHz overclock applied and read-back verified at service start, and read
+    /// back as 0/0 once this timeout dropped the helper roughly two minutes later, while the
+    /// 385 W power limit applied in the same transaction survived. Nothing was logged, because
+    /// releasing an idle child is routine — the overclock simply evaporated.</para>
+    ///
+    /// <para>So the release is now suppressed while any domain holds a non-stock offset, which
+    /// is the same rule the fan helper follows for the same reason: releasing that child hands
+    /// the cooler back to firmware. An offset of zero is stock and holds nothing, so the
+    /// resting service still ends up with no session.</para>
     /// </summary>
     private static readonly TimeSpan IdleSessionTimeout = TimeSpan.FromMinutes(2);
 
@@ -165,6 +181,9 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
         GpuClockSessionResult result = await SendAsync(write, cancellationToken).ConfigureAwait(false);
         if (result.Ok)
         {
+            // Recorded only once the driver accepted it, so a refused write cannot pin the
+            // session open for an offset the card never took.
+            _appliedOffsets[domain] = offsetKiloHertz;
             return;
         }
 
@@ -181,6 +200,8 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
             throw new GpuClockSafetyException(
                 $"GPU clock {domain} write was refused on a fresh NVAPI session too: {retry.Message}");
         }
+
+        _appliedOffsets[domain] = offsetKiloHertz;
     }
 
     private Task<GpuClockSessionResult> SendAsync(GpuClockSessionRequest payload, CancellationToken cancellationToken)
