@@ -4,14 +4,14 @@
     with the resource files.
 
 .DESCRIPTION
-    The localization pipeline is complete — `{loc:Loc Key}` in XAML, `L10n.Get` in code,
-    English fallback, and a bracketed key for anything missing — but most user-visible text
+    The localization pipeline is complete - `{loc:Loc Key}` in XAML, `L10n.Get` in code,
+    English fallback, and a bracketed key for anything missing - but most user-visible text
     is still hardcoded English. That gap is invisible without measuring it, and "extract the
     strings" is not reviewable work unless the remaining count is a number that goes down.
 
     This is read-only. It reports four things:
       * Localized vs hardcoded user-visible strings in XAML, with a coverage percentage.
-      * Keys referenced by XAML or code that do NOT exist in the neutral resource file —
+      * Keys referenced by XAML or code that do NOT exist in the neutral resource file -
         these render as "[Key]" at runtime and are the only failures that are user-visible.
       * Keys present in the neutral file that nothing references (dead weight).
       * Per-culture translation gaps against the neutral file. These are NOT failures:
@@ -20,7 +20,7 @@
 
     Attributes are chosen to match what a user actually reads: Text, Content, ToolTip, and
     the accessibility name. Bindings, StaticResources, glyph fonts, and single-character
-    values are skipped — they are markup, not prose.
+    values are skipped - they are markup, not prose.
 
 .PARAMETER Root
     Repository root. Defaults to the parent of this script's directory.
@@ -81,7 +81,7 @@ foreach ($file in Get-ChildItem -LiteralPath $appRoot -Recurse -File |
     foreach ($match in [regex]::Matches($text, 'L10n\.(?:Get|Format)\(\s*"([^"]+)"')) {
         [void]$referenced.Add($match.Groups[1].Value)
     }
-    # Keys built by interpolation — L10n.Get($"Onboarding_Title{step}") — are real
+    # Keys built by interpolation - L10n.Get($"Onboarding_Title{step}") - are real
     # references with no literal to match. Treat the literal prefix as covering every key
     # that starts with it; without this the tool reports live keys as dead weight, and
     # acting on that would delete strings the UI still resolves at runtime.
@@ -122,9 +122,9 @@ foreach ($file in Get-ChildItem -LiteralPath $appRoot -Recurse -File |
             $pattern = '(?<!\w)' + [regex]::Escape($attribute) + '\s*=\s*"([^"]*)"'
             foreach ($match in [regex]::Matches($lines[$index], $pattern)) {
                 $value = $match.Groups[1].Value
-                # Matches every loc: extension, not just the bare one — {loc:LocShortcut …}
+                # Matches every loc: extension, not just the bare one - {loc:LocShortcut ...}
                 # composes a translated name with a translated modifier and is as localized
-                # as {loc:Loc …} is. Requiring a word boundary here counted it as neither
+                # as {loc:Loc ...} is. Requiring a word boundary here counted it as neither
                 # localized nor hardcoded, so the composed tooltips vanished from the total.
                 if ($value -match '^\{loc:Loc') { $localizedCount++; continue }
                 # Markup, not prose: bindings, resources, glyphs, and trivia.
@@ -137,7 +137,7 @@ foreach ($file in Get-ChildItem -LiteralPath $appRoot -Recurse -File |
                     File      = $file.FullName.Replace("$Root\", '')
                     Line      = $index + 1
                     Attribute = $attribute
-                    Value     = if ($value.Length -gt 60) { $value.Substring(0, 60) + '…' } else { $value }
+                    Value     = if ($value.Length -gt 60) { $value.Substring(0, 60) + '...' } else { $value }
                 })
             }
         }

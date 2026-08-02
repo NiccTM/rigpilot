@@ -6,7 +6,7 @@ param(
     [int]$ServiceTimeoutSeconds = 45,
     # Stopping is budgeted separately from starting. The clean-shutdown hardware restore can
     # take far longer than a start, and when both shared one budget a slow stop consumed the
-    # whole window before the new service was ever given a chance to come up — every
+    # whole window before the new service was ever given a chance to come up - every
     # deployment then failed its handshake and rolled back, which looked like a bad payload
     # rather than a slow stop.
     [ValidateRange(10, 600)]

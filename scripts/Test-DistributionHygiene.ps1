@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
     Asserts that a published RigPilot payload carries the traits that keep it from tripping
-    antivirus heuristics: publisher metadata, a real (unpacked) managed body, and — for the
-    dashboard executable — a non-elevated application manifest.
+    antivirus heuristics: publisher metadata, a real (unpacked) managed body, and - for the
+    dashboard executable - a non-elevated application manifest.
 
 .DESCRIPTION
     Antivirus engines flag unsigned, metadata-less, or packed binaries. Signing is handled
@@ -65,7 +65,7 @@ foreach ($binary in $binaries) {
     $checked++
     $name = $binary.Name
 
-    # Every first-party binary — managed .dll and native apphost .exe alike — carries the
+    # Every first-party binary - managed .dll and native apphost .exe alike - carries the
     # publisher version resource; the apphost copies it from the app at publish time.
     $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($binary.FullName)
     if ([string]::IsNullOrWhiteSpace($info.CompanyName)) {

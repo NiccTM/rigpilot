@@ -8,7 +8,7 @@
     hand, which is why the figures in AI_CONTEXT could not be reproduced on demand. This
     script makes the measurement repeatable.
 
-    The target used to be written four different ways across the docs and this script —
+    The target used to be written four different ways across the docs and this script -
     200 MB here and in docs/feature-status.md, < 250 MB as the competitive goal in
     docs/beta-roadmap.md, and < 300 MB beta / < 250 MB 1.0 in the same file's ledger. The
     staged pair is now the single target everywhere. The retired 200 MB figure had no
@@ -18,7 +18,7 @@
     It is READ-ONLY: it reads process counters and writes a CSV. It never touches a
     capability, a profile, or the service state, so it is safe to leave running.
 
-    The documented figure is a CLOSED-DASHBOARD measurement — the dashboard is a normal
+    The documented figure is a CLOSED-DASHBOARD measurement - the dashboard is a normal
     user-session WPF app and is not part of the resident service footprint. The dashboard
     is therefore excluded unless -IncludeDashboard is passed, and every summary states
     which of the two it measured.

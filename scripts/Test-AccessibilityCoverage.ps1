@@ -5,7 +5,7 @@
 .DESCRIPTION
     A control is reachable by keyboard long before it is understandable by a screen reader.
     UI Automation derives a name from an element's text content, so a button labelled "Apply"
-    is already announced correctly and does NOT need an explicit AutomationProperties.Name —
+    is already announced correctly and does NOT need an explicit AutomationProperties.Name -
     flagging it would bury the real defects in noise. What cannot be derived is a control with
     no text at all: an icon-only button, a slider, a text box, a combo box. Those announce as
     "button", "edit", "combo box" and nothing else, which makes the control unusable without
@@ -64,10 +64,10 @@ function Get-AccessibleName($node) {
     return $null
 }
 
-# A markup extension is normally not usable as a name, because {Binding …} resolves to a
-# value this script cannot see. {loc:Loc …} is the exception: it resolves to a fixed string
+# A markup extension is normally not usable as a name, because {Binding ...} resolves to a
+# value this script cannot see. {loc:Loc ...} is the exception: it resolves to a fixed string
 # from the resx at load time, so a control named by one is exactly as nameable as a literal.
-# Without this, localizing a control's own label REMOVED its accessible name from the count —
+# Without this, localizing a control's own label REMOVED its accessible name from the count -
 # a false regression that would have arrived once per extraction batch, forever.
 function Test-IsNameText([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
@@ -82,7 +82,7 @@ function Test-HasTextContent($node) {
             return $true
         }
     }
-    # Or descendant text — a Button wrapping a TextBlock is still named by that text. A glyph
+    # Or descendant text - a Button wrapping a TextBlock is still named by that text. A glyph
     # from the icon font is not text a screen reader can use, so it does not count.
     foreach ($descendant in $node.SelectNodes('.//*')) {
         if ($descendant.LocalName -ne 'TextBlock' -and $descendant.LocalName -ne 'Run') { continue }
@@ -117,7 +117,7 @@ foreach ($file in Get-ChildItem -LiteralPath $appRoot -Recurse -File |
         # header toggle are PARTS of one control, not controls in their own right: UI
         # Automation announces the templated parent, and the parts are deliberately absent
         # from the tree. Naming them individually would be wrong, and reporting them buries
-        # real defects — every finding in the first run of this script was one of these.
+        # real defects - every finding in the first run of this script was one of these.
         $inTemplate = $false
         for ($ancestor = $node.ParentNode; $ancestor -ne $null -and $ancestor.NodeType -eq 'Element'; $ancestor = $ancestor.ParentNode) {
             if ($ancestor.LocalName -eq 'ControlTemplate') { $inTemplate = $true; break }
