@@ -161,7 +161,8 @@ public enum IpcCommand
     SetGpuOcStartupPersistence,
     GetGpuOcStartupPersistence,
     SetLightingStartupPersistence,
-    GetLightingStartupPersistence
+    GetLightingStartupPersistence,
+    GetGpuOcState
 }
 
 public static class ProtocolConstants
@@ -198,6 +199,7 @@ public static class IpcCommandPolicy
         IpcCommand.GetAutoOcProfileValidations or
         IpcCommand.GetCoolingGraphs or
         IpcCommand.GetGpuFanState or
+        IpcCommand.GetGpuOcState or
         IpcCommand.GetCoolingOutputAssignments or
         IpcCommand.GetFanCommissioningSessions or
         IpcCommand.GetFanCalibrations or

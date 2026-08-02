@@ -4282,6 +4282,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                     ? "The service is reachable, but this dashboard has locked all service-owned writes until the matching runtime is installed."
                     : _status.Message;
                 await RefreshOperationStatusAsync(token);
+                // Read before the snapshot is applied: RebuildGpuControlSliders runs during
+                // that apply and seeds the clock sliders from this, so it has to be current
+                // by then or the page opens showing stock on an overclocked card.
+                await RefreshGpuOcLiveStateAsync(token);
                 await RefreshFanCommissioningAsync(token);
                 await RefreshCoolingOutputAssignmentsAsync(token);
                 await RefreshUpdateStatusAsync(token);

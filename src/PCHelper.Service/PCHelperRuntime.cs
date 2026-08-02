@@ -464,6 +464,9 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.GetGpuFanState => Success(
                     request,
                     await ReadGpuFanStateAsync(cancellationToken).ConfigureAwait(false)),
+                IpcCommand.GetGpuOcState => Success(
+                    request,
+                    await ReadGpuOcStateAsync(cancellationToken).ConfigureAwait(false)),
                 IpcCommand.GetCoolingGraphs => Success(
                     request,
                     await _store!.GetSuiteEntitiesAsync<CoolingGraphV1>(SuiteEntityKind.CoolingGraph, cancellationToken).ConfigureAwait(false)),
@@ -4832,6 +4835,66 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     /// resets, so it is safe to call while the fan is locked out or mid-fault — which is
     /// exactly when the answer is wanted.
     /// </summary>
+    /// <summary>
+    /// Reads back the offsets and power limit the card is enforcing, so the dashboard can show
+    /// what is actually applied instead of assuming stock. Reads only: this asks the same
+    /// transports the verify and rollback paths use and issues no write, so it needs no arming.
+    /// A domain that cannot be read reports null rather than zero, because zero is a real
+    /// offset meaning stock and the two must not be confused.
+    /// </summary>
+    private async Task<GpuOcLiveStateV1> ReadGpuOcStateAsync(CancellationToken cancellationToken)
+    {
+        IArmedGpuClockOffsetTransport? clock = _gpuClockTransport;
+        IGpuPowerLimitTransport? power = _gpuPowerTransport;
+        if (clock is null && power is null)
+        {
+            return new GpuOcLiveStateV1(false, null, null, null, "No GPU clock or power transport is available.");
+        }
+
+        int? core = null;
+        int? memory = null;
+        uint? powerLimit = null;
+        List<string> unreadable = [];
+        if (clock is not null)
+        {
+            foreach ((GpuClockOffsetDomain domain, Action<int?> assign) in new (GpuClockOffsetDomain, Action<int?>)[]
+            {
+                (GpuClockOffsetDomain.Core, value => core = value),
+                (GpuClockOffsetDomain.Memory, value => memory = value),
+            })
+            {
+                try
+                {
+                    GpuClockOffsetState state = await clock.ReadStateAsync(domain, cancellationToken).ConfigureAwait(false);
+                    assign(state.CurrentKiloHertz is int kiloHertz ? (int)Math.Round(kiloHertz / 1000d) : null);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    // A cold session helper can miss the first read. Reporting the domain as
+                    // unreadable is honest; failing the whole call would hide the other one.
+                    unreadable.Add($"{domain}: {exception.Message}");
+                }
+            }
+        }
+
+        if (power is not null)
+        {
+            try
+            {
+                powerLimit = (await power.ReadStateAsync("0", cancellationToken).ConfigureAwait(false)).CurrentMilliwatts;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                unreadable.Add($"power: {exception.Message}");
+            }
+        }
+
+        string message = unreadable.Count == 0
+            ? "Read back from the display driver."
+            : $"Partly unreadable: {string.Join("; ", unreadable)}";
+        return new GpuOcLiveStateV1(true, core, memory, powerLimit, message);
+    }
+
     private async Task<GpuFanStateV1> ReadGpuFanStateAsync(CancellationToken cancellationToken)
     {
         IGpuFanCoolerTransport? transport = _gpuFanTransport;

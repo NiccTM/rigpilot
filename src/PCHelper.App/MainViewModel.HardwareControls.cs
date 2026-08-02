@@ -273,6 +273,50 @@ public sealed partial class MainViewModel
 
     public System.Windows.Input.ICommand SetKrakenPumpCommand { get; }
 
+    /// <summary>
+    /// The offsets and power limit the service last read back from the driver, or null before
+    /// the first successful read. Sliders are only ever seeded from this at construction, so a
+    /// refresh landing mid-drag cannot move the handle under the operator's finger.
+    /// </summary>
+    private GpuOcLiveStateV1? _gpuOcLiveState;
+
+    /// <summary>
+    /// Asks the service what the card is enforcing. A service one version behind has no such
+    /// command, so a failure leaves the previous reading alone rather than throwing: the
+    /// sliders then fall back to their old assumption, which is exactly the prior behaviour.
+    /// </summary>
+    private async Task RefreshGpuOcLiveStateAsync(CancellationToken cancellationToken)
+    {
+        IpcResponse response = await _client.SendAsync(
+            NamedPipeRequestClient.CreateRequest(IpcCommand.GetGpuOcState),
+            cancellationToken);
+        if (!response.Success)
+        {
+            return;
+        }
+
+        if (IpcJson.FromElement<GpuOcLiveStateV1>(response.Payload) is GpuOcLiveStateV1 state)
+        {
+            _gpuOcLiveState = state;
+        }
+    }
+
+    private double? LiveGpuOcValue(string prefix)
+    {
+        if (_gpuOcLiveState is not { Available: true } live)
+        {
+            return null;
+        }
+
+        return prefix switch
+        {
+            "gpuclock.core:" => live.CoreOffsetMegaHertz,
+            "gpuclock.memory:" => live.MemoryOffsetMegaHertz,
+            "gpupower.limit:" => live.PowerLimitMilliwatts,
+            _ => null
+        };
+    }
+
     private void RebuildGpuControlSliders()
     {
         if (_snapshot is null)
@@ -304,9 +348,13 @@ public sealed partial class MainViewModel
                     Maximum = range.Maximum,
                     Default = range.Default,
                     Unit = capability.Unit ?? string.Empty,
-                    Value = prefix.StartsWith("gpuclock", StringComparison.Ordinal) ? 0
-                        : prefix == "gpufan.duty:" ? range.Maximum
-                        : range.Maximum
+                    // Seed from what the card is actually enforcing when the service could
+                    // read it back. Without this the clock sliders opened at 0 MHz on a
+                    // machine running a saved overclock, so the page contradicted its own
+                    // ticked "reapply at startup" box. A domain the driver could not report
+                    // falls back to the previous assumption rather than inventing a number.
+                    Value = LiveGpuOcValue(prefix)
+                        ?? (prefix.StartsWith("gpuclock", StringComparison.Ordinal) ? 0 : range.Maximum)
                 });
             }
         }
