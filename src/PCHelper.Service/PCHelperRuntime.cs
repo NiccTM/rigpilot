@@ -5398,6 +5398,12 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
     private string _lightingStartupMessage = "No saved lighting; nothing to restore at startup.";
 
     /// <summary>
+    /// Whether the previous shutdown left unverified hardware state behind. Set by
+    /// <see cref="RecoverPendingTransactionAsync"/>, which runs before any startup reapply.
+    /// </summary>
+    private bool _startupWasUnclean;
+
+    /// <summary>
     /// Drives one native RGB route. This is the single writer the interactive commands and
     /// the startup reapply both go through, so a colour restored at boot travels the exact
     /// path — contained Adapter Host child, same argument encoding — that the operator used
@@ -5566,6 +5572,14 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         if (LightingStartupPolicy.NormaliseColour(profile.Colour) is not string colour)
         {
             _lightingStartupMessage = $"The saved lighting colour '{profile.Colour}' is not usable and was not restored.";
+            return;
+        }
+
+        if (LightingStartupPolicy.BlockRestoreReason(!_startupWasUnclean) is string blocked)
+        {
+            // The profile is deliberately left on disk: one bad shutdown must not throw
+            // away the operator's choice, and the next clean start restores it.
+            _lightingStartupMessage = $"Saved lighting #{colour} was not restored because {blocked}";
             return;
         }
 
@@ -7228,6 +7242,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             legacyCommitted);
         IReadOnlyList<HardwareControlLeaseItemV1> controls = startupPlan.Controls;
         bool uncleanStartup = startupPlan.RequiresRecovery;
+        // Recorded for the startup paths that run after recovery. Invariant 6 keeps
+        // Experimental state from being restored automatically after an unclean shutdown,
+        // and the lighting reapply needs to know which kind of start this was.
+        _startupWasUnclean = uncleanStartup;
         HardwareRecoveryResult recovery = new(true, [], []);
 
         if (uncleanStartup)
