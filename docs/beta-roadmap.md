@@ -16,7 +16,7 @@ fragmentation (one app per domain) and safety (unsigned drivers, brick incidents
 wedge is being the only suite that is simultaneously:
 
 1. **Complete** — cooling + GPU + CPU + RGB + peripherals + games + monitoring + updates in one app.
-2. **Tiny and quiet** — target < 300 MB working set at beta and < 250 MB at 1.0, with < 1% CPU
+2. **Tiny and quiet** — target < 300 MB private working set at beta and < 250 MB at 1.0, with < 1% CPU
    (Armoury Crate ~4 GB installed);
    no account, no ads, no cloud dependency, service performs zero network access.
 3. **Provably safe** — signed everything, transactional writes with rollback, per-device
@@ -217,8 +217,11 @@ Beta:
   wired into `publish.ps1`/`build-installer.ps1`; signed alpha → beta pipeline, signed Game Bar
   MSIX, signed takeover-executor live tests.
 - Deploy `report-api` (Cloudflare D1/R2, 30-day lifecycle); opt-in diagnostics uploads live.
-- Close the 24-hour soak (the 2026-07-24 attempt ran 5.8 h, not 24); working-set reduction pass
-  against the single target above — < 300 MB beta, < 250 MB at 1.0.
+- Close the 24-hour soak (the 2026-07-24 attempt ran 5.8 h, not 24). The target above is private
+  working set: summing per-process working set counts the shared .NET runtime once per process,
+  which on the reference machine reported 315 MB for a runtime whose resident private memory was
+  148 MB. `Measure-RuntimeFootprint.ps1` now reports both, and the earlier "working-set reduction
+  pass" was scoped against the inflated figure.
 
 0.9–1.0:
 
