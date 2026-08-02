@@ -324,15 +324,29 @@ public sealed partial class MainViewModel
             return;
         }
 
-        (string Prefix, string Label)[] families =
+        // The memory delta is NOT the same unit as the core one. RigPilot writes both to the
+        // NVAPI P0 pstates20 entry unchanged, and the driver echoes both back unchanged, so
+        // apply and read-back agree either way — but the resulting clock does not. Measured on
+        // an RTX 3090 (driver 610.88): +49 core moved the reported core clock 1395 -> 1444 and
+        // boost 1710 -> 1759, exactly +49, while +126 memory moved the memory clock only
+        // 1219 -> 1235. The driver-side scale for a GDDR6X memory delta is not established
+        // here, and the editable range the driver reports (up to +3000) is far wider than any
+        // real memory clock offset, which is consistent with it not being a real-clock value.
+        // Both numbers were labelled plain "MHz", so the memory one silently over-promised.
+        const string MemoryScaleHint =
+            "Driver memory delta, not a real-clock megahertz value. Measured on an RTX 3090: a "
+            + "+126 setting moved the reported memory clock 1219 -> 1235 MHz, while the core "
+            + "offset moves it one-for-one. Confirm the result with GPU-Z rather than assuming "
+            + "the number is the clock change.";
+        (string Prefix, string Label, string Hint)[] families =
         [
-            ("gpufan.duty:", "GPU fan duty"),
-            ("gpupower.limit:", "GPU power limit"),
-            ("gpuclock.core:", "GPU core clock offset"),
-            ("gpuclock.memory:", "GPU memory clock offset")
+            ("gpufan.duty:", "GPU fan duty", ""),
+            ("gpupower.limit:", "GPU power limit", ""),
+            ("gpuclock.core:", "GPU core clock offset", ""),
+            ("gpuclock.memory:", "GPU memory clock offset", MemoryScaleHint)
         ];
         List<GpuControlSlider> next = [];
-        foreach ((string prefix, string label) in families)
+        foreach ((string prefix, string label, string hint) in families)
         {
             CapabilityDescriptor? capability = _snapshot.Capabilities
                 .FirstOrDefault(item => item.Id.StartsWith(prefix, StringComparison.Ordinal));
@@ -344,6 +358,7 @@ public sealed partial class MainViewModel
                     AdapterId = capability.AdapterId,
                     DeviceId = capability.DeviceId,
                     Name = label,
+                    Hint = hint,
                     Minimum = range.Minimum,
                     Maximum = range.Maximum,
                     Default = range.Default,
@@ -1317,6 +1332,11 @@ public sealed partial class MainViewModel
         public double Maximum { get; init; }
         public string Unit { get; init; } = string.Empty;
         public double Value { get; set; }
+
+        /// <summary>Extra caution shown on the row, empty when the control needs none.</summary>
+        public string Hint { get; init; } = string.Empty;
+
+        public bool HasHint => !string.IsNullOrEmpty(Hint);
 
         /// <summary>Vendor default (Afterburner-style 100% reference), when the adapter discovered one.</summary>
         public double? Default { get; init; }

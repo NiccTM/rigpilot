@@ -1910,7 +1910,28 @@
                           <ColumnDefinition Width="135" />
                           <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                          <!-- Shown only where the number the operator types is not in the unit
+                               the label implies; today that is the GDDR6X memory delta. -->
+                          <TextBlock Text="&#xE9CE;" FontFamily="{StaticResource IconFont}" FontSize="12"
+                                     Margin="6,0,0,0" VerticalAlignment="Center"
+                                     Foreground="{StaticResource AccentBrush}"
+                                     ToolTip="{Binding Hint}"
+                                     ToolTipService.ShowDuration="60000"
+                                     automation:AutomationProperties.Name="{Binding Hint}">
+                            <TextBlock.Style>
+                              <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding HasHint}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </TextBlock.Style>
+                          </TextBlock>
+                        </StackPanel>
                         <Slider x:Name="ValueSlider" Grid.Column="1" Minimum="{Binding Minimum}" Maximum="{Binding Maximum}"
                                 Value="{Binding Value, Mode=TwoWay}" IsSnapToTickEnabled="True" TickFrequency="1"
                                 VerticalAlignment="Center" Margin="10,0"
