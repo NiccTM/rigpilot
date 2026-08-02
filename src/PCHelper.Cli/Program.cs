@@ -50,6 +50,9 @@ internal static class Cli
                 "gpu-oc-save" => await SetGpuOcStartupPersistenceAsync(args, json),
                 "gpu-oc-clear" => await ClearGpuOcStartupPersistenceAsync(args, json),
                 "gpu-oc-state" => await ServiceCommandAsync<GpuOcStartupPersistenceStatus>(IpcCommand.GetGpuOcStartupPersistence, json),
+                "lighting-startup-save" => await SetLightingStartupPersistenceAsync(args, json),
+                "lighting-startup-clear" => await ClearLightingStartupPersistenceAsync(json),
+                "lighting-startup-state" => await ServiceCommandAsync<LightingStartupPersistenceStatus>(IpcCommand.GetLightingStartupPersistence, json),
                 "cpu-tuning-arm" => await SetCpuTuningArmedAsync(args, json, arm: true),
                 "cpu-tuning-disarm" => await SetCpuTuningArmedAsync(args, json, arm: false),
                 "trace" => await TraceAsync(json),
@@ -728,6 +731,53 @@ internal static class Cli
         GpuOcStartupPersistenceStatus status = IpcJson.FromElement<GpuOcStartupPersistenceStatus>(response.Payload)
             ?? throw new InvalidDataException("Service returned an empty payload.");
         Write(status, json, value => Console.WriteLine($"GPU OC startup cleared. {value.Message}"));
+        return 0;
+    }
+
+    private static async Task<int> SetLightingStartupPersistenceAsync(string[] args, bool json)
+    {
+        string? colour = Option(args, "--colour");
+        if (LightingStartupPolicy.NormaliseColour(colour) is not string normalised)
+        {
+            Console.Error.WriteLine("lighting-startup-save requires --colour RRGGBB (six hex digits).");
+            return 3;
+        }
+
+        // Default to every native route and let the service keep the ones that light,
+        // which is what the dashboard does. --routes narrows it for a targeted save.
+        IReadOnlyList<string> routes = Option(args, "--routes") is string list
+            ? list.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : [.. LightingStartupPolicy.KnownRouteIds];
+        if (LightingStartupPolicy.ValidateEnable(normalised, routes) is string refusal)
+        {
+            Console.Error.WriteLine(refusal);
+            return 3;
+        }
+
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetLightingStartupPersistence,
+            new SetLightingStartupPersistenceRequest(Enable: true, normalised, routes));
+        if (!response.Success)
+        {
+            Console.Error.WriteLine($"{response.ErrorCode}: {response.Error}");
+            return 3;
+        }
+
+        LightingStartupPersistenceStatus status = IpcJson.FromElement<LightingStartupPersistenceStatus>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(status, json, value => Console.WriteLine(
+            $"Lighting startup: enabled={value.Enabled} colour=#{value.Colour} routes={value.RouteCount}. {value.Message}"));
+        return status.Enabled ? 0 : 3;
+    }
+
+    private static async Task<int> ClearLightingStartupPersistenceAsync(bool json)
+    {
+        IpcResponse response = await SendResponseAsync(
+            IpcCommand.SetLightingStartupPersistence,
+            new SetLightingStartupPersistenceRequest(Enable: false, string.Empty, []));
+        LightingStartupPersistenceStatus status = IpcJson.FromElement<LightingStartupPersistenceStatus>(response.Payload)
+            ?? throw new InvalidDataException("Service returned an empty payload.");
+        Write(status, json, value => Console.WriteLine($"Lighting startup cleared. {value.Message}"));
         return 0;
     }
 
@@ -1519,6 +1569,12 @@ internal static class Cli
             pchelper-cli gpu-oc-clear [--confirm-device DEVICE_ID] [--json]
                                                  Clear the saved overclock so it is no longer reapplied at startup.
             pchelper-cli gpu-oc-state [--json] Report whether an overclock is saved for startup and its output count. Read-only.
+            pchelper-cli lighting-startup-save --colour RRGGBB [--routes native:aura,native:razer] [--json]
+                                                 Save a static colour to be re-driven on every native route at service start. The colour is written now and only the routes that accept it are saved. Lighting registers only; no EEPROM or firmware write.
+            pchelper-cli lighting-startup-clear [--json]
+                                                 Clear the saved lighting so it is no longer restored at startup.
+            pchelper-cli lighting-startup-state [--json]
+                                                 Report whether a lighting colour is saved for startup and its route count. Read-only.
             pchelper-cli cpu-tuning-arm --confirm-experimental --confirm-device DEVICE_ID [--json]
                                                  Request arming of CPU PBO tuning. Refused by the qualification gate on every system today.
             pchelper-cli cpu-tuning-disarm [--json] Confirm CPU PBO tuning is disarmed and report the boot-recovery sentinel state.

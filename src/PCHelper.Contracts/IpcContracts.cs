@@ -159,7 +159,9 @@ public enum IpcCommand
     GpuPowerSession,
     GpuClockSession,
     SetGpuOcStartupPersistence,
-    GetGpuOcStartupPersistence
+    GetGpuOcStartupPersistence,
+    SetLightingStartupPersistence,
+    GetLightingStartupPersistence
 }
 
 public static class ProtocolConstants

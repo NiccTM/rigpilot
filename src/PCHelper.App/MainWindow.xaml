@@ -2277,6 +2277,22 @@
                     <Button Content="Turn all lighting off" Command="{Binding SyncAllRgbCommand}" CommandParameter="off" Margin="0,0,8,8"
                             automation:AutomationProperties.Name="Turn every ready RGB route off" automation:AutomationProperties.AutomationId="Lighting.ApplyAllRgbOff" />
                   </WrapPanel>
+                  <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="{StaticResource RadiusBadge}" Padding="12" Margin="0,4,0,0">
+                    <StackPanel>
+                      <!-- OneWay + command, like the other persistence switches: the box shows
+                           what the service actually holds, so a refused save cannot leave it ticked. -->
+                      <CheckBox IsChecked="{Binding LightingStartupSaved, Mode=OneWay}"
+                                Command="{Binding ToggleLightingStartupCommand}"
+                                ToolTip="Saves the colour and brightness above and re-drives the native controllers (Aura headers, RGB DIMMs, Razer case, Kraken) every time the service starts — before you sign in. The colour is written now and only the routes that actually light are saved, so a controller that is absent narrows what is stored rather than failing the save. Animated colourways are not saved: they are rendered by the OpenRGB bridge and the signed-in agent, neither of which exists at the login screen."
+                                automation:AutomationProperties.Name="Restore this lighting colour when the PC starts"
+                                automation:AutomationProperties.AutomationId="Lighting.StartupPersistence">
+                        <TextBlock Text="Restore this lighting colour when the PC starts" TextWrapping="Wrap" FontWeight="SemiBold" />
+                      </CheckBox>
+                      <TextBlock Text="{Binding LightingStartupStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                 automation:AutomationProperties.LiveSetting="Polite"
+                                 automation:AutomationProperties.AutomationId="Lighting.StartupPersistenceStatus" />
+                    </StackPanel>
+                  </Border>
                   <Separator Margin="0,4" />
                   <TextBlock Text="AMBIENT &amp; MUSIC LIGHTING" Style="{StaticResource EyebrowStyle}" Margin="0,4,0,5" />
                   <TextBlock Text="{Binding AmbientStatus}" Style="{StaticResource SubtleStyle}" TextWrapping="Wrap" Margin="0,0,0,8" automation:AutomationProperties.LiveSetting="Polite" automation:AutomationProperties.AutomationId="Lighting.AmbientStatus" />

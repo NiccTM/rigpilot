@@ -4337,6 +4337,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 await RefreshAdapterTraceAsync(token);
                 await RefreshReliabilityAsync(token);
                 await RefreshGpuOcStartupAsync(token);
+                await RefreshLightingStartupAsync(token);
                 _lastServiceDiagnosticsRefresh = refreshTime;
             }
             LastUpdatedText = $"Updated {DateTimeOffset.Now:HH:mm:ss}";

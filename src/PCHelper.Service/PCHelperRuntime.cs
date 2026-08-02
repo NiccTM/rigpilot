@@ -309,6 +309,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         await RecoverPendingOperationAsync(cancellationToken).ConfigureAwait(false);
         await RecoverPendingUpdateTransactionsAsync(cancellationToken).ConfigureAwait(false);
         await ReapplyPersistedGpuOcAtStartupAsync(cancellationToken).ConfigureAwait(false);
+        await ReapplyPersistedLightingAtStartupAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task RefreshAsync(bool persistSensors, CancellationToken cancellationToken)
@@ -550,6 +551,10 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 IpcCommand.GetGpuOcStartupPersistence => await GetGpuOcStartupPersistenceAsync(cancellationToken).ConfigureAwait(false) is GpuOcStartupPersistenceStatus ocStatus
                     ? Success(request, ocStatus)
                     : Failure(request, "GPU_OC_STARTUP_UNAVAILABLE", "GPU OC startup persistence is unavailable."),
+                IpcCommand.SetLightingStartupPersistence => await SetLightingStartupPersistenceAsync(request, cancellationToken).ConfigureAwait(false),
+                IpcCommand.GetLightingStartupPersistence => Success(
+                    request,
+                    await GetLightingStartupPersistenceAsync(cancellationToken).ConfigureAwait(false)),
                 IpcCommand.SetCpuTuningArmed => SetCpuTuningArmed(request),
                 _ when IsUserAgentCommand(request.Command) => Failure(
                     request,
@@ -5377,6 +5382,211 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             () => new AdapterHostControllerDiscoveryProcess("--set-aura-rgb", argument));
         AuraLightingResultV1 result = await aura.WriteAsync(cancellationToken).ConfigureAwait(false);
         return Success(request, result);
+    }
+
+    // --- Static lighting restored at service start ---------------------------
+
+    private string LightingStartupProfilePath => Path.Combine(_dataDirectory!, "lighting-startup.json");
+
+    // Plain options, matching GpuOcSerializerOptions. Not JsonSerializerDefaults.Web:
+    // that writes camelCase, while the read below deserializes with default options,
+    // which are case-sensitive. The profile would save cleanly, report success, and
+    // then fail its schema-version check on every read — a saved colour that silently
+    // never came back. LightingStartupProfileRoundTripTests pins the round trip.
+    private static readonly JsonSerializerOptions LightingSerializerOptions = new() { WriteIndented = true };
+
+    private string _lightingStartupMessage = "No saved lighting; nothing to restore at startup.";
+
+    /// <summary>
+    /// Drives one native RGB route. This is the single writer the interactive commands and
+    /// the startup reapply both go through, so a colour restored at boot travels the exact
+    /// path — contained Adapter Host child, same argument encoding — that the operator used
+    /// when they applied it.
+    /// </summary>
+    private static async Task<(bool WriteIssued, string Message)> WriteLightingRouteAsync(
+        string routeId,
+        string colour,
+        CancellationToken cancellationToken)
+    {
+        string argument = colour.Trim().TrimStart('#');
+        try
+        {
+            // Each family reports a different wire shape; RgbWriteResultMappings is the one
+            // place those are reconciled, so this reads the same verdict the dashboard does.
+            RgbWriteResult result = routeId switch
+            {
+                "native:aura" => (await new ContainedAuraLighting(
+                    () => new AdapterHostControllerDiscoveryProcess("--set-aura-rgb", argument))
+                    .WriteAsync(cancellationToken).ConfigureAwait(false)).ToRgbWriteResult(),
+                "native:dimm" => (await new ContainedDimmRgb(
+                    () => new AdapterHostControllerDiscoveryProcess("--set-smbus-rgb", argument))
+                    .WriteAsync(cancellationToken).ConfigureAwait(false)).ToRgbWriteResult(),
+                "native:razer" => (await new ContainedRazerRgb(
+                    () => new AdapterHostControllerDiscoveryProcess("--set-razer-custom", argument))
+                    .WriteAsync(cancellationToken).ConfigureAwait(false)).ToRgbWriteResult(),
+                "native:kraken" => (await new ContainedKrakenLighting(
+                    () => new AdapterHostControllerDiscoveryProcess("--set-kraken-rgb", argument))
+                    .WriteAsync(cancellationToken).ConfigureAwait(false)).ToRgbWriteResult(),
+                _ => null!
+            };
+            return result is null
+                ? (false, $"'{routeId}' is not a native lighting route.")
+                : (result.WriteIssued, result.Message);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // A missing or unplugged controller must not take the service down with it;
+            // lighting is cosmetic and every other startup step still has to run.
+            return (false, exception.Message);
+        }
+    }
+
+    private async Task<LightingStartupProfileV1?> ReadLightingStartupProfileAsync(CancellationToken cancellationToken)
+    {
+        string path = LightingStartupProfilePath;
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            string json = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+            LightingStartupProfileV1? profile = JsonSerializer.Deserialize<LightingStartupProfileV1>(json);
+            return profile is { SchemaVersion: LightingStartupProfileV1.CurrentSchemaVersion } ? profile : null;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private void DeleteLightingStartupProfile()
+    {
+        try
+        {
+            if (File.Exists(LightingStartupProfilePath))
+            {
+                File.Delete(LightingStartupProfilePath);
+            }
+        }
+        catch (IOException)
+        {
+            // Best effort; a surviving profile is re-validated next start.
+        }
+    }
+
+    private async Task<IpcResponse> SetLightingStartupPersistenceAsync(IpcRequest request, CancellationToken cancellationToken)
+    {
+        SetLightingStartupPersistenceRequest payload = IpcJson.FromElement<SetLightingStartupPersistenceRequest>(request.Payload)
+            ?? throw new InvalidDataException("SetLightingStartupPersistence requires a request payload.");
+
+        if (!payload.Enable)
+        {
+            DeleteLightingStartupProfile();
+            _lightingStartupMessage = "Saved lighting cleared; it will not be restored at startup.";
+            return Success(request, new LightingStartupPersistenceStatus(false, string.Empty, 0, _lightingStartupMessage));
+        }
+
+        if (LightingStartupPolicy.ValidateEnable(payload.Colour, payload.RouteIds) is string policyError)
+        {
+            return Failure(request, "LIGHTING_STARTUP_REJECTED", policyError);
+        }
+
+        // Saved only if it can be driven right now. A route that cannot be written today
+        // will not start working while nobody is watching, and recording it would promise
+        // a restore that silently never happens.
+        string colour = LightingStartupPolicy.NormaliseColour(payload.Colour)!;
+        List<string> written = [];
+        List<string> refused = [];
+        foreach (string routeId in payload.RouteIds.Distinct(StringComparer.Ordinal))
+        {
+            (bool issued, string message) = await WriteLightingRouteAsync(routeId, colour, cancellationToken).ConfigureAwait(false);
+            if (issued)
+            {
+                written.Add(routeId);
+            }
+            else
+            {
+                refused.Add($"{routeId}: {message}");
+            }
+        }
+
+        if (written.Count == 0)
+        {
+            return Failure(
+                request,
+                "LIGHTING_STARTUP_UNVERIFIED",
+                $"No lighting route accepted the colour, so nothing was saved. {string.Join("; ", refused)}");
+        }
+
+        LightingStartupProfileV1 profile = new(
+            LightingStartupProfileV1.CurrentSchemaVersion,
+            colour,
+            DateTimeOffset.UtcNow,
+            written);
+        Directory.CreateDirectory(_dataDirectory!);
+        await File.WriteAllTextAsync(
+            LightingStartupProfilePath,
+            JsonSerializer.Serialize(profile, LightingSerializerOptions),
+            cancellationToken).ConfigureAwait(false);
+
+        // Only the routes that actually lit are saved, and a partial result says so
+        // rather than reporting a whole-machine success it did not achieve.
+        _lightingStartupMessage = refused.Count == 0
+            ? $"Lighting saved. #{colour} is restored on {written.Count} route(s) at every service start."
+            : $"Lighting saved for {written.Count} route(s) at #{colour}. Not saved: {string.Join("; ", refused)}";
+        return Success(request, new LightingStartupPersistenceStatus(true, colour, written.Count, _lightingStartupMessage));
+    }
+
+    private async Task<LightingStartupPersistenceStatus> GetLightingStartupPersistenceAsync(CancellationToken cancellationToken)
+    {
+        LightingStartupProfileV1? profile = await ReadLightingStartupProfileAsync(cancellationToken).ConfigureAwait(false);
+        return profile is null
+            ? new LightingStartupPersistenceStatus(false, string.Empty, 0, _lightingStartupMessage)
+            : new LightingStartupPersistenceStatus(true, profile.Colour, profile.RouteIds.Count, _lightingStartupMessage);
+    }
+
+    /// <summary>
+    /// Re-drives the saved colour at service start. Unlike the GPU overclock path this needs
+    /// no boot sentinel: a lighting register write has no state that can prevent a clean boot,
+    /// so there is nothing for a journal to revert. A route that fails is reported and skipped;
+    /// the saved profile is kept, because an unplugged controller is a reason to try again next
+    /// boot rather than to forget what the operator chose.
+    /// </summary>
+    private async Task ReapplyPersistedLightingAtStartupAsync(CancellationToken cancellationToken)
+    {
+        LightingStartupProfileV1? profile = await ReadLightingStartupProfileAsync(cancellationToken).ConfigureAwait(false);
+        if (profile is null || profile.RouteIds.Count == 0)
+        {
+            _lightingStartupMessage = "No saved lighting; nothing to restore at startup.";
+            return;
+        }
+
+        if (LightingStartupPolicy.NormaliseColour(profile.Colour) is not string colour)
+        {
+            _lightingStartupMessage = $"The saved lighting colour '{profile.Colour}' is not usable and was not restored.";
+            return;
+        }
+
+        List<string> restored = [];
+        List<string> failed = [];
+        foreach (string routeId in profile.RouteIds)
+        {
+            (bool issued, string message) = await WriteLightingRouteAsync(routeId, colour, cancellationToken).ConfigureAwait(false);
+            if (issued)
+            {
+                restored.Add(routeId);
+            }
+            else
+            {
+                failed.Add($"{routeId}: {message}");
+            }
+        }
+
+        _lightingStartupMessage = failed.Count == 0
+            ? $"Saved lighting #{colour} restored on {restored.Count} route(s) at startup."
+            : $"Saved lighting #{colour} restored on {restored.Count} of {profile.RouteIds.Count} route(s). Not restored: {string.Join("; ", failed)}";
     }
 
     private async Task<IpcResponse> SetDimmRgbAsync(IpcRequest request, CancellationToken cancellationToken)
