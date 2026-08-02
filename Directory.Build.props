@@ -15,6 +15,14 @@
          heuristics and is asserted by scripts\Test-DistributionHygiene.ps1. -->
     <Company>RigPilot contributors</Company>
     <Product>RigPilot</Product>
+    <!-- AssemblyTitle becomes the Win32 FileDescription, which is the string Task Manager,
+         the Details tab, and most antivirus prompts display. Left unset it defaults to the
+         assembly name, so the suite appeared as "PCHelper.Service"/"PCHelper.App" — the
+         internal identifiers, not the product. The assembly, executable, service, pipe, and
+         %ProgramData% names deliberately stay PCHelper for upgrade safety (see README brand
+         continuity); only what the user is shown changes. Executable projects override this
+         with their specific role. -->
+    <AssemblyTitle Condition="'$(AssemblyTitle)' == ''">RigPilot</AssemblyTitle>
     <Copyright>Copyright (c) RigPilot contributors</Copyright>
     <RepositoryUrl>https://github.com/NiccTM/rigpilot</RepositoryUrl>
     <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>

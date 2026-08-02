@@ -3,6 +3,7 @@
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <AssemblyName>PCHelper.Service</AssemblyName>
+    <AssemblyTitle>RigPilot Service</AssemblyTitle>
     <Description>Boot-starting safety and profile coordinator for RigPilot.</Description>
     <RigPilotPublicUnsignedPreview Condition="'$(RigPilotPublicUnsignedPreview)' == ''">false</RigPilotPublicUnsignedPreview>
   </PropertyGroup>

@@ -6,6 +6,7 @@
     <UseWPF>true</UseWPF>
     <DisableWinExeOutputInference>true</DisableWinExeOutputInference>
     <AssemblyName>PCHelper.EffectHost</AssemblyName>
+    <AssemblyTitle>RigPilot Effect Host</AssemblyTitle>
     <Description>Constrained WebView2 host for hash-bound RigPilot lighting effects.</Description>
   </PropertyGroup>
   <ItemGroup>
