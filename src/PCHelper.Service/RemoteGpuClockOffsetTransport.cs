@@ -98,8 +98,9 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
             else
             {
                 // Disarmed is the resting state; drop the child rather than leaving an
-                // idle NVAPI session running. Offsets persist in the driver, so
-                // releasing changes no hardware state.
+                // idle NVAPI session running. Offsets do NOT persist past the session, so
+                // the host refuses this release while one is still held; disarm restores
+                // stock through RestoreOffsetAsync, which records zero and lets the child go.
                 _host.ReleaseAsync().GetAwaiter().GetResult();
             }
         }

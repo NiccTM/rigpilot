@@ -201,6 +201,12 @@ internal sealed class GpuSessionHost : IDisposable
     /// Kills the child without disposing the host; the next send transparently
     /// respawns it. Used to drop the NVAPI session while the family is disarmed, so
     /// an idle service carries neither the session nor the child's ~30 MB.
+    ///
+    /// <para>Refused while the family reports it is holding state that does not outlive the
+    /// session. The idle timer was guarded first, which was not enough: the explicit release
+    /// on disarm and the one after bounds caching kill the same child by the same means, and
+    /// a released NVAPI session takes its clock deltas with it. Guarding the single place
+    /// that ends the process covers every caller instead of each remembering to ask.</para>
     /// </summary>
     public Task ReleaseAsync() => ReleaseAsync(requireIdle: false);
 
@@ -211,6 +217,14 @@ internal sealed class GpuSessionHost : IDisposable
     /// </param>
     private async Task ReleaseAsync(bool requireIdle)
     {
+        // Asked before the process is touched, so a session holding hardware state is never
+        // detached at all. Recycle is deliberately exempt: it respawns immediately and its
+        // caller re-applies, so it does not strand the state the way a release does.
+        if (_holdsLiveState?.Invoke() == true)
+        {
+            return;
+        }
+
         Process? doomed;
         await _startGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
