@@ -4406,6 +4406,34 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
             foreach (HardwareControlFamilyDefinition family in available)
             {
+                // Arming resets a family to its default and verifies the read-back, which is
+                // how control is proven before any write is allowed. A family that is ALREADY
+                // armed has proven exactly that, and resetting it again only destroys whatever
+                // the operator has since applied through the verified path.
+                //
+                // That is not hypothetical. The service reapplies a saved overclock at startup
+                // and arms only GPU power and GPU clock, so the GPU fan family stays disarmed
+                // and the aggregate armed flag reads false. The dashboard connects, sees that
+                // against its persisted "on" preference, and arms everything - resetting the
+                // clock family and wiping a +49/+126 MHz overclock that had been applied and
+                // read-back verified seconds earlier. It reported "reapplied and verified"
+                // throughout, because it had been, right up until the re-arm undid it.
+                //
+                // Skipping the reset for an already-armed family keeps the proof where it
+                // matters (the first arm, and every disarm) and stops a redundant one from
+                // clearing live state.
+                if (request.Armed && family.IsArmed())
+                {
+                    results.Add(new HardwareControlFamilyResult(
+                        family.Name,
+                        Available: true,
+                        RequestedStateApplied: true,
+                        ReadBackVerified: true,
+                        RolledBack: false,
+                        "Already armed; default-state reset skipped so an applied value is not cleared."));
+                    continue;
+                }
+
                 results.Add(await ResetAndVerifyHardwareFamilyAsync(family, cancellationToken).ConfigureAwait(false));
             }
 
@@ -4636,7 +4664,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 HardwareControlFamilyNames.GpuFan,
                 [(_gpuFanAdapter, $"{NvidiaGpuFanAdapter.CapabilityPrefix}0")],
                 armed => _gpuFanTransport.SetArmed(armed),
-                armed => _gpuFanArmed = armed));
+                armed => _gpuFanArmed = armed,
+                () => _gpuFanArmed));
         }
         if (_gpuPowerTransport is not null && _gpuPowerAdapter is not null)
         {
@@ -4644,7 +4673,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 HardwareControlFamilyNames.GpuPower,
                 [(_gpuPowerAdapter, $"{NvidiaGpuPowerLimitAdapter.CapabilityPrefix}0")],
                 armed => _gpuPowerTransport.SetArmed(armed),
-                armed => _gpuPowerArmed = armed));
+                armed => _gpuPowerArmed = armed,
+                () => _gpuPowerArmed));
         }
         if (_gpuClockTransport is not null && _gpuClockCoreAdapter is not null)
         {
@@ -4660,7 +4690,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
                 HardwareControlFamilyNames.GpuClock,
                 controls,
                 armed => _gpuClockTransport.SetArmed(armed),
-                armed => _gpuClockArmed = armed));
+                armed => _gpuClockArmed = armed,
+                () => _gpuClockArmed));
         }
         return families.ToArray();
     }
@@ -4781,7 +4812,8 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         string Name,
         IReadOnlyList<(IHardwareAdapter Adapter, string CapabilityId)> Controls,
         Action<bool> SetTransportGate,
-        Action<bool> CommitLogicalState);
+        Action<bool> CommitLogicalState,
+        Func<bool> IsArmed);
 
     private static class HardwareControlFamilyNames
     {
