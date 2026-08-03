@@ -324,20 +324,24 @@ public sealed partial class MainViewModel
             return;
         }
 
-        // The memory delta is NOT the same unit as the core one. RigPilot writes both to the
-        // NVAPI P0 pstates20 entry unchanged, and the driver echoes both back unchanged, so
-        // apply and read-back agree either way — but the resulting clock does not. Measured on
-        // an RTX 3090 (driver 610.88): +49 core moved the reported core clock 1395 -> 1444 and
-        // boost 1710 -> 1759, exactly +49, while +126 memory moved the memory clock only
-        // 1219 -> 1235. The driver-side scale for a GDDR6X memory delta is not established
-        // here, and the editable range the driver reports (up to +3000) is far wider than any
-        // real memory clock offset, which is consistent with it not being a real-clock value.
-        // Both numbers were labelled plain "MHz", so the memory one silently over-promised.
+        // The memory offset lands exactly, but on the memory-clock scale NVIDIA uses, which is
+        // 8x the DRAM clock a tool like GPU-Z displays. Nothing is lost and nothing is scaled
+        // by RigPilot; the two tools simply quote different domains for the same clock.
+        //
+        // Measured on an RTX 3090, driver 610.88, and confirmed two independent ways. Setting
+        // 400 moved nvidia-smi's memory clock from a 9751 MHz stock maximum to 10151 while the
+        // GPU sat at P0 - precisely +400. And 9751 / 1219 = 8.0 exactly against GPU-Z's DRAM
+        // figure, which is why an earlier +126 showed there as 1219 -> 1235: 126 / 8 = 15.75.
+        //
+        // So the number is real and honoured; it just is not the DRAM-clock change, and the
+        // core offset beside it IS one-for-one. That asymmetry, with both labelled plain "MHz",
+        // is what made a correctly applied memory offset look like it had barely worked.
         const string MemoryScaleHint =
-            "Driver memory delta, not a real-clock megahertz value. Measured on an RTX 3090: a "
-            + "+126 setting moved the reported memory clock 1219 -> 1235 MHz, while the core "
-            + "offset moves it one-for-one. Confirm the result with GPU-Z rather than assuming "
-            + "the number is the clock change.";
+            "Applied on NVIDIA's memory-clock scale, which is 8x the DRAM clock GPU-Z shows. "
+            + "Measured on an RTX 3090: setting 400 raised the memory clock by exactly 400 "
+            + "(9751 -> 10151 via nvidia-smi), which GPU-Z reports as +50. So divide by 8 to "
+            + "predict GPU-Z, and note the core offset beside this one is one-for-one. The "
+            + "value is honoured in full; it is not the DRAM-clock change.";
         (string Prefix, string Label, string Hint)[] families =
         [
             ("gpufan.duty:", "GPU fan duty", ""),
