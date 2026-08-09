@@ -5903,6 +5903,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             cancellationToken).ConfigureAwait(false);
         HardwareStartupRecoveryPlan plan = HardwareControlRecoveryPlanner.BuildStartupPlan(lease, pending, null);
 
+        ServiceLog.ClearRecoveryRequested(logger, plan.Controls.Count);
         HardwareRecoveryResult recovery;
         // Bounded on both the gate and the restore. This is the operator's only route out of
         // a hardware write lock, and it was observed timing out at the client while the
@@ -5911,6 +5912,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         // caller retry; blocking indefinitely does not.
         if (!await _hardwareMutationGate.WaitAsync(ClearRecoveryGateTimeout, cancellationToken).ConfigureAwait(false))
         {
+            ServiceLog.ClearRecoveryGateBusy(logger);
             return Failure(
                 request,
                 "RECOVERY_BUSY",
@@ -5928,6 +5930,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             }
             catch (TimeoutException)
             {
+                ServiceLog.ClearRecoveryTimedOut(logger, ClearRecoveryRestoreTimeout.TotalSeconds);
                 return Failure(
                     request,
                     "RECOVERY_TIMED_OUT",
@@ -5949,6 +5952,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
 
         if (!recovery.AllDefaultsVerified && !OnlyGpuFanRecoveryFailed(recovery))
         {
+            ServiceLog.ClearRecoveryIncomplete(logger, string.Join("; ", recovery.Errors));
             return FailureWithPayload(
                 request,
                 "RECOVERY_INCOMPLETE",
@@ -5962,7 +5966,7 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
             await _store.ClearPendingAsync(pending.Id, cancellationToken).ConfigureAwait(false);
         }
 
-        ServiceLog.HardwareRecoveryCleared(logger);
+        ServiceLog.ClearRecoveryCompleted(logger);
         IncrementSuiteRevision();
         return Success(request, await GetSafetyRecoveryStatusAsync(cancellationToken).ConfigureAwait(false));
     }

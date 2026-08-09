@@ -64,6 +64,24 @@ internal static partial class ServiceLog
     [LoggerMessage(EventId = 2026, Level = LogLevel.Warning, Message = "An Auto OC candidate journal survived a restart: {Capability} was applied at {Value} when the machine went down. Later searches will stay below it.")]
     public static partial void AutoOcCrashRemembered(ILogger logger, string capability, double value);
 
+    // The operator's only route out of a hardware write lock used to log nothing at all:
+    // two live attempts left no trace, so there was no way to tell a gate that was never
+    // acquired from a restore that hung, and no record of which control failed read-back.
+    [LoggerMessage(EventId = 2027, Level = LogLevel.Information, Message = "Clear-recovery requested; {ControlCount} leased control(s) will be restored and read back.")]
+    public static partial void ClearRecoveryRequested(ILogger logger, int controlCount);
+
+    [LoggerMessage(EventId = 2028, Level = LogLevel.Warning, Message = "Clear-recovery could not take the hardware mutation gate within the budget; another operation is holding it. The write lock was left in place.")]
+    public static partial void ClearRecoveryGateBusy(ILogger logger);
+
+    [LoggerMessage(EventId = 2029, Level = LogLevel.Warning, Message = "Clear-recovery default-state restore exceeded {TimeoutSeconds} s. A control session is not responding; the write lock was left in place.")]
+    public static partial void ClearRecoveryTimedOut(ILogger logger, double timeoutSeconds);
+
+    [LoggerMessage(EventId = 2030, Level = LogLevel.Warning, Message = "Clear-recovery could not prove default state: {Errors}. The write lock was left in place.")]
+    public static partial void ClearRecoveryIncomplete(ILogger logger, string errors);
+
+    [LoggerMessage(EventId = 2031, Level = LogLevel.Information, Message = "Clear-recovery proved default state; hardware writes are unlocked.")]
+    public static partial void ClearRecoveryCompleted(ILogger logger);
+
     [LoggerMessage(EventId = 3000, Level = LogLevel.Critical, Message = "RigPilot service stopped unexpectedly.")]
     public static partial void ServiceFailed(ILogger logger, Exception exception);
 }

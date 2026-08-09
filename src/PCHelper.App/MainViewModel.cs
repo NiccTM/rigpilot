@@ -5439,7 +5439,15 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         if (IsServiceOnline && !CanUseServiceWrites)
         {
-            SafetySummary = $"Service writes are locked: {ServiceCompatibilityMessage}";
+            // The reason must be the one that actually locked writes. This used to print the
+            // compatibility summary unconditionally, so a service locked by a failed recovery
+            // reported "Service writes are locked: Runtime contract ready: dashboard 0.8.0-beta.1,
+            // service 0.8.0-beta.1, protocol 2." - a success string offered as the explanation
+            // for a failure, hiding the actual cause ("default-state read-back did not
+            // complete") and the recovery command that clears it.
+            SafetySummary = _status?.RecoveryRequired == true && !string.IsNullOrWhiteSpace(_status.Message)
+                ? $"Service writes are locked: {_status.Message}"
+                : $"Service writes are locked: {ServiceCompatibilityMessage}";
             SafetyTone = "Warning";
         }
         else if (_status?.EmergencyMode == true)

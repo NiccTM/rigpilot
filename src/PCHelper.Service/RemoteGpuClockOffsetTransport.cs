@@ -46,6 +46,26 @@ internal sealed class RemoteGpuClockOffsetTransport : IArmedGpuClockOffsetTransp
                         new GpuClockSessionRequest(GpuClockSessionOps.SetArmed, GpuClockOffsetDomain.Core, 0, true),
                         cancellationToken).ConfigureAwait(false);
                 }
+
+                // Replay the offsets too. An NVAPI delta lives with the session that set it,
+                // so a recycled child comes up at stock; re-sending only the armed flag left
+                // it armed and holding nothing, silently dropping an applied overclock. The
+                // host's own note that "the child holds no state the service cannot re-apply"
+                // was only true of the armed flag until this existed. Recycle happens on a
+                // send-level IO or timeout error and on a driver-refused write, so it is not
+                // a rare path.
+                foreach ((GpuClockOffsetDomain domain, int offsetKiloHertz) in _appliedOffsets)
+                {
+                    if (offsetKiloHertz == 0)
+                    {
+                        continue;
+                    }
+
+                    _ = await host.SendOnCurrentSessionAsync<GpuClockSessionRequest, GpuClockSessionResult>(
+                        IpcCommand.GpuClockSession,
+                        new GpuClockSessionRequest(GpuClockSessionOps.SetOffset, domain, offsetKiloHertz, false),
+                        cancellationToken).ConfigureAwait(false);
+                }
             },
             IdleSessionTimeout,
             HoldsAppliedOffset);
