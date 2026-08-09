@@ -200,6 +200,13 @@ public static class IpcCommandPolicy
         IpcCommand.GetCoolingGraphs or
         IpcCommand.GetGpuFanState or
         IpcCommand.GetGpuOcState or
+        // Pure status reads. They were classified as mutations, so the recovery gate refused
+        // them - and the very message that gate returns promises "read-only IPC remains
+        // available". During a real lock the operator could not read whether a startup
+        // overclock or lighting colour was even saved, which is exactly the state in which
+        // knowing matters most. Neither command writes anything.
+        IpcCommand.GetGpuOcStartupPersistence or
+        IpcCommand.GetLightingStartupPersistence or
         IpcCommand.GetCoolingOutputAssignments or
         IpcCommand.GetFanCommissioningSessions or
         IpcCommand.GetFanCalibrations or

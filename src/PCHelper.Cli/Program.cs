@@ -1373,6 +1373,21 @@ internal static class Cli
         return response;
     }
 
+    /// <summary>
+    /// The client budget for one command, or null to keep the default. Sized above the
+    /// service-side ceiling for the operation so a slow-but-succeeding call is reported as
+    /// its real result rather than as a client timeout.
+    /// </summary>
+    private static TimeSpan? SlowCommandTimeout(IpcCommand command) => command switch
+    {
+        // Service side: a gate wait plus a 20 s bounded default-state restore.
+        IpcCommand.ClearHardwareRecovery => TimeSpan.FromSeconds(90),
+        // Applies and arming run the full prepare/apply/read-back/rollback path.
+        IpcCommand.ApplyProfileV2 or IpcCommand.SetHardwareControlArmed => TimeSpan.FromSeconds(60),
+        IpcCommand.SetGpuOcStartupPersistence => TimeSpan.FromSeconds(60),
+        _ => null
+    };
+
     private static async Task<IpcResponse> SendUncheckedResponseAsync(
         string pipeName,
         IpcCommand command,
@@ -1380,7 +1395,13 @@ internal static class Cli
         long? expectedRevision = null,
         string? idempotencyKey = null)
     {
-        NamedPipeRequestClient client = new(pipeName);
+        // A few commands legitimately outrun the default 10 s. ClearHardwareRecovery restores
+        // and read-back verifies every leased control behind a mutation gate it may have to
+        // wait for, so the service budgets 20 s for the restore alone - the client gave up
+        // first, every time, and the operator's only documented way out of a hardware write
+        // lock could never complete through the tool that recommends it. Measured: two
+        // attempts, both "did not respond within 10 s", neither reaching the handler.
+        NamedPipeRequestClient client = new(pipeName, operationTimeout: SlowCommandTimeout(command));
         IpcRequest request = payload is null
             ? NamedPipeRequestClient.CreateRequest(command, expectedRevision, idempotencyKey)
             : NamedPipeRequestClient.CreateRequest(command, payload, expectedRevision, idempotencyKey);
