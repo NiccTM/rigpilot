@@ -64,6 +64,41 @@ public static class SensorTree
         _ => unit
     };
 
+    /// <summary>Shown when neither a device name nor an identifier survives.</summary>
+    public const string UnnamedDeviceLabel = "Unidentified device";
+
+    /// <summary>
+    /// Reduces a reported label to what a person can actually see, or null when there is
+    /// nothing.
+    ///
+    /// <para><b>Why this is not <see cref="string.IsNullOrWhiteSpace"/>.</b> The reference
+    /// machine's fourth NVMe arrives from LibreHardwareMonitor with a name of forty NUL
+    /// characters. NUL is a control character, not whitespace, so
+    /// <c>IsNullOrWhiteSpace</c> answers <b>false</b> and the string counts as a perfectly
+    /// good name — one that WPF then renders as nothing at all. That is why the Devices page
+    /// drew a row labelled only "11 sensors", and why every earlier fallback failed to fire:
+    /// the chain was never reached. It also explains the row sorting above every named
+    /// device, because U+0000 orders before 'A'.</para>
+    ///
+    /// <para>Control characters are stripped rather than rejected wholesale, so a name that
+    /// is merely dirty ("AMD\0Ryzen") keeps its readable text instead of falling back to an
+    /// identifier.</para>
+    /// </summary>
+    internal static string? NormaliseLabel(string? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        string cleaned = new([.. value.Where(character => !char.IsControl(character))]);
+        cleaned = cleaned.Trim();
+        return cleaned.Length == 0 ? null : cleaned;
+    }
+
+    private static string FirstVisible(string? preferred, string? fallback, string last) =>
+        NormaliseLabel(preferred) ?? NormaliseLabel(fallback) ?? last;
+
     /// <summary>
     /// Builds the tree. Devices with no sensors are omitted — a tree exists to show readings,
     /// and an empty branch is noise. Sensors whose device is not in the snapshot are kept
@@ -99,12 +134,15 @@ public static class SensorTree
                                 sensor.Unit,
                                 sensor.Quality))]))
                     .OrderBy(group => group.Name, StringComparer.OrdinalIgnoreCase)];
-                // A device can be present but unnamed, which rendered as a nameless row
-                // labelled only with its sensor count — visible in the first render of this
-                // view. Blank is treated the same as absent so every branch is identifiable.
+                // A branch the user cannot name is not a tree, so the label chain is total:
+                // a visible device name, else the identifier, else a generic label that can
+                // never be empty. "Visible" is the load-bearing word - see NormaliseLabel for
+                // why an invisible-but-not-whitespace name defeated every earlier attempt at
+                // this. The device is always kept; its telemetry is never dropped for want of
+                // a name.
                 return new SensorTreeDevice(
                     deviceGroup.Key,
-                    string.IsNullOrWhiteSpace(device?.Name) ? deviceGroup.Key : device!.Name,
+                    FirstVisible(device?.Name, deviceGroup.Key, UnnamedDeviceLabel),
                     device?.Kind ?? DeviceKind.Unknown,
                     groups);
             })

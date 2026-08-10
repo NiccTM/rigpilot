@@ -790,6 +790,34 @@ internal static class Program
         }).Select(control => $"{control.GetType().Name}:{control.Name}:{AutomationProperties.GetAutomationId(control)}").ToArray();
         int namedInteractive = interactive.Length - unnamedInteractive.Length;
 
+        // Read the exact property the Devices page binds, from the live ItemsControl, rather
+        // than trusting the builder that feeds it. A device whose reported name is invisible
+        // but not whitespace (the reference machine's fourth NVMe arrives as forty NUL
+        // characters) passed every core-level check and still rendered a row labelled only
+        // with its sensor count. A header nobody can read is also a header no screen reader
+        // can announce, so this is an accessibility assertion as much as a visual one.
+        List<string> sensorTreeHeadersWithoutVisibleText = [];
+        foreach (ItemsControl sensorTree in byAutomationId.TryGetValue("Devices.SensorTree", out List<FrameworkElement>? sensorTrees)
+            ? sensorTrees.OfType<ItemsControl>()
+            : [])
+        {
+            foreach (object? item in sensorTree.Items)
+            {
+                if (item is SensorTreeDeviceDisplay display && !HasVisibleText(display.DeviceName))
+                {
+                    sensorTreeHeadersWithoutVisibleText.Add(
+                        $"[{display.DeviceId}] ({display.Groups.Sum(group => group.Readings.Count)} sensors)");
+                }
+            }
+        }
+
+        if (sensorTreeHeadersWithoutVisibleText.Count > 0)
+        {
+            errors.Add(
+                "Sensor-tree devices rendered a header with no visible text: "
+                + string.Join(", ", sensorTreeHeadersWithoutVisibleText));
+        }
+
         return new UiAutomationSmokeReport(
             errors.Count == 0,
             DateTimeOffset.UtcNow,
@@ -804,6 +832,7 @@ internal static class Program
             simpleSurfaceWorked,
             advancedSurfaceWorked,
             duplicateIds,
+            sensorTreeHeadersWithoutVisibleText,
             BuildFeatureReadiness(viewModel),
             errors);
     }
@@ -835,6 +864,14 @@ internal static class Program
     private static T Require<T>(FrameworkElement root, string name) where T : FrameworkElement =>
         root.FindName(name) as T ?? throw new InvalidOperationException($"Required UI element {name} is missing.");
 
+    /// <summary>
+    /// Text a person can actually see. Whitespace alone is not enough: control characters
+    /// render as nothing while satisfying <see cref="string.IsNullOrWhiteSpace"/>.
+    /// </summary>
+    private static bool HasVisibleText(string? value) =>
+        value is not null
+        && value.Any(character => !char.IsWhiteSpace(character) && !char.IsControl(character));
+
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
     {
         yield return root;
@@ -862,6 +899,7 @@ internal static class Program
         bool SimpleSurfaceWorked,
         bool AdvancedSurfaceWorked,
         IReadOnlyList<string> DuplicateAutomationIds,
+        IReadOnlyList<string> SensorTreeHeadersWithoutVisibleText,
         FeatureReadinessReport FeatureReadiness,
         IReadOnlyList<string> Errors);
 

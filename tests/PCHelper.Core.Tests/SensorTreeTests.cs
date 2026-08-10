@@ -38,6 +38,145 @@ public sealed class SensorTreeTests
         Assert.Equal(["GPU Core", "GPU Hot Spot"], device.Groups[1].Readings.Select(reading => reading.Name));
     }
 
+    /// <summary>
+    /// Observed on the reference machine: LibreHardwareMonitor reports the fourth NVMe
+    /// device with a name that is 40 spaces, so the Devices page sensor tree drew a row
+    /// carrying nothing but "11 sensors" and sorted it above every named device. A branch
+    /// the user cannot identify is not a tree. The device ID is the fallback because it is
+    /// the one value that is always present and always unique.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("                                        ")]
+    public void ADeviceWhoseNameIsBlankOrWhitespaceFallsBackToItsIdentifier(string reportedName)
+    {
+        IReadOnlyList<SensorTreeDevice> tree = SensorTree.Build(
+            [Device("lhm.device:/nvme/3", reportedName, DeviceKind.Storage)],
+            [Sensor("s1", "lhm.device:/nvme/3", "Temperature", 41, "°C")]);
+
+        SensorTreeDevice device = Assert.Single(tree);
+        Assert.Equal("lhm.device:/nvme/3", device.DeviceName);
+        Assert.False(string.IsNullOrWhiteSpace(device.DeviceName));
+    }
+
+    /// <summary>
+    /// The fallback has to be total. Stopping at the device ID left the reference machine
+    /// still drawing a nameless "11 sensors" row sorted above every named device, because
+    /// the value the chain trusted to be present was itself blank.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("    ")]
+    public void ADeviceWithNeitherANameNorAnIdentifierIsStillLabelled(string blankId)
+    {
+        IReadOnlyList<SensorTreeDevice> tree = SensorTree.Build(
+            [Device(blankId, "   ", DeviceKind.Storage)],
+            [Sensor("s1", blankId, "Temperature", 41, "°C")]);
+
+        SensorTreeDevice device = Assert.Single(tree);
+        Assert.Equal(SensorTree.UnnamedDeviceLabel, device.DeviceName);
+        Assert.False(string.IsNullOrWhiteSpace(device.DeviceName));
+    }
+
+    /// <summary>
+    /// The actual defect. LibreHardwareMonitor reports the reference machine's fourth NVMe
+    /// with a name of forty NUL characters. NUL is a control character, NOT whitespace, so
+    /// <c>IsNullOrWhiteSpace</c> answered false, the string counted as a usable name, and
+    /// WPF rendered it as nothing - a row labelled only "11 sensors", sorted above every
+    /// named device because U+0000 orders before 'A'. Every prior fallback was correct and
+    /// simply never reached.
+    /// </summary>
+    [Theory]
+    [InlineData("\0")]
+    [InlineData("\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")]
+    [InlineData("\t")]
+    [InlineData("\n")]
+    [InlineData("\r\n\t")]
+    [InlineData("")]
+    [InlineData(" \0 \t ")]
+    public void ADeviceNameWithNoVisibleCharactersFallsBackToItsIdentifier(string invisibleName)
+    {
+        IReadOnlyList<SensorTreeDevice> tree = SensorTree.Build(
+            [Device("lhm.device:/nvme/3", invisibleName, DeviceKind.Storage)],
+            [Sensor("s1", "lhm.device:/nvme/3", "Temperature", 41, "°C")]);
+
+        SensorTreeDevice device = Assert.Single(tree);
+        Assert.Equal("lhm.device:/nvme/3", device.DeviceName);
+        Assert.True(HasVisibleText(device.DeviceName));
+    }
+
+    /// <summary>A dirty-but-readable name keeps its text rather than falling back.</summary>
+    [Fact]
+    public void ControlCharactersAreStrippedFromAnOtherwiseReadableName()
+    {
+        IReadOnlyList<SensorTreeDevice> tree = SensorTree.Build(
+            [Device("lhm.device:/nvme/3", "\0Sabrent Rocket 4.0 1TB\0", DeviceKind.Storage)],
+            [Sensor("s1", "lhm.device:/nvme/3", "Temperature", 41, "°C")]);
+
+        Assert.Equal("Sabrent Rocket 4.0 1TB", Assert.Single(tree).DeviceName);
+    }
+
+    /// <summary>The telemetry must survive the rename; a nameless device is never dropped.</summary>
+    [Fact]
+    public void EverySensorIsPreservedUnderAFallenBackLabel()
+    {
+        IReadOnlyList<SensorTreeDevice> tree = SensorTree.Build(
+            [Device("lhm.device:/nvme/3", new string('\0', 40), DeviceKind.Storage)],
+            [
+                Sensor("s1", "lhm.device:/nvme/3", "Temperature", 41, "°C"),
+                Sensor("s2", "lhm.device:/nvme/3", "Available Spare", 100, "%"),
+                Sensor("s3", "lhm.device:/nvme/3", "Read Rate", 12, "MB/s"),
+            ]);
+
+        SensorTreeDevice device = Assert.Single(tree);
+        Assert.Equal(3, device.SensorCount);
+        Assert.True(HasVisibleText(device.DeviceName));
+    }
+
+    /// <summary>
+    /// The invariant the Devices page depends on, asserted over a realistic mixed snapshot:
+    /// every rendered group header carries text a person can actually see.
+    /// </summary>
+    [Fact]
+    public void EveryDeviceInTheTreeHasAVisibleLabel()
+    {
+        IReadOnlyList<SensorTreeDevice> tree = SensorTree.Build(
+            [
+                Device("lhm.device:/amdcpu/0", "AMD Ryzen 7 5800X", DeviceKind.Cpu),
+                Device("lhm.device:/nvme/3", new string('\0', 40), DeviceKind.Storage),
+                Device("", "   ", DeviceKind.Unknown),
+                Device("lhm.device:/ssd/0", "WDC  WDS200T2B0A-00SM50 ", DeviceKind.Storage),
+            ],
+            [
+                Sensor("a", "lhm.device:/amdcpu/0", "Core", 60, "°C"),
+                Sensor("b", "lhm.device:/nvme/3", "Temperature", 41, "°C"),
+                Sensor("c", "", "Orphan", 1, "°C"),
+                Sensor("d", "lhm.device:/ssd/0", "Temperature", 35, "°C"),
+            ]);
+
+        Assert.Equal(4, tree.Count);
+        Assert.All(tree, device => Assert.True(
+            HasVisibleText(device.DeviceName),
+            $"Device '{device.DeviceId}' rendered a header with no visible text."));
+        Assert.Contains(tree, device => device.DeviceName == SensorTree.UnnamedDeviceLabel);
+    }
+
+    private static bool HasVisibleText(string? value) =>
+        value is not null
+        && value.Any(character => !char.IsWhiteSpace(character) && !char.IsControl(character));
+
+    /// <summary>A blank name must stay findable by the identifier the tree now shows.</summary>
+    [Fact]
+    public void AFallenBackDeviceNameIsStillSearchable()
+    {
+        IReadOnlyList<SensorTreeDevice> tree = SensorTree.Build(
+            [Device("lhm.device:/nvme/3", "   ", DeviceKind.Storage)],
+            [Sensor("s1", "lhm.device:/nvme/3", "Temperature", 41, "°C")]);
+
+        Assert.Single(SensorTree.Filter(tree, "nvme"));
+    }
+
     [Theory]
     [InlineData("°C", "Temperatures")]
     [InlineData("RPM", "Fans")]
