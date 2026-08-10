@@ -1540,6 +1540,56 @@ Version bumped to a clean `0.7.0` (VersionPrefix 0.7.0, empty VersionSuffix; com
   protocol 1, 56 devices) and looked like a catastrophic regression. Render into a fresh
   directory, or check file timestamps before believing a snapshot.
 
+## Verification snapshot: 2026-08-09 (deployment of the reviewed source, and the 24-hour soak it started)
+
+- **Deployed commit `5936fdd`** to `0.8.0-alpha-20260809-220106` after restore-then-install
+  through UAC. Handshake Ready, protocol 2, dashboard and service both 0.8.0-beta.1.
+  `PCHelper.Service.dll` and `PCHelper.Core.dll` in the deployment matched the published
+  payload byte for byte (`339A21D4...34C7`). Read-only probe: 26 devices, 235 sensors, 31
+  capabilities, **0 warnings, 13/13 adapters healthy**. `writesEnabled` true,
+  `recoveryRequired` false, no emergency state. No Error/Critical events in Application or
+  System after the deploy. **No new manual hardware writes were issued during acceptance;
+  the previously authorized persisted GPU OC automatically reapplied and was read-back
+  verified at service start** (`activeProfileId: gpu-oc-startup:nvidia:gpu-0`, driver reads
+  back +20 core / +50 memory, 385 W). That reapply IS a live hardware write - it is expected
+  because the overclock was deliberately saved earlier, but it should never be described as
+  "no hardware writes occurred".
+- **Retention fired automatically on the successful deploy, as designed:** 6 runtimes / 2.8 GB
+  down to 3 / 1.18 GB, keeping the new active plus `0.8.0-alpha-20260809-202940` and
+  `0.8.0-alpha-20260802-224047` as rollback targets. No separate manual prune was needed.
+- **A unit defect the deployment surfaced immediately (fixed in `45b68a2`).** The Performance
+  page refused its own slider: `PROFILE_REJECTED: Action 'gpu-slider-...' value must be
+  within 100-385 W`. NVML reports the power limit in MILLIwatts while the capability, its
+  bounds, and the slider are in watts, so live-state seeding opened the slider at 385000 on a
+  control bounded 100-385. The bounds check did its job; the seed was the defect, and nothing
+  on screen could explain it because the number displayed was never the number the slider
+  carried. **Convert mW to W at the NVML boundary only; clock offsets stay MHz end to end.**
+  The regression invariant worth keeping is the general one: *a seeded value must land inside
+  the bounds the same capability publishes.*
+- **24-hour soak configuration.** Persisted GPU OC active (+20 MHz core / +50 MHz memory), GPU
+  fan/power/clock families armed, dashboard open but excluded from footprint accounting.
+  Initial service-side footprint **454.7 MB working set / 211.7 MB private across 5
+  processes** (service 156.9, LibreHardwareMonitor host 118.2, three GPU session helpers
+  71.9 / 64.8 / 42.9). Fan and clock helpers are intentionally resident - the fan helper takes
+  no idle timeout because releasing it hands the cooler to firmware, and the clock helper's
+  release is suppressed while it holds a non-stock offset. The power helper remained resident
+  beyond its documented 120-second idle timeout and is tracked separately as an open lifecycle
+  defect. **This run evaluates memory-growth behaviour under the actual persisted-OC
+  daily-driver state and is not directly comparable to the historical ~307 MB no-OC baseline**,
+  which was measured with no overclock applied and therefore with the clock helper released.
+  CSV: `artifacts\footprint\soak-24h-20260809-220106.csv`, 300 s interval.
+- **Counting note, because it was got wrong once here.** There are five service-side
+  processes, not "four helpers": the service, the LibreHardwareMonitor Adapter Host, and
+  **three** GPU session helpers. Every one of them is a `PCHelper.AdapterHost` image, so a
+  process-name count conflates the LHM host with the GPU session children.
+- **Open lifecycle defect, deliberately NOT investigated during the soak:** the GPU power
+  helper does not release at its 120 s idle timeout. First recorded 2026-07-27 as an
+  uncharacterised observation; now reproduced on a clean deployed build, so it is a real
+  defect rather than an anomaly. Patching it mid-soak would contaminate the baseline. Order of
+  work afterwards: analyse whether working set and private bytes plateau, then investigate the
+  power helper against this exact deployed service, then a SHORT (30-60 minute) no-OC
+  comparison run rather than another immediate 24-hour soak.
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.
