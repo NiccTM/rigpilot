@@ -33,12 +33,12 @@ internal sealed class GpuSessionHost : IDisposable
     private readonly string _sessionToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     private readonly SemaphoreSlim _startGate = new(1, 1);
     private readonly ChildProcessJob _job = new();
-    private readonly object _gate = new();
     private static readonly string ServiceVersion =
         RuntimeVersion.Get(typeof(GpuSessionHost).Assembly);
 
     private readonly TimeSpan? _idleTimeout;
     private readonly Func<bool>? _holdsLiveState;
+    private readonly Func<ProcessStartInfo, Process?> _startProcess;
     private readonly Timer? _idleTimer;
     private long _lastActivityTimestamp = Stopwatch.GetTimestamp();
     private int _inFlight;
@@ -64,18 +64,25 @@ internal sealed class GpuSessionHost : IDisposable
     /// Asked before each idle release. Return true while the family is holding hardware
     /// state that does not outlive the session, which suppresses the release.
     /// </param>
+    /// <param name="startProcess">
+    /// Launches the child. Defaults to <see cref="Process.Start(ProcessStartInfo)"/>; a test
+    /// substitutes a benign long-lived stub so the startup and cancellation paths can be
+    /// exercised without an NVAPI session or real hardware.
+    /// </param>
     public GpuSessionHost(
         string modeArgument,
         string label,
         Func<GpuSessionHost, CancellationToken, Task>? onSessionStarted = null,
         TimeSpan? idleTimeout = null,
-        Func<bool>? holdsLiveState = null)
+        Func<bool>? holdsLiveState = null,
+        Func<ProcessStartInfo, Process?>? startProcess = null)
     {
         _modeArgument = modeArgument;
         _label = label;
         _onSessionStarted = onSessionStarted;
         _idleTimeout = idleTimeout;
         _holdsLiveState = holdsLiveState;
+        _startProcess = startProcess ?? Process.Start;
         _pipeName = $"{ProtocolConstants.AdapterHostPipeName}.{modeArgument.TrimStart('-')}.{Environment.ProcessId}.{Guid.NewGuid():N}";
         if (idleTimeout is TimeSpan timeout)
         {
@@ -302,57 +309,78 @@ internal sealed class GpuSessionHost : IDisposable
             startInfo.ArgumentList.Add(_pipeName);
             startInfo.Environment["PCHELPER_ADAPTER_HOST_TOKEN"] = _sessionToken;
 
-            Process process = Process.Start(startInfo)
+            Process process = _startProcess(startInfo)
                 ?? throw new InvalidOperationException($"{_label} helper could not be started.");
             _job.Add(process);
 
-            Exception? lastError = null;
-            for (int attempt = 0; attempt < 40; attempt++)
+            // Every exit from here that does not publish the child must kill it. The
+            // handshake loop observes the cancellation token in two places, and a cancelled
+            // start used to walk straight out of this method leaving a live AdapterHost that
+            // nothing tracked: `_process` was still null, so the next send spawned another
+            // one, and only host disposal (or service exit) collected the strays through the
+            // job object. That is an orphaned NVAPI session per cancelled start - roughly
+            // 30 MB private each, and for the fan family a session that still owns the cooler.
+            bool published = false;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (process.HasExited)
+                Exception? lastError = null;
+                for (int attempt = 0; attempt < 40; attempt++)
                 {
-                    throw new InvalidOperationException(
-                        $"{_label} helper exited with code {process.ExitCode} during startup.");
-                }
-
-                try
-                {
-                    NamedPipeRequestClient client = new(
-                        _pipeName,
-                        TimeSpan.FromMilliseconds(250),
-                        TimeSpan.FromSeconds(2));
-                    IpcResponse handshake = await client.SendAsync(
-                        NamedPipeRequestClient.CreateRequest(
-                            IpcCommand.Handshake,
-                            new AdapterHostEnvelope<HandshakeRequest>(
-                                _sessionToken,
-                                // Read from the assembly rather than a literal. This was hardcoded
-                                // "0.7.0" and went stale the moment the product version moved; the
-                                // helper discards the value today, so the drift was silent.
-                                new HandshakeRequest("PCHelper.Service", ServiceVersion))),
-                        cancellationToken).ConfigureAwait(false);
-                    if (handshake.Success)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (process.HasExited)
                     {
-                        _process = process;
-                        if (_onSessionStarted is not null)
-                        {
-                            await _onSessionStarted(this, cancellationToken).ConfigureAwait(false);
-                        }
-
-                        return;
+                        throw new InvalidOperationException(
+                            $"{_label} helper exited with code {process.ExitCode} during startup.");
                     }
-                }
-                catch (Exception exception) when (exception is IOException or TimeoutException)
-                {
-                    lastError = exception;
+
+                    try
+                    {
+                        NamedPipeRequestClient client = new(
+                            _pipeName,
+                            TimeSpan.FromMilliseconds(250),
+                            TimeSpan.FromSeconds(2));
+                        IpcResponse handshake = await client.SendAsync(
+                            NamedPipeRequestClient.CreateRequest(
+                                IpcCommand.Handshake,
+                                new AdapterHostEnvelope<HandshakeRequest>(
+                                    _sessionToken,
+                                    // Read from the assembly rather than a literal. This was hardcoded
+                                    // "0.7.0" and went stale the moment the product version moved; the
+                                    // helper discards the value today, so the drift was silent.
+                                    new HandshakeRequest("PCHelper.Service", ServiceVersion))),
+                            cancellationToken).ConfigureAwait(false);
+                        if (handshake.Success)
+                        {
+                            // Published before the callback runs, so a throwing
+                            // `_onSessionStarted` leaves a tracked child the caller can
+                            // recycle rather than a second stray.
+                            _process = process;
+                            published = true;
+                            if (_onSessionStarted is not null)
+                            {
+                                await _onSessionStarted(this, cancellationToken).ConfigureAwait(false);
+                            }
+
+                            return;
+                        }
+                    }
+                    catch (Exception exception) when (exception is IOException or TimeoutException)
+                    {
+                        lastError = exception;
+                    }
+
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
                 }
 
-                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+                throw new TimeoutException($"{_label} helper did not open its private pipe.", lastError);
             }
-
-            await TerminateAsync(process).ConfigureAwait(false);
-            throw new TimeoutException($"{_label} helper did not open its private pipe.", lastError);
+            finally
+            {
+                if (!published)
+                {
+                    await TerminateAsync(process).ConfigureAwait(false);
+                }
+            }
         }
         finally
         {
@@ -390,13 +418,13 @@ internal sealed class GpuSessionHost : IDisposable
         _disposed = true;
         _idleTimer?.Dispose();
 
-        Process? process;
-        lock (_gate)
-        {
-            process = _process;
-            _process = null;
-        }
-
+        // Not a lock: every other mutation of `_process` is serialised by `_startGate`, and
+        // this used to take a private monitor that no other path ever entered - mutual
+        // exclusion in appearance only. Taking the real gate here would risk blocking
+        // disposal behind a start that is itself waiting on a child, so claim the handle
+        // atomically instead. Whoever wins, the child dies: either this call terminates it,
+        // or a start that publishes afterwards is collected by the job object below.
+        Process? process = Interlocked.Exchange(ref _process, null);
         if (process is not null)
         {
             try
