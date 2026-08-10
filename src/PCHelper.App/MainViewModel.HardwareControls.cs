@@ -301,9 +301,17 @@ public sealed partial class MainViewModel
         }
     }
 
-    private double? LiveGpuOcValue(string prefix)
+    private double? LiveGpuOcValue(string prefix) => LiveGpuOcValue(_gpuOcLiveState, prefix);
+
+    /// <summary>
+    /// The live driver reading a GPU control slider is seeded from, in the capability's own
+    /// unit. Pure and static so the unit conversion is directly testable: it was wrong once,
+    /// and a slider seeded outside its own bounds is refused by the transaction rather than
+    /// by anything the user can see.
+    /// </summary>
+    internal static double? LiveGpuOcValue(GpuOcLiveStateV1? state, string prefix)
     {
-        if (_gpuOcLiveState is not { Available: true } live)
+        if (state is not { Available: true } live)
         {
             return null;
         }
@@ -312,7 +320,15 @@ public sealed partial class MainViewModel
         {
             "gpuclock.core:" => live.CoreOffsetMegaHertz,
             "gpuclock.memory:" => live.MemoryOffsetMegaHertz,
-            "gpupower.limit:" => live.PowerLimitMilliwatts,
+            // NVML reports the power limit in MILLIwatts; the capability, its bounds, and
+            // therefore the slider are all in WATTS. Seeding the slider with the raw field
+            // put 385000 on a control bounded 100-385, so the next apply was refused with
+            // "PROFILE_REJECTED: value must be within 100-385 W" - the slider itself was
+            // handing the transaction a value its own bounds forbid. The clock offsets need
+            // no conversion because they are already megahertz on both sides.
+            "gpupower.limit:" => live.PowerLimitMilliwatts is uint milliwatts
+                ? milliwatts / 1000d
+                : null,
             _ => null
         };
     }
