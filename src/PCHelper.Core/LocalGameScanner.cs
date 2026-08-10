@@ -78,7 +78,21 @@ public static partial class LocalGameScanner
                 warnings.Add($"Steam manifest is incomplete: {Path.GetFileName(manifest)}");
                 continue;
             }
-            string installPath = Path.Combine(steamApps, "common", installDir);
+            // `installdir` is attacker-controllable text from a file in a user-writable
+            // directory, so it is contained exactly as Epic, GOG, and Xbox contain theirs.
+            // Steam was the one scanner combining it raw: an `installdir` of `..\..\..\
+            // Windows\System32` walked straight out of the library and indexed executables
+            // from anywhere on disk, which then appear in the games list as a launchable
+            // entry under a name the manifest also chose. A rejection is per-manifest
+            // rather than thrown, because the only catch is around the whole store scan
+            // and one poisoned file must not cost the user every other Steam game.
+            string commonRoot = Path.Combine(steamApps, "common");
+            if (!TrySafeCombine(commonRoot, installDir, out string installPath))
+            {
+                warnings.Add($"Steam manifest '{Path.GetFileName(manifest)}' has an install directory that escapes the library; ignored.");
+                continue;
+            }
+
             string? executable = FindGameExecutable(installPath);
             if (executable is null)
             {
@@ -289,6 +303,24 @@ public static partial class LocalGameScanner
         element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    /// <summary>
+    /// Non-throwing <see cref="SafeCombine"/> for callers that must reject one manifest
+    /// and keep scanning the rest of the store.
+    /// </summary>
+    private static bool TrySafeCombine(string root, string relative, out string combined)
+    {
+        try
+        {
+            combined = SafeCombine(root, relative);
+            return true;
+        }
+        catch (Exception exception) when (exception is InvalidDataException or ArgumentException or IOException)
+        {
+            combined = string.Empty;
+            return false;
+        }
+    }
 
     private static string SafeCombine(string root, string relative)
     {
