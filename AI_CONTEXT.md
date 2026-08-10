@@ -1398,6 +1398,148 @@ Version bumped to a clean `0.7.0` (VersionPrefix 0.7.0, empty VersionSuffix; com
 - **Startup auto-arm raced the GPU adapters.** At `--tray` sign-in startup the dashboard armed hardware control before the GPU capabilities were in the snapshot, sent an empty exact-device confirmation, was refused with *"Arming hardware control requires exact-device confirmation for 'nvidia:gpu-0'"*, and burned its single per-connection attempt. It now defers the attempt (without consuming the one-shot flag) until the snapshot actually carries a `gpufan`/`gpupower`/`gpuclock` capability. Separately, arming advances the service state revision, so the client now syncs its cached revision from the arm response — otherwise a GPU control action taken right after the auto-arm failed with `STATE_REVISION_MISMATCH`.
 - **Operational notes.** The dashboard remembers hardware control in `%LOCALAPPDATA%\RigPilot\control-preferences.json`; a CLI `gpu-*-disarm` while it is closed leaves that preference `false`, and the app then correctly does **not** auto-arm — check that file before treating a non-arming dashboard as a defect. `Update-LocalAlphaRuntime.ps1` caps `-ServiceTimeoutSeconds` at 90.
 
+## Verification snapshot: 2026-08-09 (repository review pass; a helper-start process leak, and the audit gate red again)
+
+- **`GpuSessionHost` leaked a helper process on every cancelled start.** The handshake loop
+  observes the cancellation token twice (`ThrowIfCancellationRequested` and the retry
+  `Task.Delay`), and a cancellation walked straight out of `EnsureAsync` with the child already
+  spawned but `_process` still null. Nothing tracked it, so the next send spawned another, and
+  the strays were collected only by the job object at host disposal or service exit. Each stray
+  is an orphaned NVAPI session (~30 MB private), and for the fan family one that still owns the
+  cooler — the state this repository has repeatedly had to reboot out of. The start is now
+  wrapped so every non-publishing exit terminates the child, with the publish flag set before
+  `_onSessionStarted` runs so a throwing callback leaves a *tracked* child rather than a second
+  stray. **`AdapterHostProxy.EnsureHostAsync` already did this** via a catch-all that terminates
+  and rethrows; the defect was the divergence between the two hosts, not the pattern.
+- **Regression coverage proves the leak rather than describing it.** `GpuSessionStartupLeakTests`
+  drives the real `EnsureAsync` through a new `startProcess` seam using a bounded `ping` stub —
+  no NVAPI session, no hardware, CI-safe. Reverted against the pre-fix control flow the
+  cancellation case fails with "A start that never published its child left it running"; the
+  give-up case passes either way, so it is a guard on already-correct behaviour rather than a
+  regression test. The assertion holds an independent handle to the child because
+  `TerminateAsync` disposes the host's own `Process` object.
+- **`Dispose` took a private monitor that no other path entered.** `_process` is serialised by
+  `_startGate` everywhere else, so the `lock (_gate)` was mutual exclusion in appearance only.
+  Replaced with `Interlocked.Exchange`; taking the real gate would risk blocking disposal behind
+  a start that is itself waiting on a child.
+- **`npm audit --audit-level=high` was red again: 5 vulnerabilities (2 high).** `undici` under
+  `miniflare` under `wrangler`, plus `nanoid`/`postcss` under `vite` under `vitest`. Same class
+  as 2026-07-24: every one is a transitive **devDependency**, and `report-api/package.json`
+  declares no runtime dependencies at all, so none reach the deployed Worker. The declared
+  `^` ranges already permitted the fixes, so **only `package-lock.json` moved** — `package.json`
+  is untouched. Gate restored to 0 vulnerabilities; `tsc --noEmit` and 7 Worker tests still pass.
+- **Observed this run.** Locked restore clean; Release build **0 warnings / 0 errors**; full
+  suite **647 integration + 624 core = 1,271 passed, 0 failed, 7 skipped** (both skips are honest
+  probing gates — a live-hardware env gate and a symlink-privilege probe). 26/26 PowerShell
+  scripts parse. Distribution hygiene 39/39 checks ready against the published payload. Runtime
+  payload validation passed (7 components, protocol 2). All nine pages rendered at 1224x761 and
+  at compact 960x640 and inspected as images; columns collapse correctly with no clipping,
+  overlap, or unreachable controls. `Test-ReleaseReadiness.ps1` still correctly blocks signed
+  alpha and 1.0 (no code-signing certificate, zero signed systems of 18).
+- **Verified read-only against the service tier:** no `HttpClient`/`Socket`/`WebRequest` type
+  appears anywhere in `PCHelper.Service`, `PCHelper.Adapters`, or `PCHelper.AdapterHost`, so
+  rule 11 holds by construction. Adapter-pack extraction rejects rooted/`..`/empty segments and
+  re-checks the resolved path against a root with a trailing separator, so the classic
+  `root` vs `rootevil` prefix escape is closed. Non-finite samples are filtered at the SQLite
+  write itself (`SqliteStateStore.cs`), not only at the callers.
+- **Still open, unchanged by this pass.** `C:\ProgramData\RigPilot\LocalAlpha` holds 6 runtimes /
+  2.8 GB with **no retention policy** — the growth flagged on 2026-07-26 returns after every
+  prune. The 24-hour soak remains OPEN. An empty `--help` **directory** sits in the repository
+  root, created by some earlier mis-parsed script invocation; it is untracked and harmless but
+  should be removed and its source found.
+
+## Verification snapshot: 2026-08-09 (continuation pass: the untraced subsystems)
+
+- **Steam was the one game scanner without path containment.** Epic, GOG, and Xbox all route
+  their manifest paths through `SafeCombine`; Steam combined `installdir` from the .acf raw.
+  An `installdir` of `..\..\..\Outside` therefore walked out of the library and indexed
+  executables from anywhere on disk, which then appear in the games list as a launchable
+  entry under a name the same manifest chose. Proven by reverting the fix: the escape test
+  fails with "Filter matched in collection". The rejection is per-manifest rather than
+  thrown, because the only try/catch wraps the whole store scan and one poisoned file must
+  not cost the user every other Steam game (`LocalGameScannerTests`, 2 new cases). The Epic
+  half was already tested, which is exactly why the Steam gap survived.
+- **LocalAlpha retention now exists** (`scripts\Invoke-LocalAlphaRetention.ps1`), wired into
+  the successful-deployment path in `Install-LocalAlphaRuntime.ps1` and **dry-run by
+  default**. It keeps the active runtime plus the two newest previously-successful ones and
+  prunes staged deployments that never completed. The active runtime is resolved from the
+  running service's own ImagePath, never from a name or timestamp, and an unresolvable
+  active path deletes NOTHING - that is the case where deleting the wrong directory stops
+  the hardware service from starting. Reparse points are refused rather than followed.
+  Dry run against the live root: active `0.8.0-alpha-20260809-202940`, 3 superseded runtimes,
+  1.5 GB reclaimable. Six tests pin it, including "active is never deleted" and "an active
+  path outside the root deletes nothing". Deliberately NOT wired into service startup.
+- **The `--help` directory in the repository root is root-caused and fixed.**
+  `generate-gamebar-assets.ps1` has a single positional `$OutputDirectory` that it creates
+  immediately. Run through the call operator - the normal way a script is invoked at a
+  prompt - `generate-gamebar-assets.ps1 --help` binds `--help` to it verbatim and
+  `New-Item` created a literal `.\--help` folder. Confirmed with a probe script: via the
+  call operator the parameter binds to `[--help]`, via `-File` it does not, which is why it
+  only happened sometimes. The script now prints usage and refuses switch-shaped paths. The
+  empty directory was removed after confirming it was untracked and contained nothing.
+- **Auto OC V3 adversarial pass - the envelope cannot be bypassed.** Bounds are built
+  service-side in `CreateAutoOcTuneRequest` from the capability's own range, so a client
+  cannot supply its own; `ApplyCrashCeiling` only ever tightens; and candidate generation
+  clamps every value with `Math.Min(maximum, value)`, so rounding cannot exceed the ceiling.
+  Journal-before-write is explicit (`BeginCandidate` precedes the apply). Cancellation
+  reaches restoration because `retainedForCompositeScreening` is only set after success. A
+  failed restore throws `HardwareOperationRecoveryException` **even when the operation
+  itself succeeded**, so it can never be reported as success. Throughput regression is
+  rejected rather than scored (`>= baselineThroughput`), and a missing measurement fails
+  closed rather than reading as safe. A crash ceiling is keyed by capability rather than GPU
+  identity, which is conservative-only (it can over-restrict after a GPU swap, never
+  under-restrict).
+- **SMBus cannot reach SPD.** Exactly one production `ISmbusTransport` exists, both of its
+  write methods call `SmbusAddressPolicy.EnsureWritable` before the transfer, and no code
+  outside it issues `ioctl_smbus_xfer`. Writes are default-deny outside 0x70-0x77 with the
+  TSOD / SPA-SWP / PMIC / SPD ranges named and blocked explicitly; reads additionally allow
+  0x50-0x57 for bus-location evidence only. The ENE register map is built from internal
+  constants, never from caller input.
+- **Effect sandbox is denied by construction:** navigation cancelled, every web resource
+  (filter `*`, context `All`) answered 403 from `Stream.Null`, downloads cancelled, all
+  permissions denied, host objects and devtools off, plus a job-object memory cap. Effect
+  input is bounds-checked for LED count, non-finite elapsed/coordinates/sensors, and audio
+  bins outside [0,1]; the watchdog is bounded to 50-5000 ms.
+- **Automation resolution is correct**, including the case most likely to be wrong: overnight
+  schedules wrap properly (`start <= end ? [start,end) : now >= start || now < end`), the
+  single observation site uses local `DateTimeOffset.Now` so wall-clock schedules mean what
+  the user typed, and parsing is `TimeSpan.TryParseExact` under InvariantCulture.
+- **Macro playback releases held input in a `finally`**, which covers cancellation as well as
+  a throwing step, with a per-release try/catch so one failure cannot skip the rest. Success
+  requires `error is null && executed == Steps.Count`.
+- **RESOLVED - and the name was never 40 spaces.** The Devices sensor tree drew one row
+  labelled only "11 sensors". A temporary diagnostic dumping the exact strings the rendered
+  collection receives showed the truth: `lhm.device:/nvme/3` arrives from
+  LibreHardwareMonitor with a name of **forty NUL characters** (`\0`), not spaces. JSON and
+  console output render NUL invisibly, which is what made it look like whitespace and sent
+  three separate fallback attempts to the wrong place. **NUL is a control character, not
+  whitespace**, so `string.IsNullOrWhiteSpace` answers *false*, the string counted as a
+  perfectly good name, and every fallback was correct but never reached. It also explains
+  the row sorting above every named device, since U+0000 orders before 'A'.
+  `SensorTree.NormaliseLabel` now strips control characters and treats "no visible
+  characters" as no name, so the chain is name -> identifier -> `UnnamedDeviceLabel`. A
+  merely dirty name ("AMD\0Ryzen") keeps its readable text rather than falling back.
+  **Lesson: `IsNullOrWhiteSpace` is not an "is this renderable?" test.**
+- **The UI smoke now asserts the invariant at the rendered layer.** `InspectAutomationSurface`
+  reads `SensorTreeDeviceDisplay.DeviceName` - the exact property the Expander header and its
+  `AutomationProperties.Name` bind - straight off the live `Devices.SensorTree` ItemsControl,
+  and fails when any header has no visible text. Reverting the fix makes it fail with
+  *"Sensor-tree devices rendered a header with no visible text: [lhm.device:/nvme/3]
+  (11 sensors)"*. That is deliberately a UI-layer check: the core builder tests stayed green
+  through every earlier attempt at this bug, so a core-only assertion would not have caught
+  it. It is an accessibility assertion as much as a visual one - a header nobody can read is
+  a header no screen reader can announce.
+- **Observed this run.** Release build 0 warnings / 0 errors. Full suite **653 integration +
+  632 core = 1,285 passed, 0 failed, 7 skipped**. report-api: tsc clean, 7 tests, **0
+  vulnerabilities**. 27/27 PowerShell scripts parse. Distribution hygiene 39/39. Runtime
+  payload 7 components / protocol 2. `Test-ReleaseReadiness.ps1` still blocks signed alpha
+  and 1.0. All nine pages rendered at 1224x761 and 960x640 and every one inspected as an
+  image.
+- **Verification-tooling trap worth remembering:** `artifacts\ui-final-compact` already
+  existed from 2026-07-12, so the first images read back were pre-rebrand ("PC Helper",
+  protocol 1, 56 devices) and looked like a catastrophic regression. Render into a fresh
+  directory, or check file timestamps before believing a snapshot.
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.
