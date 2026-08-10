@@ -3,6 +3,24 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The sole parameter is positional and is created immediately, so a help-style token
+# became a DIRECTORY instead of a usage message. Run through the call operator - the
+# normal way a script is invoked at a prompt - "generate-gamebar-assets.ps1 --help"
+# binds "--help" to $OutputDirectory verbatim, and the New-Item below created a
+# literal ".\--help" folder relative to the current directory. That is exactly how the
+# empty "--help" directory in the repository root appeared. (Invoked with -File the
+# token is ignored instead, which is why it only happened sometimes.) Refuse anything
+# switch-shaped rather than turning a typo into a stray directory.
+if ($OutputDirectory -match '^\s*(-|/\?)') {
+    Write-Host "Usage: generate-gamebar-assets.ps1 [-OutputDirectory <path>]"
+    Write-Host ""
+    Write-Host "Renders the Game Bar widget PNG assets. With no argument it writes to"
+    Write-Host "src\PCHelper.GameBarWidget\Assets."
+    if ($OutputDirectory -match '^\s*(--?h(elp)?|/\?)\s*$') { exit 0 }
+    throw "OutputDirectory '$OutputDirectory' looks like a switch, not a path. Refusing to create a directory with that name."
+}
+
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 

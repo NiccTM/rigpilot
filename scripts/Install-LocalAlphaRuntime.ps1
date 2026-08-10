@@ -343,6 +343,27 @@ try {
     $manifest.deployed = $true
     $manifest.deployedAt = [DateTimeOffset]::UtcNow
     Write-Manifest $manifest $manifestPath
+
+    # Prune superseded runtimes now that this one is deployed and proven. This is the only
+    # correct moment: the new runtime is active and handshake-verified, so the retention
+    # script can resolve it from the service and keep a real rollback history behind it.
+    # Deliberately best-effort - a deployment that succeeded must never be reported as
+    # failed because housekeeping did not run. Each staged runtime costs ~0.5 GB and
+    # nothing used to remove them (145 runtimes / 63.3 GB on 2026-07-26).
+    try {
+        $retention = & (Join-Path $PSScriptRoot "Invoke-LocalAlphaRetention.ps1") `
+            -DeploymentRoot (Split-Path -Parent $stageRoot) -Apply
+        $manifest.retention = [ordered]@{
+            active = $retention.Active
+            retained = @($retention.Retained)
+            deletedCount = @($retention.Deleted).Count
+            reclaimedGB = $retention.ReclaimedGB
+        }
+    }
+    catch {
+        $manifest.retention = [ordered]@{ error = ($_ | Out-String) }
+    }
+    Write-Manifest $manifest $manifestPath
 }
 catch {
     $manifest.failure = $_ | Out-String
