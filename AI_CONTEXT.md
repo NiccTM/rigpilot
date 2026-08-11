@@ -1698,6 +1698,13 @@ generation must reliably finalise; and per-process private commit belongs in the
 
 ## GPU session helper lifecycle (proven, 2026-08-10/11)
 
+> **Provenance note.** `8a47f5d` added the role telemetry and its message also claims to
+> document this lifecycle. It does not - the scripted edit that was to add this section failed
+> its anchor while the commit went ahead with the script change alone. The documentation
+> arrived in the follow-up commit `bfd2670`. `8a47f5d` was deliberately not rewritten, since it
+> was already pushed. Do not read that message as evidence this section existed a commit
+> earlier than it did.
+
 Three `PCHelper.AdapterHost` children hold one NVIDIA control session each, plus a general
 host for LibreHardwareMonitor. Their residency rules are NOT the same, and the differences
 are load-bearing rather than incidental:
