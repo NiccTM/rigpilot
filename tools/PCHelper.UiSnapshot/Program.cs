@@ -818,6 +818,55 @@ internal static class Program
                 + string.Join(", ", sensorTreeHeadersWithoutVisibleText));
         }
 
+        // Two GPU-slider defects reached a live machine because every test asserted a view
+        // model helper's output rather than anything rendered: the seeded value never reached
+        // the bound control, and GpuControlSlider had no INotifyPropertyChanged so a value
+        // assigned after construction could not reach it either. Both are invisible to a
+        // helper assertion and obvious to a bound-control one. This checks the real Slider
+        // controls on the Performance page, then proves they still follow a later assignment.
+        List<string> gpuSliderBindingFailures = [];
+        Slider[] gpuSliders = [.. Descendants(window)
+            .OfType<Slider>()
+            .Where(slider => slider.DataContext is MainViewModel.GpuControlSlider)];
+        foreach (Slider control in gpuSliders)
+        {
+            MainViewModel.GpuControlSlider model = (MainViewModel.GpuControlSlider)control.DataContext;
+            if (Math.Abs(control.Value - model.Value) > 0.001)
+            {
+                gpuSliderBindingFailures.Add(
+                    $"{model.Name}: control shows {control.Value} but the view model holds {model.Value}");
+            }
+        }
+
+        // Notification probe: move the model and require the control to follow. Purely a UI
+        // binding check on a throwaway snapshot process - it assigns no hardware, issues no
+        // IPC, and the original value is restored immediately.
+        if (gpuSliders.FirstOrDefault() is Slider probe
+            && probe.DataContext is MainViewModel.GpuControlSlider probeModel)
+        {
+            double original = probeModel.Value;
+            double moved = Math.Abs(original - probeModel.Minimum) > 1
+                ? original - 1
+                : original + 1;
+            probeModel.Value = moved;
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+            if (Math.Abs(probe.Value - moved) > 0.001)
+            {
+                gpuSliderBindingFailures.Add(
+                    $"{probeModel.Name}: the control did not follow a value assigned after "
+                    + "construction, so the bound property raises no change notification");
+            }
+
+            probeModel.Value = original;
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+        }
+
+        if (gpuSliderBindingFailures.Count > 0)
+        {
+            errors.Add("GPU control sliders do not reflect their view model: "
+                + string.Join("; ", gpuSliderBindingFailures));
+        }
+
         return new UiAutomationSmokeReport(
             errors.Count == 0,
             DateTimeOffset.UtcNow,
@@ -833,6 +882,8 @@ internal static class Program
             advancedSurfaceWorked,
             duplicateIds,
             sensorTreeHeadersWithoutVisibleText,
+            gpuSliderBindingFailures,
+            gpuSliders.Length,
             BuildFeatureReadiness(viewModel),
             errors);
     }
@@ -900,6 +951,8 @@ internal static class Program
         bool AdvancedSurfaceWorked,
         IReadOnlyList<string> DuplicateAutomationIds,
         IReadOnlyList<string> SensorTreeHeadersWithoutVisibleText,
+        IReadOnlyList<string> GpuSliderBindingFailures,
+        int GpuSliderControlsChecked,
         FeatureReadinessReport FeatureReadiness,
         IReadOnlyList<string> Errors);
 
