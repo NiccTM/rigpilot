@@ -82,8 +82,42 @@ if ($outputDirectory -and -not (Test-Path -LiteralPath $outputDirectory)) {
 
 $summaryPath = [System.IO.Path]::ChangeExtension($OutputPath, $null) + "summary.txt"
 
+function Get-AdapterHostRoles {
+    <#
+        Maps AdapterHost PIDs to their session role, so per-process rows are attributable
+        without correlating named pipes by hand.
+
+        Four processes share the image name PCHelper.AdapterHost - the general/LHM host plus
+        one child per GPU session - and every distinguishing fact lives in the command line.
+        Pipe names carry the mode but are stamped with the SERVICE pid, not the child's, so
+        they identify which sessions exist and never which process is which.
+
+        Win32_Process.CommandLine is unreadable for a LocalSystem process from an unelevated
+        context: it returns null rather than failing, which previously produced a role table
+        that silently labelled everything - including the service - as the default. Roles are
+        therefore reported as "unknown" when the read is denied, never guessed from memory
+        size or spawn order.
+    #>
+    $roles = @{}
+    try {
+        foreach ($row in @(Get-CimInstance Win32_Process -Filter "Name='PCHelper.AdapterHost.exe'" -ErrorAction Stop)) {
+            $role = switch -Regex ([string]$row.CommandLine) {
+                '--gpu-fan-session'   { 'fan'; break }
+                '--gpu-power-session' { 'power'; break }
+                '--gpu-clock-session' { 'clock'; break }
+                '\S'                  { 'general'; break }
+                default               { 'unknown' }
+            }
+            $roles[[string]$row.ProcessId] = $role
+        }
+    }
+    catch {
+    }
+    return $roles
+}
+
 function Get-FootprintSample {
-    param([string[]]$Names)
+    param([string[]]$Names, [hashtable]$Roles)
 
     $processes = @(Get-Process -Name $Names -ErrorAction SilentlyContinue)
     $sample = [pscustomobject]@{
@@ -161,7 +195,10 @@ function Get-FootprintSample {
         "$($_.Name)#$($_.Id)=$([math]::Round($_.WorkingSet64 / 1MB, 1))"
     }) -join " "
     $sample.ProcessBreakdown = ($ordered | ForEach-Object {
-        "$($_.Name)#$($_.Id):ws=$([math]::Round($_.WorkingSet64 / 1MB, 1));private=$([math]::Round($_.PrivateMemorySize64 / 1MB, 1))"
+        $role = if ($_.Name -ne 'PCHelper.AdapterHost') { 'n/a' }
+                elseif ($null -ne $Roles -and $Roles.ContainsKey([string]$_.Id)) { $Roles[[string]$_.Id] }
+                else { 'unknown' }
+        "$($_.Name)#$($_.Id):role=$role;ws=$([math]::Round($_.WorkingSet64 / 1MB, 1));private=$([math]::Round($_.PrivateMemorySize64 / 1MB, 1))"
     }) -join "|"
 
     return $sample
@@ -173,9 +210,10 @@ function Get-ProcessCommitMap {
     $map = @{}
     if ([string]::IsNullOrWhiteSpace($Breakdown)) { return $map }
     foreach ($record in ($Breakdown -split '\|')) {
-        if ($record -match '^(?<name>.+)#(?<pid>\d+):ws=(?<ws>[-\d\.]+);private=(?<private>[-\d\.]+)$') {
+        if ($record -match '^(?<name>.+)#(?<pid>\d+):(role=(?<role>[^;]+);)?ws=(?<ws>[-\d\.]+);private=(?<private>[-\d\.]+)$') {
             $map[$Matches['pid']] = [pscustomobject]@{
                 Name       = $Matches['name']
+                Role       = if ($Matches['role']) { $Matches['role'] } else { 'n/a' }
                 WorkingSet = [double]$Matches['ws']
                 Private    = [double]$Matches['private']
             }
@@ -255,8 +293,8 @@ function New-FootprintSummary {
         if ($firstMap.ContainsKey($processId) -and $lastMap.ContainsKey($processId)) {
             $a = $firstMap[$processId]
             $b = $lastMap[$processId]
-            $lines.Add(("  {0,-24} #{1,-6} ws {2,8} -> {3,-8} ({4,7})   private {5,8} -> {6,-8} ({7,7})" -f `
-                $a.Name, $processId, $a.WorkingSet, $b.WorkingSet, [math]::Round($b.WorkingSet - $a.WorkingSet, 1), `
+            $lines.Add(("  {0,-22} #{1,-6} {2,-8} ws {3,8} -> {4,-8} ({5,7})   private {6,8} -> {7,-8} ({8,7})" -f `
+                $a.Name, $processId, $a.Role, $a.WorkingSet, $b.WorkingSet, [math]::Round($b.WorkingSet - $a.WorkingSet, 1), `
                 $a.Private, $b.Private, [math]::Round($b.Private - $a.Private, 1)))
         }
         elseif ($lastMap.ContainsKey($processId)) {
@@ -307,7 +345,7 @@ Write-Host "Summary : $summaryPath"
 
 try {
     while ((Get-Date) -lt $deadline) {
-        $sample = Get-FootprintSample -Names $processNames
+        $sample = Get-FootprintSample -Names $processNames -Roles (Get-AdapterHostRoles)
         $samples.Add($sample)
         $sample | Export-Csv -LiteralPath $OutputPath -NoTypeInformation -Append -Encoding utf8
 
