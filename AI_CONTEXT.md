@@ -1696,6 +1696,33 @@ generation must reliably finalise; and per-process private commit belongs in the
   is ~3 MB of drift inside a 6.6 MB band. Do not read a slope as a trend when the window's own
   band exceeds it.
 
+## GPU session helper lifecycle (proven, 2026-08-10/11)
+
+Three `PCHelper.AdapterHost` children hold one NVIDIA control session each, plus a general
+host for LibreHardwareMonitor. Their residency rules are NOT the same, and the differences
+are load-bearing rather than incidental:
+
+| family | resting behaviour | why |
+| --- | --- | --- |
+| **fan** | intentionally persistent while owned | Process exit hands the cooler back to firmware, so releasing it would silently abandon an applied manual duty or a running cooling graph. `RemoteGpuFanCoolerTransport` passes NO idle timeout: its protection is the absence of an argument. |
+| **clock** | persistent while offsets require the live session | An NVAPI pstates20 delta lives with the session that set it, so a released helper reverts a verified overclock to stock. `HoldsAppliedOffset` suppresses idle release while any domain holds a non-zero offset; at stock it releases normally. |
+| **power** | idle-releasable, always | The NVML power limit is retained by the driver across helper exit, so the session owns no state. It carries a 2-minute idle timeout and NO hold predicate. |
+
+Live-proven in both directions: with a persisted +20/+50 overclock the clock helper stays
+resident and the power helper releases; after restoring stock offsets the clock helper releases
+too, leaving service + LHM host + fan. Measured cost of a resident clock helper on this
+machine: ~54 MB working set.
+
+**Attributing a PID to a role needs the command line, which needs elevation.** Four processes
+share the image name; pipe names carry the session mode but are stamped with the SERVICE pid,
+so they prove which sessions exist and never which process is which.
+`Win32_Process.CommandLine` returns null rather than failing for a LocalSystem process read
+unelevated - a silent null that once produced a role table labelling every process, including
+the service, as the default. `Measure-RuntimeFootprint.ps1` records `role=` per AdapterHost row
+and reports `unknown` when the read is denied. Never infer a role from memory size or spawn
+order. Verified on this machine: unelevated every AdapterHost reads `unknown`; elevated the
+same processes resolve `37080=general, 36972=fan, 39836=clock`.
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.
