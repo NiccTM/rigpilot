@@ -84,7 +84,7 @@ public static class SensorTree
     /// is merely dirty ("AMD\0Ryzen") keeps its readable text instead of falling back to an
     /// identifier.</para>
     /// </summary>
-    internal static string? NormaliseLabel(string? value)
+    public static string? NormaliseLabel(string? value)
     {
         if (value is null)
         {

@@ -4140,7 +4140,17 @@ public sealed class PCHelperRuntime(ILogger<PCHelperRuntime> logger) : IAsyncDis
         {
             DeleteGpuOcStartupProfile();
             _gpuOcSentinel?.MarkSettled();
-            _gpuOcStartupMessage = "Saved GPU overclock cleared; it will not be reapplied at startup.";
+            // Says what it did NOT do as well as what it did. Deleting the persisted record
+            // and restoring the card are deliberately separate operations - the offsets the
+            // driver is enforcing right now are untouched by this - and an operator who reads
+            // "cleared" as "back to stock" will believe a machine still running an overclock
+            // is at defaults. Observed exactly that during the no-OC comparison: the clock
+            // session helper stayed resident after a clear, correctly, because +20/+50 were
+            // still applied.
+            _gpuOcStartupMessage =
+                "Saved GPU overclock cleared; it will not be reapplied at startup. "
+                + "The offsets currently applied to the card were NOT changed - clearing the "
+                + "startup record and restoring the card are separate operations.";
             return Success(request, new GpuOcStartupPersistenceStatus(false, payload.DeviceId, 0, _gpuOcStartupMessage));
         }
 

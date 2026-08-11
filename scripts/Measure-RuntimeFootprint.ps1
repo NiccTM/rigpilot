@@ -121,6 +121,11 @@ function Get-FootprintSample {
 
     $processes = @(Get-Process -Name $Names -ErrorAction SilentlyContinue)
     $sample = [pscustomobject]@{
+        # 1 = the original shape (aggregate + working-set-only Breakdown). 2 adds CPU
+        # validity accounting, per-process private commit, and the AdapterHost role. A file
+        # with no column is implicitly version 1, so a parser never has to infer which
+        # fields to expect.
+        SchemaVersion        = 2
         TimestampUtc         = (Get-Date).ToUniversalTime().ToString("o")
         ProcessCount         = $processes.Count
         WorkingSetMB         = 0.0

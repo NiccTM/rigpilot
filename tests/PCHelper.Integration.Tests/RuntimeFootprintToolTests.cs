@@ -122,6 +122,7 @@ public sealed class RuntimeFootprintToolTests
         Run run = Shared.Value;
         string[] lines = File.ReadAllLines(run.Csv);
 
+        Assert.Contains("SchemaVersion", lines[0], StringComparison.Ordinal);
         Assert.Contains("ProcessBreakdown", lines[0], StringComparison.Ordinal);
         Assert.Contains("Breakdown", lines[0], StringComparison.Ordinal);
 
@@ -129,7 +130,7 @@ public sealed class RuntimeFootprintToolTests
         if (body.Contains("PCHelper.", StringComparison.Ordinal))
         {
             // Only assert the record grammar when this machine actually had processes to record.
-            Assert.Matches(@"[A-Za-z\.]+#\d+:ws=[-\d\.]+;private=[-\d\.]+", body);
+            Assert.Matches(@"[A-Za-z\.]+#\d+:role=[^;]+;ws=[-\d\.]+;private=[-\d\.]+", body);
         }
     }
 
