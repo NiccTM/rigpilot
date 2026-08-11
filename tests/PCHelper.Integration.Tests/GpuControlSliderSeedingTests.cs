@@ -87,3 +87,124 @@ public sealed class GpuControlSliderSeedingTests
     public void AnUnknownCapabilityPrefixSeedsNothing() =>
         Assert.Null(MainViewModel.LiveGpuOcValue(Live(), "gpufan.duty:"));
 }
+
+/// <summary>
+/// The Performance page opened showing 0 MHz on both clock sliders while the driver was
+/// enforcing +20/+50, beside a ticked "reapply at startup" box.
+///
+/// <para>The slider collection is rebuilt only when the capability SET changes, so the single
+/// rebuild happens the first time capabilities arrive - before any live read has landed. Every
+/// slider therefore took its fallback: 0 for a clock offset, and the range maximum for power.
+/// On the reference machine that power fallback is 385 W, which is ALSO the applied limit, so
+/// the page looked half-correct and hid the defect. Nothing rebuilt afterwards because the
+/// capability set never changes again.</para>
+///
+/// <para>These pin the reseed that fixes it. They fail before it exists, because without a
+/// reseed the sliders keep whatever the fallback gave them.</para>
+/// </summary>
+public sealed class GpuControlSliderReseedTests
+{
+    private static MainViewModel.GpuControlSlider Slider(string capabilityId, double min, double max, double seeded) =>
+        new()
+        {
+            CapabilityId = capabilityId,
+            Name = capabilityId,
+            Minimum = min,
+            Maximum = max,
+            Value = seeded
+        };
+
+    private static GpuOcLiveStateV1 Live(int? core, int? memory, uint? powerMilliwatts) =>
+        new(true, core, memory, powerMilliwatts, "Read back from the display driver.");
+
+    /// <summary>The exact live state and the exact fallback values observed on the machine.</summary>
+    [Fact]
+    public void FallbackSeededSlidersAreCorrectedFromLiveState()
+    {
+        MainViewModel.GpuControlSlider core = Slider("gpuclock.core:0", -1000, 1000, 0);
+        MainViewModel.GpuControlSlider memory = Slider("gpuclock.memory:0", -1000, 3000, 0);
+        MainViewModel.GpuControlSlider power = Slider("gpupower.limit:0", 100, 385, 385);
+
+        bool changed = MainViewModel.ApplyLiveStateToSliders(
+            [core, memory, power], Live(20, 50, 385_000));
+
+        Assert.True(changed);
+        Assert.Equal(20, core.Value);
+        Assert.Equal(50, memory.Value);
+        Assert.Equal(385, power.Value);
+    }
+
+    /// <summary>A negative offset must keep its sign rather than clamping to stock.</summary>
+    [Fact]
+    public void NegativeClockOffsetsArePreserved()
+    {
+        MainViewModel.GpuControlSlider core = Slider("gpuclock.core:0", -1000, 1000, 0);
+
+        MainViewModel.ApplyLiveStateToSliders([core], Live(-75, 0, 385_000));
+
+        Assert.Equal(-75, core.Value);
+    }
+
+    /// <summary>Zero is a real offset meaning stock; it must survive as a measured value.</summary>
+    [Fact]
+    public void AGenuineZeroOffsetIsKept()
+    {
+        MainViewModel.GpuControlSlider core = Slider("gpuclock.core:0", -1000, 1000, 120);
+
+        MainViewModel.ApplyLiveStateToSliders([core], Live(0, 0, 385_000));
+
+        Assert.Equal(0, core.Value);
+    }
+
+    /// <summary>
+    /// An unavailable read must never be reinterpreted as a measured zero - that is the exact
+    /// confusion that made the original defect invisible.
+    /// </summary>
+    [Fact]
+    public void AnUnavailableReadingLeavesSlidersUntouched()
+    {
+        MainViewModel.GpuControlSlider core = Slider("gpuclock.core:0", -1000, 1000, 20);
+
+        bool changed = MainViewModel.ApplyLiveStateToSliders(
+            [core], new GpuOcLiveStateV1(false, null, null, null, "unavailable"));
+
+        Assert.False(changed);
+        Assert.Equal(20, core.Value);
+        Assert.False(MainViewModel.ApplyLiveStateToSliders([core], null));
+        Assert.Equal(20, core.Value);
+    }
+
+    /// <summary>A domain the driver could not report must not zero its slider.</summary>
+    [Fact]
+    public void AMissingDomainLeavesThatSliderAlone()
+    {
+        MainViewModel.GpuControlSlider core = Slider("gpuclock.core:0", -1000, 1000, 20);
+        MainViewModel.GpuControlSlider memory = Slider("gpuclock.memory:0", -1000, 3000, 50);
+
+        MainViewModel.ApplyLiveStateToSliders([core, memory], Live(20, null, 385_000));
+
+        Assert.Equal(20, core.Value);
+        Assert.Equal(50, memory.Value);
+    }
+
+    /// <summary>Reseeding an already-correct set reports no change, so bindings stay quiet.</summary>
+    [Fact]
+    public void ReseedingAnAlreadyCorrectSetChangesNothing()
+    {
+        MainViewModel.GpuControlSlider core = Slider("gpuclock.core:0", -1000, 1000, 20);
+        MainViewModel.GpuControlSlider power = Slider("gpupower.limit:0", 100, 385, 385);
+
+        Assert.False(MainViewModel.ApplyLiveStateToSliders([core, power], Live(20, 0, 385_000)));
+    }
+
+    /// <summary>A live value outside the reported bounds is clamped, never applied raw.</summary>
+    [Fact]
+    public void ALiveValueOutsideBoundsIsClamped()
+    {
+        MainViewModel.GpuControlSlider power = Slider("gpupower.limit:0", 100, 385, 385);
+
+        MainViewModel.ApplyLiveStateToSliders([power], Live(0, 0, 500_000));
+
+        Assert.Equal(385, power.Value);
+    }
+}

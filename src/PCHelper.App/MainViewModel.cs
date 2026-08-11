@@ -3902,10 +3902,36 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public void SetPage(string title, string subtitle)
+    /// <summary>
+    /// True only while the page that actually displays live GPU overclock values is on
+    /// screen. See <see cref="ShowsLiveGpuOcState"/> for why this gates a network call.
+    /// </summary>
+    private bool _showsLiveGpuOcState;
+    private bool _liveGpuOcRefreshDue;
+
+    /// <summary>
+    /// Whether the visible page displays live GPU OC values.
+    ///
+    /// <para>This gates the <c>GetGpuOcState</c> poll, and it is a lifecycle control rather
+    /// than a cosmetic one. That read is not cached service-side, so it reaches the GPU power
+    /// and clock session helpers through their remote transports and refreshes each host's
+    /// last-activity stamp. Running it on the 5-second control-plane tick meant a 120-second
+    /// idle timeout could never elapse, so an armed-but-unused power helper stayed resident
+    /// for as long as the dashboard was open - proven live: it exited on its own within two
+    /// minutes of the dashboard closing, after 24 hours of residency. Reading it only where
+    /// it is shown restores the documented idle release without making the displayed values
+    /// any less live on the page that displays them.</para>
+    /// </summary>
+    public bool ShowsLiveGpuOcState => _showsLiveGpuOcState;
+
+    public void SetPage(string title, string subtitle, bool showsLiveGpuOcState = false)
     {
         CurrentPageTitle = title;
         CurrentPageSubtitle = subtitle;
+        // Arriving on the page refreshes once immediately rather than waiting for the next
+        // tick, so it never opens showing a value the card is no longer enforcing.
+        _liveGpuOcRefreshDue = showsLiveGpuOcState && !_showsLiveGpuOcState;
+        _showsLiveGpuOcState = showsLiveGpuOcState;
     }
 
     /// <summary>
@@ -4285,7 +4311,25 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 // Read before the snapshot is applied: RebuildGpuControlSliders runs during
                 // that apply and seeds the clock sliders from this, so it has to be current
                 // by then or the page opens showing stock on an overclocked card.
-                await RefreshGpuOcLiveStateAsync(token);
+                //
+                // Gated on the page that shows these values, because this read is NOT cached
+                // service-side: it reaches the GPU power and clock helpers and refreshes
+                // their idle stamps. On the 5-second tick it pinned an armed-but-unused power
+                // helper resident indefinitely - see ShowsLiveGpuOcState.
+                if (_showsLiveGpuOcState || _liveGpuOcRefreshDue)
+                {
+                    bool arrivedOnPage = _liveGpuOcRefreshDue;
+                    _liveGpuOcRefreshDue = false;
+                    await RefreshGpuOcLiveStateAsync(token);
+                    if (arrivedOnPage)
+                    {
+                        // The slider collection is rebuilt only when the capability SET
+                        // changes, which happens once and before this read has ever landed.
+                        // Arriving on the page is when the values are about to be shown and
+                        // the one moment no slider can be mid-drag, so seed them here.
+                        SeedGpuControlSlidersFromLiveState();
+                    }
+                }
                 await RefreshFanCommissioningAsync(token);
                 await RefreshCoolingOutputAssignmentsAsync(token);
                 await RefreshUpdateStatusAsync(token);

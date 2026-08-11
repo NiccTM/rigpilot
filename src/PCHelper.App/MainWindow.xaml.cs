@@ -20,6 +20,13 @@ public partial class MainWindow : Window
     private const int AutomationHotkey3Id = 0x5046;
     private const int DesktopOsdHotkeyId = 0x5048;
     private static readonly string[] PageTitles = ["Overview", "Profiles", "Cooling", "Performance", "Lighting", "Automation", "Games & tools", "Devices", "Diagnostics"];
+
+    /// <summary>
+    /// Index of the page that displays live GPU overclock values. Only that page polls
+    /// <c>GetGpuOcState</c>, which keeps the GPU session helpers eligible for idle release
+    /// everywhere else.
+    /// </summary>
+    private const int PerformancePageIndex = 3;
     private static readonly string[] PageSubtitles =
     [
         "Live health, ownership, and safety state",
@@ -140,7 +147,9 @@ public partial class MainWindow : Window
         Title = $"{ProductBrand.Name} \u2014 {PageTitles[index]}";
         if (DataContext is MainViewModel viewModel)
         {
-            viewModel.SetPage(PageTitles[index], PageSubtitles[index]);
+            // The view owns navigation order, so it decides which page displays live GPU OC
+            // values rather than the view model matching a (localisable) page title.
+            viewModel.SetPage(PageTitles[index], PageSubtitles[index], index == PerformancePageIndex);
         }
     }
 

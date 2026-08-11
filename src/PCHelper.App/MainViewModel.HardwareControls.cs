@@ -304,6 +304,71 @@ public sealed partial class MainViewModel
     private double? LiveGpuOcValue(string prefix) => LiveGpuOcValue(_gpuOcLiveState, prefix);
 
     /// <summary>
+    /// Re-seeds the existing GPU control sliders from the current live state.
+    ///
+    /// <para>The slider collection is rebuilt only when the capability SET changes, so that a
+    /// slider mid-drag is not reset by the one-second snapshot refresh. That means the single
+    /// rebuild happens the first time capabilities arrive - and at that instant the live read
+    /// has not landed, so every slider takes its fallback: 0 for a clock offset, and the range
+    /// maximum for power. On this reference machine the power fallback is 385 W, which is also
+    /// the applied limit, so the page looked correct while showing 0 MHz beside a ticked
+    /// "reapply at startup" box. Nothing rebuilt afterwards, because the capability set never
+    /// changes again.</para>
+    ///
+    /// <para>Called only when the Performance page becomes active, which is both the moment the
+    /// values are about to be shown and the one moment no slider can be mid-drag. It assigns
+    /// rather than rebuilds, so the collection identity and any binding state survive.</para>
+    /// </summary>
+    private void SeedGpuControlSlidersFromLiveState()
+    {
+        if (ApplyLiveStateToSliders(GpuControlSliders, _gpuOcLiveState))
+        {
+            OnPropertyChanged(nameof(GpuControlSliders));
+        }
+    }
+
+    /// <summary>
+    /// Assigns live values onto existing sliders, returning whether anything moved. Pure and
+    /// static so the seeding contract is directly testable without a window.
+    /// </summary>
+    internal static bool ApplyLiveStateToSliders(
+        IEnumerable<GpuControlSlider> sliders,
+        GpuOcLiveStateV1? state)
+    {
+        if (state is not { Available: true })
+        {
+            // No reading: leave the existing values alone rather than inventing a number.
+            // Zero is a real offset meaning stock and must never stand in for "unknown".
+            return false;
+        }
+
+        bool changed = false;
+        foreach (GpuControlSlider slider in sliders)
+        {
+            string? prefix = slider.CapabilityId switch
+            {
+                var id when id.StartsWith("gpuclock.core:", StringComparison.Ordinal) => "gpuclock.core:",
+                var id when id.StartsWith("gpuclock.memory:", StringComparison.Ordinal) => "gpuclock.memory:",
+                var id when id.StartsWith("gpupower.limit:", StringComparison.Ordinal) => "gpupower.limit:",
+                _ => null
+            };
+            if (prefix is null || LiveGpuOcValue(state, prefix) is not double live)
+            {
+                continue;
+            }
+
+            double clamped = Math.Clamp(live, slider.Minimum, slider.Maximum);
+            if (Math.Abs(slider.Value - clamped) > 0.0001)
+            {
+                slider.Value = clamped;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
     /// The live driver reading a GPU control slider is seeded from, in the capability's own
     /// unit. Pure and static so the unit conversion is directly testable: it was wrong once,
     /// and a slider seeded outside its own bounds is refused by the transaction rather than
@@ -1342,8 +1407,23 @@ public sealed partial class MainViewModel
     private sealed record ControlPreferences(bool HardwareControlEnabled);
 
 
-    public sealed class GpuControlSlider
+    /// <summary>
+    /// One GPU control row.
+    ///
+    /// <para><see cref="Value"/> raises <see cref="INotifyPropertyChanged"/> because it is
+    /// assigned after binding, not only at construction. Without that the row silently kept
+    /// whatever it was built with: the collection is rebuilt only when the capability SET
+    /// changes, so re-seeding from a live read wrote correct numbers into objects the UI never
+    /// read again, and the Performance page showed 0 MHz beside a driver enforcing +20/+50.
+    /// The old code got away with it only because replacing the whole collection re-rendered
+    /// every row.</para>
+    /// </summary>
+    public sealed class GpuControlSlider : INotifyPropertyChanged
     {
+        private double _value;
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
         public string CapabilityId { get; init; } = string.Empty;
         public string AdapterId { get; init; } = string.Empty;
         public string DeviceId { get; init; } = string.Empty;
@@ -1351,7 +1431,21 @@ public sealed partial class MainViewModel
         public double Minimum { get; init; }
         public double Maximum { get; init; }
         public string Unit { get; init; } = string.Empty;
-        public double Value { get; set; }
+
+        public double Value
+        {
+            get => _value;
+            set
+            {
+                if (Math.Abs(_value - value) <= double.Epsilon)
+                {
+                    return;
+                }
+
+                _value = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value)));
+            }
+        }
 
         /// <summary>Extra caution shown on the row, empty when the control needs none.</summary>
         public string Hint { get; init; } = string.Empty;
