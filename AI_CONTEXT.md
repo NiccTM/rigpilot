@@ -1659,6 +1659,43 @@ generation must reliably finalise; and per-process private commit belongs in the
 4. **LHM retention characterisation** - lower urgency now that it is observed to self-release;
    do not describe it as a leak unless evidence supports that.
 
+## Verification snapshot: 2026-08-11 (the ~400 MB footprint question, answered)
+
+- **Authoritative current-build steady state: 289.6 MB final working set / 226.6 MB final
+  private commit, three processes.** 60 samples over 59.2 min, cadence 60.1/60.2/61.3 s,
+  one distinct PID set throughout (`30728, 36972, 37080`), no clock or power helper respawn.
+  Aggregate and per-process figures reconcile on **60/60** samples. CPU correctly reported
+  **N/A** (0 of 3 reads succeed unelevated), never 0. Evidence:
+  `artifacts\footprint\no-oc-60min-20260811.csv` and its 1,544-byte summary.
+
+| process | ws change | private change |
+| --- | --- | --- |
+| `PCHelper.Service` #30728 | +0.3 MB | -1.3 MB |
+| `PCHelper.AdapterHost` #37080 (LHM) | +0.3 MB | 0.0 MB |
+| `PCHelper.AdapterHost` #36972 (fan) | 0.0 MB | 0.0 MB |
+
+- **The ~400 MB persisted-OC footprint was legitimate GPU session-helper residency, not a
+  regression.** Persisted-OC 24 h soak finished at 402.1 MB across 5 processes; this run sits
+  at 289.6 MB across 3. The 112.5 MB difference matches the ~113 MB working set the two extra
+  clock and power helpers held in that soak's final sample. Historical no-OC was ~307 MB on an
+  older runtime and tool, so the current build is ~17 MB below it rather than above.
+- **State this test leaves behind, and say it precisely: core 0 / memory 0, persisted startup
+  OC DISABLED, power still 385 W.** Call it "no clock-offset OC", never "stock GPU" - the
+  power limit is deliberately off its 350 W driver default because the persisted record only
+  ever carried core and memory outputs, and restoring power would have introduced an unrelated
+  variable. `gpu-oc-clear` alone does NOT restore live offsets; it removes the startup record
+  only, so the clock helper stays legitimately pinned until stock values are actually applied.
+- **The measurement-tool defects are now closed rather than merely source-fixed** - this run is
+  the first production-quality exercise of `63a85c5`: summary finalisation, CPU-unavailability
+  semantics, `ProcessBreakdown` across a whole run, PID attribution across identically named
+  AdapterHost processes, and exact aggregate/per-process agreement all held.
+- **LHM retention, lower urgency.** PID 37080 held 128.9 MB private commit unchanged for the
+  entire hour, confirming the 24-hour behaviour is not continuous allocation. That does not
+  close the longer-timescale retention finding; it lowers its priority.
+- **Trailing-window caution.** The last 20 minutes fit slopes of -9.4 and -10.9 MB/h, but that
+  is ~3 MB of drift inside a 6.6 MB band. Do not read a slope as a trend when the window's own
+  band exceeds it.
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.
