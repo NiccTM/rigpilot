@@ -1590,6 +1590,75 @@ Version bumped to a clean `0.7.0` (VersionPrefix 0.7.0, empty VersionSuffix; com
   power helper against this exact deployed service, then a SHORT (30-60 minute) no-OC
   comparison run rather than another immediate 24-hour soak.
 
+## Verification snapshot: 2026-08-10 (the 24-hour soak finally completed)
+
+- **24-HOUR STABILITY SOAK PASSED WITH A QUALIFIED MEMORY FINDING.** Process topology
+  remained perfectly stable for 23.97 hours. Resident memory decreased by 52.6 MB. Private
+  commit increased by 67.5 MB overall, primarily in the LibreHardwareMonitor host, but the
+  increase occurred through non-monotonic retention behaviour and partially reversed before
+  completion. Recent private-commit slopes decayed to +0.30 MB/h over six hours and
+  -1.80 MB/h over the final two hours. **There is no evidence of a continuing monotonic
+  memory leak in this 24-hour run; the LHM host exhibits self-releasing, cache-like retention
+  that warrants multi-day characterisation but is not, by itself, a stability blocker.**
+  CPU: N/A - unavailable in unelevated collection.
+- **This is the first soak in the project's history to run to completion.** The two 2026-07-24
+  and 2026-07-26 attempts stopped early. Evidence:
+  `artifacts\footprint\soak-24h-20260809-220106.csv`, 288 samples, 23.97 h, cadence
+  300.2/300.7/302.9 s, **zero** empty breakdowns, ProcessCount 5 and the same five PIDs
+  start to end.
+
+| metric | first | min | max | mean | last | delta |
+| --- | --- | --- | --- | --- | --- | --- |
+| WorkingSetMB | 454.7 | 363.9 | 454.7 | 401.7 | 402.1 | -52.6 |
+| PrivateWorkingSetMB | 211.7 | 119.7 | 211.7 | 155.0 | 157.6 | -54.1 |
+| PrivateMB | 232.1 | 228.7 | 320.4 | 279.3 | 299.6 | +67.5 |
+
+- **Per-process commit over the full run** (snapshots, not the CSV): LHM host `#37080`
+  74.5 -> 125.1 (**+50.6**, ~75% of all growth, having peaked at 135.9 at 19:18 and then
+  **released 10.8 MB**); service 81.3 -> 84.4 (+3.1); the three GPU session helpers +4.2,
+  +1.2, and 0.0. Total 302.6 MB.
+- **"Soak passed" is NOT "footprint target passed".** This run used the persisted-OC
+  configuration, which pins the clock helper resident by design, plus the anomalously
+  resident power helper. The ~402 MB final working set is therefore **not comparable** to the
+  historical ~307 MB no-OC steady state, and no footprint-target claim may be made from it.
+  The short no-OC comparison run is the prerequisite for that.
+
+### Two analysis methods that produced wrong conclusions here - do not reuse them
+
+- **Grouping samples by hour-of-day is invalid across a run that crosses midnight.** A 24-hour
+  soak puts two different days in the same bucket: the `22:00` bucket mixed the run's first
+  samples (~233 MB) with its last (~304 MB), and `23:00` contained only early-run data. Read
+  the raw series or bucket by absolute timestamp.
+- **The CSV `Breakdown` column is WORKING SET, not private commit, and must never be used to
+  identify retained allocations.** The LHM host trims and refaults tens of megabytes
+  routinely, so a working-set jump looks exactly like an allocation event and is not one: the
+  apparent "steps" at 21:53 and 22:03 were refaults, and commit actually FELL across that
+  window. Every real attribution in this run came from explicit per-process
+  `PrivateMemorySize64` snapshots taken alongside the CSV. **Future CSVs should carry
+  per-process private commit directly** so this forensic workaround is unnecessary.
+- **Also avoid:** fitting a linear slope across a step change (it returns a number that
+  describes the step, not a rate); declaring a periodicity falsified on one missed occurrence
+  (the ~4 h 36 min cadence skipped a slot at 12:32 and then fired at 17:08); and asserting
+  that reclaimed memory proves there was no leak - GC and allocator cleanup both return
+  unreachable memory, so a release argues against monotonic accumulation and nothing more.
+
+### Measurement-tool defect, now reproducible
+
+`Measure-RuntimeFootprint.ps1` has failed to produce a usable summary on **three** completed
+or attempted soaks (2026-07-24 and 2026-07-26 wrote 0-byte files; 2026-08-09 wrote none at
+all). Every figure above was recomputed from the CSV. This is no longer housekeeping. The
+fix list is: unavailable CPU must render as `N/A` and never as a measured `0.000%`; summary
+generation must reliably finalise; and per-process private commit belongs in the CSV.
+
+### Work queue after this run
+
+1. **Power-helper idle release** - a real runtime lifecycle defect, already reproduced on the
+   deployed build; it does not release at its documented 120 s timeout.
+2. **Measurement-tool fixes** as listed above.
+3. **30-60 minute no-OC comparison** to establish a comparable steady-state footprint.
+4. **LHM retention characterisation** - lower urgency now that it is observed to self-release;
+   do not describe it as a leak unless evidence supports that.
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.
