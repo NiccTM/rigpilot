@@ -8,20 +8,34 @@
     hand, which is why the figures in AI_CONTEXT could not be reproduced on demand. This
     script makes the measurement repeatable.
 
-    The target used to be written four different ways across the docs and this script -
-    200 MB here and in docs/feature-status.md, < 250 MB as the competitive goal in
-    docs/beta-roadmap.md, and < 300 MB beta / < 250 MB 1.0 in the same file's ledger. The
-    staged pair is now the single target everywhere. The retired 200 MB figure had no
-    stated basis and was the one that made a 307 MB measurement read as a 188 MB miss
-    rather than a 7 MB one.
-
-    It is READ-ONLY: it reads process counters and writes a CSV. It never touches a
-    capability, a profile, or the service state, so it is safe to leave running.
+    It is READ-ONLY: it reads process counters and writes a CSV plus a summary. It never
+    touches a capability, a profile, or the service state, so it is safe to leave running.
 
     The documented figure is a CLOSED-DASHBOARD measurement - the dashboard is a normal
     user-session WPF app and is not part of the resident service footprint. The dashboard
     is therefore excluded unless -IncludeDashboard is passed, and every summary states
     which of the two it measured.
+
+    THREE EVIDENCE DEFECTS FIXED 2026-08-11, all found by the first soak that completed:
+
+    1. CPU unavailable was recorded as a measured zero. TotalProcessorTime is denied for a
+       LocalSystem process when this script runs unelevated, the failure was swallowed, and
+       the run emitted CpuSeconds=0 for 24 hours. The summary then divided those zeros and
+       reported 0.000% mean CPU - a missing measurement wearing the costume of an excellent
+       result. CPU validity is now explicit per sample and the summary reports N/A rather
+       than a number it cannot support.
+
+    2. There was no summary artifact at all. The summary was emitted as an object to the
+       success stream and the caller was expected to redirect it. Two soaks were killed
+       before reaching that line, so their redirections produced 0-byte files; a third ran
+       without redirection and produced nothing. A completed CSV could therefore carry a
+       full run with no readable conclusion. The summary is now a file this script owns,
+       written atomically, and produced even when the run is interrupted.
+
+    3. The CSV recorded per-process WORKING SET only. Working set trims and refaults by
+       tens of megabytes without any allocation changing, so during the 24-hour analysis
+       residency changes were repeatedly mistaken for retained allocation. Every sample now
+       carries per-process private commit beside working set, keyed by PID.
 
 .PARAMETER DurationMinutes
     Total sampling window. Use 1440 for the 24-hour soak.
@@ -30,26 +44,17 @@
     Seconds between samples. Keep it coarse for long soaks; the point is growth, not noise.
 
 .PARAMETER OutputPath
-    CSV destination. Defaults to a timestamped file under artifacts\footprint.
+    CSV path. The summary is written beside it as <name>.summary.txt.
 
 .PARAMETER IncludeDashboard
-    Also count PCHelper.App. Off by default so results are comparable to the recorded
-    closed-dashboard figures.
-
-.EXAMPLE
-    .\Measure-RuntimeFootprint.ps1 -DurationMinutes 10
-    The short pass, comparable to the recorded 388-394 MB result.
-
-.EXAMPLE
-    .\Measure-RuntimeFootprint.ps1 -DurationMinutes 1440 -IntervalSeconds 300
-    The open 24-hour memory-growth soak.
+    Include the user-session dashboard processes in the measured set.
 #>
 [CmdletBinding()]
 param(
     [ValidateRange(1, 10080)]
     [int]$DurationMinutes = 10,
 
-    [ValidateRange(5, 3600)]
+    [ValidateRange(1, 3600)]
     [int]$IntervalSeconds = 30,
 
     [string]$OutputPath,
@@ -75,6 +80,8 @@ if ($outputDirectory -and -not (Test-Path -LiteralPath $outputDirectory)) {
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 }
 
+$summaryPath = [System.IO.Path]::ChangeExtension($OutputPath, $null) + "summary.txt"
+
 function Get-FootprintSample {
     param([string[]]$Names)
 
@@ -85,8 +92,17 @@ function Get-FootprintSample {
         WorkingSetMB         = 0.0
         PrivateWorkingSetMB  = 0.0
         PrivateMB            = 0.0
-        CpuSeconds           = 0.0
+        # Blank, never 0, when the CPU read set is incomplete. A denied read is not an
+        # idle process, and emitting zero is what produced a false 0.000% for 24 hours.
+        CpuSeconds           = ""
+        CpuReadsAttempted    = 0
+        CpuReadsSucceeded    = 0
+        # Legacy field: per-process WORKING SET only. Retained unchanged so historical CSVs
+        # and any existing parser keep working. Prefer ProcessBreakdown for new analysis.
         Breakdown            = ""
+        # name#pid:ws=<MB>;private=<MB> records joined by '|'. No commas, so it survives CSV
+        # escaping, and PID is the continuity key across samples.
+        ProcessBreakdown     = ""
     }
 
     if ($processes.Count -eq 0) {
@@ -100,8 +116,7 @@ function Get-FootprintSample {
     # these processes all map the same .NET runtime and framework images. Measured on the
     # reference machine that inflated a 150 MB runtime to 317 MB purely by triple-counting
     # pages that exist once in physical memory. Private working set is the resident memory
-    # that is genuinely this suite's, so it is reported alongside and is the honest figure
-    # to judge the release gate on.
+    # that is genuinely this suite's, so it is reported alongside.
     #
     # Joined on PID rather than the counter instance name: two adapter hosts share the name
     # "PCHelper.AdapterHost", and instance-name lookups silently collide on it.
@@ -118,76 +133,203 @@ function Get-FootprintSample {
         $sample.PrivateWorkingSetMB = [math]::Round(($privateWorkingSet / 1MB), 1)
     }
     catch {
-        # The counter class can be unavailable on a locked-down host. A missing datum is
-        # not a failed soak; the working-set columns still record the run.
         $sample.PrivateWorkingSetMB = 0.0
     }
 
-    # TotalProcessorTime can be denied for a LocalSystem process when this script is not
-    # elevated. That is a missing datum, not a failure: memory growth is the point of the
-    # soak, so the run continues with CPU reported as zero rather than aborting overnight.
+    # CPU validity is explicit. TotalProcessorTime is denied for a LocalSystem process when
+    # this script is unelevated; that is a missing datum, and a missing datum must never be
+    # emitted as the number zero.
     $cpu = 0.0
+    $succeeded = 0
     foreach ($process in $processes) {
-        try { $cpu += $process.TotalProcessorTime.TotalSeconds } catch { }
+        try {
+            $cpu += $process.TotalProcessorTime.TotalSeconds
+            $succeeded++
+        }
+        catch {
+        }
     }
-    $sample.CpuSeconds = [math]::Round($cpu, 2)
 
-    $sample.Breakdown = (
-        $processes |
-            Sort-Object -Property WorkingSet64 -Descending |
-            ForEach-Object { "$($_.Name)#$($_.Id)=$([math]::Round($_.WorkingSet64 / 1MB, 1))" }
-    ) -join " "
+    $sample.CpuReadsAttempted = $processes.Count
+    $sample.CpuReadsSucceeded = $succeeded
+    # Only a COMPLETE read set is a usable total. A partial sum is not the suite's CPU and
+    # must not be allowed to look like one.
+    $sample.CpuSeconds = if ($succeeded -eq $processes.Count) { [math]::Round($cpu, 2) } else { "" }
+
+    $ordered = $processes | Sort-Object -Property WorkingSet64 -Descending
+    $sample.Breakdown = ($ordered | ForEach-Object {
+        "$($_.Name)#$($_.Id)=$([math]::Round($_.WorkingSet64 / 1MB, 1))"
+    }) -join " "
+    $sample.ProcessBreakdown = ($ordered | ForEach-Object {
+        "$($_.Name)#$($_.Id):ws=$([math]::Round($_.WorkingSet64 / 1MB, 1));private=$([math]::Round($_.PrivateMemorySize64 / 1MB, 1))"
+    }) -join "|"
 
     return $sample
 }
 
+function Get-ProcessCommitMap {
+    param([string]$Breakdown)
+
+    $map = @{}
+    if ([string]::IsNullOrWhiteSpace($Breakdown)) { return $map }
+    foreach ($record in ($Breakdown -split '\|')) {
+        if ($record -match '^(?<name>.+)#(?<pid>\d+):ws=(?<ws>[-\d\.]+);private=(?<private>[-\d\.]+)$') {
+            $map[$Matches['pid']] = [pscustomobject]@{
+                Name       = $Matches['name']
+                WorkingSet = [double]$Matches['ws']
+                Private    = [double]$Matches['private']
+            }
+        }
+    }
+    return $map
+}
+
+function New-FootprintSummary {
+    param(
+        [System.Collections.Generic.List[object]]$Samples,
+        [string]$Scope,
+        [string]$Csv,
+        [int]$ExpectedInterval,
+        [bool]$Completed)
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $first = $Samples[0]
+    $last = $Samples[$Samples.Count - 1]
+    $times = @($Samples | ForEach-Object { [datetime]$_.TimestampUtc })
+    $elapsedSeconds = ($times[$times.Count - 1] - $times[0]).TotalSeconds
+
+    $lines.Add("RigPilot runtime footprint summary")
+    $lines.Add("Scope               : $Scope")
+    $lines.Add("Run                 : $(if ($Completed) { 'completed' } else { 'INTERRUPTED - partial run' })")
+    $lines.Add("Start (UTC)         : $($times[0].ToString('o'))")
+    $lines.Add("End (UTC)           : $($times[$times.Count - 1].ToString('o'))")
+    $lines.Add("Elapsed             : $([math]::Round($elapsedSeconds / 60, 1)) min")
+    $lines.Add("Samples             : $($Samples.Count)")
+    $lines.Add("Expected interval   : $ExpectedInterval s")
+
+    if ($Samples.Count -ge 2) {
+        $intervals = @(for ($i = 1; $i -lt $times.Count; $i++) { ($times[$i] - $times[$i - 1]).TotalSeconds })
+        $stat = $intervals | Measure-Object -Minimum -Maximum -Average
+        $lines.Add("Cadence min/mean/max: $([math]::Round($stat.Minimum,1)) / $([math]::Round($stat.Average,1)) / $([math]::Round($stat.Maximum,1)) s")
+    }
+
+    $malformed = @($Samples | Where-Object { [string]::IsNullOrWhiteSpace($_.ProcessBreakdown) }).Count
+    $lines.Add("Samples with no per-process data: $malformed")
+    $lines.Add("Distinct process counts         : $((@($Samples | ForEach-Object { $_.ProcessCount }) | Sort-Object -Unique) -join ', ')")
+    $lines.Add("")
+
+    foreach ($metric in @('WorkingSetMB', 'PrivateWorkingSetMB', 'PrivateMB')) {
+        $values = @($Samples | ForEach-Object { [double]$_.$metric })
+        $stat = $values | Measure-Object -Minimum -Maximum -Average
+        $lines.Add(("{0,-20} first={1,8} min={2,8} max={3,8} mean={4,8} last={5,8} delta={6,8}" -f `
+            $metric, $values[0], $stat.Minimum, $stat.Maximum, [math]::Round($stat.Average, 1), `
+            $values[$values.Count - 1], [math]::Round($values[$values.Count - 1] - $values[0], 1)))
+    }
+
+    $lines.Add("")
+    # CPU is reported only when a complete read set exists at both ends. Anything else is
+    # N/A with the reason, because a denied read is not zero usage.
+    $validFirst = -not [string]::IsNullOrWhiteSpace([string]$first.CpuSeconds)
+    $validLast = -not [string]::IsNullOrWhiteSpace([string]$last.CpuSeconds)
+    $unavailable = @($Samples | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.CpuSeconds) }).Count
+    if ($validFirst -and $validLast -and $elapsedSeconds -gt 0) {
+        $percent = [math]::Round(((([double]$last.CpuSeconds - [double]$first.CpuSeconds) / $elapsedSeconds) / [Environment]::ProcessorCount) * 100, 3)
+        $lines.Add("Mean CPU            : $percent %")
+        if ($unavailable -gt 0) {
+            $lines.Add("                      (note: $unavailable of $($Samples.Count) samples had an incomplete CPU read set)")
+        }
+    }
+    else {
+        $lines.Add("Mean CPU            : N/A - CPU was not measurable for this run.")
+        $lines.Add("                      $unavailable of $($Samples.Count) samples had an incomplete CPU read set.")
+        $lines.Add("                      TotalProcessorTime is denied for LocalSystem processes when this")
+        $lines.Add("                      script runs unelevated. This is a MISSING measurement, not 0% CPU.")
+    }
+
+    $lines.Add("")
+    $lines.Add("Per-process, first -> last (PID is the continuity key):")
+    $firstMap = Get-ProcessCommitMap -Breakdown $first.ProcessBreakdown
+    $lastMap = Get-ProcessCommitMap -Breakdown $last.ProcessBreakdown
+    $allPids = @(@($firstMap.Keys) + @($lastMap.Keys)) | Sort-Object -Unique
+    foreach ($processId in $allPids) {
+        if ($firstMap.ContainsKey($processId) -and $lastMap.ContainsKey($processId)) {
+            $a = $firstMap[$processId]
+            $b = $lastMap[$processId]
+            $lines.Add(("  {0,-24} #{1,-6} ws {2,8} -> {3,-8} ({4,7})   private {5,8} -> {6,-8} ({7,7})" -f `
+                $a.Name, $processId, $a.WorkingSet, $b.WorkingSet, [math]::Round($b.WorkingSet - $a.WorkingSet, 1), `
+                $a.Private, $b.Private, [math]::Round($b.Private - $a.Private, 1)))
+        }
+        elseif ($lastMap.ContainsKey($processId)) {
+            $lines.Add("  APPEARED  #$processId $($lastMap[$processId].Name)")
+        }
+        else {
+            $lines.Add("  EXITED    #$processId $($firstMap[$processId].Name)")
+        }
+    }
+
+    if (((@($firstMap.Keys) | Sort-Object) -join ',') -ne ((@($lastMap.Keys) | Sort-Object) -join ',')) {
+        $lines.Add("")
+        $lines.Add("WARNING: the PID set changed during this run. That is a lifecycle event -")
+        $lines.Add("         analyse the segments either side separately rather than reading the")
+        $lines.Add("         difference as memory growth or reclamation.")
+    }
+
+    $lines.Add("")
+    $lines.Add("CSV: $Csv")
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Write-FootprintSummary {
+    param([string]$Content, [string]$Path)
+
+    # Written to a sibling temp file and moved into place, so an interrupted or failed write
+    # can never leave a 0-byte file that looks like a successful summary.
+    $temporary = "$Path.tmp"
+    Set-Content -LiteralPath $temporary -Value $Content -Encoding utf8
+    $written = Get-Item -LiteralPath $temporary
+    if ($written.Length -le 0) {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        throw "Refusing to publish an empty footprint summary."
+    }
+
+    Move-Item -LiteralPath $temporary -Destination $Path -Force
+    return (Get-Item -LiteralPath $Path).Length
+}
+
 $deadline = (Get-Date).AddMinutes($DurationMinutes)
 $samples = [System.Collections.Generic.List[object]]::new()
+$scopeLabel = if ($IncludeDashboard) { "service + dashboard" } else { "service only (closed-dashboard)" }
+$completed = $false
 
-Write-Host "Sampling $(if ($IncludeDashboard) { 'service + dashboard' } else { 'service only (closed-dashboard)' }) every $IntervalSeconds s until $($deadline.ToString('u'))."
-Write-Host "Writing $OutputPath"
+Write-Host "Sampling $scopeLabel every $IntervalSeconds s until $($deadline.ToString('u'))."
+Write-Host "CSV     : $OutputPath"
+Write-Host "Summary : $summaryPath"
 
-while ((Get-Date) -lt $deadline) {
-    $sample = Get-FootprintSample -Names $processNames
-    $samples.Add($sample)
-    $sample | Export-Csv -LiteralPath $OutputPath -NoTypeInformation -Append -Encoding utf8
+try {
+    while ((Get-Date) -lt $deadline) {
+        $sample = Get-FootprintSample -Names $processNames
+        $samples.Add($sample)
+        $sample | Export-Csv -LiteralPath $OutputPath -NoTypeInformation -Append -Encoding utf8
 
-    $remaining = [int]($deadline - (Get-Date)).TotalSeconds
-    if ($remaining -le 0) { break }
-    Start-Sleep -Seconds ([math]::Min($IntervalSeconds, $remaining))
+        $remaining = [int]($deadline - (Get-Date)).TotalSeconds
+        if ($remaining -le 0) { break }
+        Start-Sleep -Seconds ([math]::Min($IntervalSeconds, $remaining))
+    }
+    $completed = $true
 }
-
-if ($samples.Count -eq 0) {
-    throw "No samples were taken."
-}
-
-$first = $samples[0]
-$last = $samples[$samples.Count - 1]
-$peak = ($samples | Measure-Object -Property WorkingSetMB -Maximum).Maximum
-$growthPercent = if ($first.WorkingSetMB -gt 0) {
-    [math]::Round((($last.WorkingSetMB - $first.WorkingSetMB) / $first.WorkingSetMB) * 100, 2)
-} else { 0 }
-
-$elapsedSeconds = ([datetime]$last.TimestampUtc - [datetime]$first.TimestampUtc).TotalSeconds
-$cpuPercent = if ($elapsedSeconds -gt 0) {
-    [math]::Round((($last.CpuSeconds - $first.CpuSeconds) / $elapsedSeconds / [Environment]::ProcessorCount) * 100, 3)
-} else { 0 }
-
-[pscustomobject]@{
-    Scope               = if ($IncludeDashboard) { "service + dashboard" } else { "service only (closed-dashboard)" }
-    Samples             = $samples.Count
-    DurationMinutes     = [math]::Round($elapsedSeconds / 60, 1)
-    InitialWorkingSetMB = $first.WorkingSetMB
-    FinalWorkingSetMB   = $last.WorkingSetMB
-    PeakWorkingSetMB    = $peak
-    GrowthPercent       = $growthPercent
-    # The gate figure. The working-set columns above sum shared runtime pages once per
-    # process and read high by roughly the size of the framework times the process count.
-    FinalPrivateWorkingSetMB = $last.PrivateWorkingSetMB
-    PeakPrivateWorkingSetMB  = ($samples | Measure-Object -Property PrivateWorkingSetMB -Maximum).Maximum
-    FinalPrivateMB      = $last.PrivateMB
-    MeanCpuPercent      = $cpuPercent
-    ProcessCount        = $last.ProcessCount
-    FinalBreakdown      = $last.Breakdown
-    CsvPath             = $OutputPath
+finally {
+    # A summary is produced even when the run is interrupted. Three previous soaks ended
+    # with a complete CSV and no readable conclusion because this only ran on the happy path.
+    if ($samples.Count -gt 0) {
+        $summary = New-FootprintSummary -Samples $samples -Scope $scopeLabel -Csv $OutputPath `
+            -ExpectedInterval $IntervalSeconds -Completed $completed
+        $bytes = Write-FootprintSummary -Content $summary -Path $summaryPath
+        Write-Host ""
+        Write-Host $summary
+        Write-Host ""
+        Write-Host "Summary written: $summaryPath ($bytes bytes)"
+    }
+    else {
+        Write-Warning "No samples were taken; no summary was written."
+    }
 }
