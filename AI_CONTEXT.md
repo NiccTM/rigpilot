@@ -1730,6 +1730,38 @@ and reports `unknown` when the read is denied. Never infer a role from memory si
 order. Verified on this machine: unelevated every AdapterHost reads `unknown`; elevated the
 same processes resolve `37080=general, 36972=fan, 39836=clock`.
 
+## Current software boundary (2026-08-11, `56d153f`)
+
+- **Unavailable-value semantics are a tested project invariant, not a lesson from one bug.**
+  `UnavailableValueSemanticsTests` gathers the rule in one place: zero, empty, and "the
+  default" are all legitimate VALUES, so none of them may double as "no answer". This review
+  broke that rule four separate ways - CPU denied reads recorded as `0`, an unreadable process
+  role labelled `general`, GPU sliders showing `0 MHz` on an overclocked card, and a 40-NUL
+  device name rendering blank - and every one survived a green suite because the wrong answer
+  looked like a reading. Any new field that can be unavailable belongs in that test class.
+- **Footprint schema evolution is explicit.** Samples carry `SchemaVersion=2` (CPU validity
+  accounting, per-process private commit, AdapterHost role); files without the column are
+  implicitly v1 and still parse. The existing footprint regression caught the `role=` grammar
+  change on its own, which is the first time in this review that a test found a change before
+  a human did.
+- **`gpu-oc-clear` now states what it does not do.** Behaviour unchanged; it clears the
+  persisted startup record and deliberately does NOT restore live offsets. The wording change
+  removes the ambiguity between persistence state and live hardware state.
+- **Two items are queued, deliberately not bundled:**
+  1. *Performance naming ambiguity* (sidebar page vs profile card - a live operator-error trap
+     during verification). UI-only pass: rename, update automation IDs deliberately, re-render
+     and smoke every page, and confirm profile-card selection semantics are unchanged. The risk
+     is a silently invalidated automation ID, not the text.
+  2. *Service-exposed AdapterHost role to PID.* The service creates these hosts and knows what
+     WMI will not disclose unelevated. It should become a read-only diagnostic contract that
+     the CLI and footprint tool prefer, with the unelevated WMI read demoted to fallback - not
+     another inference layer. It touches the service, so it needs its own deploy and
+     verification rather than hitchhiking on unrelated work.
+
+State at this boundary: 1,333 tests passing / 0 failed, clean tree, no known software defect
+demanding intervention. The next software pass should be one of those two items intentionally,
+not another broad search.
+
 ## Change discipline
 
 - Preserve unrelated user changes and assume the working tree can be dirty.
